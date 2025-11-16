@@ -1,0 +1,228 @@
+"""
+File Service for Offline AI Agent
+Handles file system operations
+"""
+
+import os
+import aiofiles
+import asyncio
+from datetime import datetime
+from typing import List, Dict, Any, Optional
+from pathlib import Path
+import mimetypes
+
+
+class FileInfo:
+    """File information model"""
+    
+    def __init__(self, path: str):
+        self.path = path
+        self.stat = os.stat(path)
+        self.name = os.path.basename(path)
+        self.is_directory = os.path.isdir(path)
+        self.size = self.stat.st_size
+        self.modified_time = datetime.fromtimestamp(self.stat.st_mtime).isoformat()
+        self.extension = os.path.splitext(self.name)[1] if not self.is_directory else None
+
+
+class FileService:
+    """Service for file system operations"""
+    
+    def __init__(self):
+        self.current_directory = os.getcwd()
+        self.supported_extensions = {
+            '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.cpp', '.c', '.h', '.hpp',
+            '.cs', '.php', '.rb', '.go', '.rs', '.swift', '.kt', '.scala', '.r',
+            '.m', '.pl', '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
+            '.html', '.css', '.scss', '.sass', '.less', '.xml', '.json', '.yaml',
+            '.yml', '.toml', '.ini', '.cfg', '.conf', '.env', '.md', '.txt',
+            '.sql', '.dockerfile', '.dockerignore', '.gitignore'
+        }
+    
+    async def list_directory(self, path: str) -> List[Dict[str, Any]]:
+        """List files and directories in the specified path"""
+        try:
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Path not found: {path}")
+            
+            if not os.path.isdir(path):
+                raise NotADirectoryError(f"Path is not a directory: {path}")
+            
+            items = []
+            for item in os.listdir(path):
+                item_path = os.path.join(path, item)
+                try:
+                    file_info = FileInfo(item_path)
+                    items.append({
+                        "name": file_info.name,
+                        "path": item_path,
+                        "size": file_info.size,
+                        "is_directory": file_info.is_directory,
+                        "modified_time": file_info.modified_time,
+                        "extension": file_info.extension
+                    })
+                except (OSError, PermissionError):
+                    # Skip files we can't access
+                    continue
+            
+            # Sort: directories first, then files, both alphabetically
+            items.sort(key=lambda x: (not x["is_directory"], x["name"].lower()))
+            return items
+            
+        except Exception as e:
+            raise Exception(f"Error listing directory {path}: {str(e)}")
+    
+    async def read_file(self, path: str) -> str:
+        """Read the content of a file"""
+        try:
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"File not found: {path}")
+            
+            if os.path.isdir(path):
+                raise IsADirectoryError(f"Path is a directory: {path}")
+            
+            # Check file size (limit to 10MB)
+            file_size = os.path.getsize(path)
+            if file_size > 10 * 1024 * 1024:
+                raise ValueError(f"File too large: {file_size} bytes (max 10MB)")
+            
+            # Try to read as text
+            try:
+                async with aiofiles.open(path, 'r', encoding='utf-8') as f:
+                    content = await f.read()
+                return content
+            except UnicodeDecodeError:
+                # If UTF-8 fails, try other encodings
+                for encoding in ['latin-1', 'cp1252', 'iso-8859-1']:
+                    try:
+                        async with aiofiles.open(path, 'r', encoding=encoding) as f:
+                            content = await f.read()
+                        return content
+                    except UnicodeDecodeError:
+                        continue
+                raise ValueError(f"Cannot decode file {path} with any supported encoding")
+                
+        except Exception as e:
+            raise Exception(f"Error reading file {path}: {str(e)}")
+    
+    async def write_file(self, path: str, content: str) -> None:
+        """Write content to a file"""
+        try:
+            # Create directory if it doesn't exist
+            directory = os.path.dirname(path)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+            
+            async with aiofiles.open(path, 'w', encoding='utf-8') as f:
+                await f.write(content)
+                
+        except Exception as e:
+            raise Exception(f"Error writing file {path}: {str(e)}")
+    
+    async def create_directory(self, path: str) -> None:
+        """Create a new directory"""
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception as e:
+            raise Exception(f"Error creating directory {path}: {str(e)}")
+    
+    async def delete_file(self, path: str) -> None:
+        """Delete a file or directory"""
+        try:
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Path not found: {path}")
+            
+            if os.path.isdir(path):
+                import shutil
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+                
+        except Exception as e:
+            raise Exception(f"Error deleting {path}: {str(e)}")
+    
+    async def search_files(self, query: str, path: str = ".") -> List[Dict[str, Any]]:
+        """Search for files by name"""
+        try:
+            results = []
+            query_lower = query.lower()
+            
+            for root, dirs, files in os.walk(path):
+                # Skip hidden directories
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                
+                for file in files:
+                    if query_lower in file.lower():
+                        file_path = os.path.join(root, file)
+                        try:
+                            file_info = FileInfo(file_path)
+                            results.append({
+                                "name": file_info.name,
+                                "path": file_path,
+                                "size": file_info.size,
+                                "modified_time": file_info.modified_time,
+                                "extension": file_info.extension
+                            })
+                        except (OSError, PermissionError):
+                            continue
+            
+            return results[:50]  # Limit to 50 results
+            
+        except Exception as e:
+            raise Exception(f"Error searching files: {str(e)}")
+    
+    async def get_file_info(self, path: str) -> Dict[str, Any]:
+        """Get detailed information about a file or directory"""
+        try:
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"Path not found: {path}")
+            
+            file_info = FileInfo(path)
+            return {
+                "name": file_info.name,
+                "path": file_info.path,
+                "size": file_info.size,
+                "is_directory": file_info.is_directory,
+                "modified_time": file_info.modified_time,
+                "extension": file_info.extension,
+                "mime_type": mimetypes.guess_type(path)[0] if not file_info.is_directory else None,
+                "is_code_file": file_info.extension in self.supported_extensions if file_info.extension else False
+            }
+            
+        except Exception as e:
+            raise Exception(f"Error getting file info: {str(e)}")
+    
+    async def get_project_structure(self, path: str = ".") -> Dict[str, Any]:
+        """Get a tree structure of the project"""
+        try:
+            def build_tree(current_path: str, max_depth: int = 3, current_depth: int = 0) -> Dict[str, Any]:
+                if current_depth >= max_depth:
+                    return {"name": os.path.basename(current_path), "type": "file"}
+                
+                if os.path.isfile(current_path):
+                    return {
+                        "name": os.path.basename(current_path),
+                        "type": "file",
+                        "extension": os.path.splitext(current_path)[1]
+                    }
+                
+                children = []
+                try:
+                    for item in sorted(os.listdir(current_path)):
+                        if item.startswith('.'):
+                            continue
+                        item_path = os.path.join(current_path, item)
+                        children.append(build_tree(item_path, max_depth, current_depth + 1))
+                except (OSError, PermissionError):
+                    pass
+                
+                return {
+                    "name": os.path.basename(current_path),
+                    "type": "directory",
+                    "children": children
+                }
+            
+            return build_tree(path)
+            
+        except Exception as e:
+            raise Exception(f"Error getting project structure: {str(e)}")

@@ -1,0 +1,11 @@
+from fastapi import APIRouter
+from .chat import router as chat_router
+from .files import router as files_router
+from .code import router as code_router
+
+router = APIRouter()
+
+# Include all sub-routers
+router.include_router(chat_router, prefix="/chat", tags=["chat"])
+router.include_router(files_router, prefix="/files", tags=["files"])
+router.include_router(code_router, prefix="/code", tags=["code"])

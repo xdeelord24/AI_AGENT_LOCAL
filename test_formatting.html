@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Message Formatting Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: #0f172a;
+            color: #f1f5f9;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        
+        .test-container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .test-section {
+            margin: 30px 0;
+            padding: 20px;
+            background: #1e293b;
+            border-radius: 8px;
+            border: 1px solid #334155;
+        }
+        
+        .test-title {
+            color: #0ea5e9;
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+        
+        .test-input {
+            background: #0f172a;
+            border: 1px solid #334155;
+            color: #f1f5f9;
+            padding: 10px;
+            border-radius: 4px;
+            width: 100%;
+            min-height: 100px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            margin-bottom: 15px;
+        }
+        
+        .test-output {
+            background: #1e293b;
+            border: 1px solid #334155;
+            padding: 15px;
+            border-radius: 8px;
+            min-height: 100px;
+        }
+        
+        .prose {
+            max-width: none;
+        }
+        
+        /* Include all the formatting styles from index.css */
+        .code-block {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 8px;
+            margin: 8px 0;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .code-header {
+            background: #0f172a;
+            padding: 8px 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #334155;
+            font-size: 12px;
+        }
+        
+        .code-language {
+            font-size: 11px;
+            color: #94a3b8;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-family: 'JetBrains Mono', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        }
+        
+        .copy-code-btn {
+            background: transparent;
+            border: 1px solid #334155;
+            border-radius: 4px;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 4px 8px;
+            font-size: 11px;
+            transition: all 0.2s ease;
+            font-family: 'JetBrains Mono', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        }
+        
+        .copy-code-btn:hover {
+            background: #334155;
+            border-color: #0ea5e9;
+            color: #0ea5e9;
+            transform: translateY(-1px);
+        }
+        
+        .code-block pre {
+            margin: 0;
+            padding: 16px;
+            background: #1e293b;
+            overflow-x: auto;
+            font-family: 'JetBrains Mono', 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #f1f5f9;
+        }
+        
+        .code-block code {
+            background: transparent;
+            color: #f1f5f9;
+            padding: 0;
+            border-radius: 0;
+            font-size: inherit;
+            font-family: inherit;
+        }
+        
+        .inline-code {
+            background: #334155;
+            color: #f1f5f9;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Courier New', monospace;
+            font-size: 13px;
+            border: 1px solid #475569;
+            font-weight: 500;
+        }
+        
+        .markdown-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+            background: #1e293b;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            border: 1px solid #334155;
+            font-size: 14px;
+        }
+        
+        .markdown-table th,
+        .markdown-table td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid #334155;
+        }
+        
+        .markdown-table th {
+            background: #0f172a;
+            font-weight: 600;
+            color: #f1f5f9;
+            font-size: 14px;
+        }
+        
+        .markdown-table td {
+            color: #cbd5e1;
+            font-size: 14px;
+            line-height: 1.5;
+            vertical-align: top;
+        }
+        
+        .markdown-table tbody tr:hover {
+            background: #334155;
+        }
+        
+        .markdown-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .prose h1 {
+            font-size: 24px;
+            font-weight: 700;
+            color: #f1f5f9;
+            margin: 16px 0 12px 0;
+            line-height: 1.3;
+        }
+        
+        .prose h2 {
+            font-size: 20px;
+            font-weight: 600;
+            color: #f1f5f9;
+            margin: 14px 0 10px 0;
+            line-height: 1.3;
+        }
+        
+        .prose h3 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #f1f5f9;
+            margin: 12px 0 8px 0;
+            line-height: 1.3;
+        }
+        
+        .prose h4 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #f1f5f9;
+            margin: 10px 0 6px 0;
+            line-height: 1.3;
+        }
+        
+        .prose h5 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #f1f5f9;
+            margin: 8px 0 4px 0;
+            line-height: 1.3;
+        }
+        
+        .prose h6 {
+            font-size: 13px;
+            font-weight: 600;
+            color: #f1f5f9;
+            margin: 6px 0 4px 0;
+            line-height: 1.3;
+        }
+        
+        .prose hr {
+            border: none;
+            height: 1px;
+            background: #334155;
+            margin: 16px 0;
+        }
+        
+        .prose ul,
+        .prose ol {
+            margin: 8px 0;
+            padding-left: 20px;
+            list-style-position: outside;
+        }
+        
+        .prose li {
+            margin: 4px 0;
+            line-height: 1.5;
+            color: #cbd5e1;
+        }
+        
+        .prose ul li {
+            list-style-type: disc;
+        }
+        
+        .prose ol li {
+            list-style-type: decimal;
+        }
+        
+        .prose p {
+            margin: 8px 0;
+            line-height: 1.6;
+            color: #cbd5e1;
+        }
+        
+        .prose strong {
+            font-weight: 600;
+            color: #f1f5f9;
+        }
+        
+        .prose em {
+            font-style: italic;
+            color: #cbd5e1;
+        }
+        
+        .prose del {
+            color: #94a3b8;
+            text-decoration: line-through;
+            opacity: 0.7;
+        }
+        
+        .prose blockquote {
+            margin: 16px 0;
+            padding: 12px 16px;
+            background: #0f172a;
+            border-left: 4px solid #0ea5e9;
+            border-radius: 0 8px 8px 0;
+            font-style: italic;
+            color: #cbd5e1;
+            position: relative;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .prose blockquote::before {
+            content: '"';
+            font-size: 2em;
+            color: #0ea5e9;
+            position: absolute;
+            left: 8px;
+            top: -8px;
+            opacity: 0.3;
+        }
+        
+        .prose blockquote p {
+            margin: 0;
+            padding-left: 20px;
+        }
+        
+        .prose .task-item {
+            list-style: none;
+            position: relative;
+            padding-left: 32px;
+            margin: 8px 0;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .prose .task-item::before {
+            content: '';
+            position: absolute;
+            left: 8px;
+            top: 2px;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #334155;
+            border-radius: 3px;
+            background: #0f172a;
+            transition: all 0.2s ease;
+        }
+        
+        .prose .task-item[data-checked="x"]::before {
+            background: #0ea5e9;
+            border-color: #0ea5e9;
+        }
+        
+        .prose .task-item[data-checked="x"]::after {
+            content: '✓';
+            position: absolute;
+            left: 10px;
+            top: -1px;
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+            line-height: 1;
+        }
+        
+        .prose .task-item:hover::before {
+            border-color: #0ea5e9;
+            transform: scale(1.1);
+        }
+        
+        .prose .task-item[data-checked="x"] {
+            opacity: 0.7;
+            text-decoration: line-through;
+            color: #94a3b8;
+        }
+        
+        .prose .markdown-link {
+            color: #0ea5e9;
+            text-decoration: none;
+            border-bottom: 1px solid transparent;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+        
+        .prose .markdown-link:hover {
+            color: #0ea5e9;
+            border-bottom-color: #0ea5e9;
+            text-decoration: none;
+        }
+        
+        .prose .markdown-link::after {
+            content: '↗';
+            font-size: 0.8em;
+            margin-left: 4px;
+            opacity: 0.7;
+            transition: all 0.2s ease;
+        }
+        
+        .prose .markdown-link:hover::after {
+            opacity: 1;
+            transform: translateY(-1px);
+        }
+        
+        .prose .markdown-image {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            margin: 16px 0;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: all 0.2s ease;
+            display: block;
+        }
+        
+        .prose .markdown-image:hover {
+            transform: scale(1.02);
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .prose .callout {
+            margin: 16px 0;
+            padding: 16px;
+            border-radius: 8px;
+            border-left: 4px solid;
+            background: #0f172a;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .prose .callout::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, #0ea5e9, transparent);
+            opacity: 0.3;
+        }
+        
+        .prose .callout-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        
+        .prose .callout-icon {
+            font-size: 1.2em;
+            line-height: 1;
+        }
+        
+        .prose .callout-content {
+            color: #cbd5e1;
+            line-height: 1.6;
+        }
+        
+        .prose .callout-💡 {
+            border-left-color: #fbbf24;
+            background: rgba(251, 191, 36, 0.1);
+        }
+        
+        .prose .callout-🔍 {
+            border-left-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.1);
+        }
+        
+        .prose .callout-⚠️ {
+            border-left-color: #f59e0b;
+            background: rgba(245, 158, 11, 0.1);
+        }
+        
+        .prose .callout-✅ {
+            border-left-color: #10b981;
+            background: rgba(16, 185, 129, 0.1);
+        }
+        
+        .prose .callout-❌ {
+            border-left-color: #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+        }
+        
+        .prose .callout-📝 {
+            border-left-color: #8b5cf6;
+            background: rgba(139, 92, 246, 0.1);
+        }
+        
+        .prose .callout-🎯 {
+            border-left-color: #ec4899;
+            background: rgba(236, 72, 153, 0.1);
+        }
+        
+        .prose .math-formula {
+            font-family: 'Times New Roman', 'Times', serif;
+            font-style: italic;
+        }
+        
+        .prose .math-formula.display {
+            display: block;
+            text-align: center;
+            margin: 16px 0;
+            padding: 8px;
+            background: rgba(14, 165, 233, 0.1);
+            border-radius: 4px;
+            border: 1px solid rgba(14, 165, 233, 0.2);
+        }
+        
+        .prose .math-formula.inline {
+            display: inline;
+            padding: 2px 4px;
+            background: rgba(14, 165, 233, 0.1);
+            border-radius: 3px;
+            border: 1px solid rgba(14, 165, 233, 0.2);
+        }
+        
+        .prose .math-function {
+            font-weight: bold;
+            color: #0ea5e9;
+        }
+        
+        .prose .math-fraction {
+            display: inline-block;
+            text-align: center;
+            vertical-align: middle;
+        }
+        
+        .prose .math-fraction .numerator {
+            display: block;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 2px;
+            margin-bottom: 2px;
+        }
+        
+        .prose .math-fraction .denominator {
+            display: block;
+            padding-top: 2px;
+        }
+        
+        .prose .math-symbol {
+            color: #0ea5e9;
+            font-weight: bold;
+        }
+        
+        .prose .math-subscript,
+        .prose .math-superscript {
+            color: #0ea5e9;
+        }
+        
+        .prose .chemical-formula {
+            color: #10b981;
+            font-weight: 500;
+        }
+        
+        .prose .measurement {
+            color: #f59e0b;
+            font-weight: 500;
+        }
+        
+        .prose .unit {
+            color: #94a3b8;
+            font-size: 0.9em;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>Message Formatting Test</h1>
+        <p>This page tests the comprehensive message formatting system based on the reference Ollama chat implementation.</p>
+        
+        <div class="test-section">
+            <div class="test-title">Code Blocks</div>
+            <textarea class="test-input" id="codeTest">Here's a Python function:
+
+```python
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)
+
+# Test the function
+print(fibonacci(10))
+```
+
+And here's some JavaScript:
+
+```javascript
+const greet = (name) => {
+    console.log(`Hello, ${name}!`);
+};
+
+greet("World");
+```</textarea>
+            <div class="test-output prose" id="codeOutput"></div>
+        </div>
+        
+        <div class="test-section">
+            <div class="test-title">Markdown Tables</div>
+            <textarea class="test-input" id="tableTest">Here's a comparison table:
+
+| Feature | Python | JavaScript | Java |
+|---------|--------|------------|------|
+| Typing | Dynamic | Dynamic | Static |
+| Syntax | Simple | C-like | Verbose |
+| Performance | Medium | Fast | Fast |
+| Learning Curve | Easy | Medium | Hard |</textarea>
+            <div class="test-output prose" id="tableOutput"></div>
+        </div>
+        
+        <div class="test-section">
+            <div class="test-title">Math Formulas</div>
+            <textarea class="test-input" id="mathTest">Here are some mathematical expressions:
+
+Inline math: $E = mc^2$ and $a^2 + b^2 = c^2$
+
+Display math:
+$$\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}$$
+
+Greek letters: α, β, γ, δ, ε, θ, λ, μ, π, σ, τ, φ, ω
+
+Mathematical symbols: ∞, ∑, ∫, ∂, ∇, ×, ÷, ±, ≤, ≥, ≠, ≈, ∝, ∈, ⊂, ⊃, ∪, ∩, ∅
+
+Fractions: $\frac{1}{2}$, $\frac{a}{b}$, $\frac{x^2 + 1}{x - 1}$
+
+Subscripts and superscripts: $H_2O$, $CO_2$, $x^2$, $e^{i\pi} + 1 = 0$</textarea>
+            <div class="test-output prose" id="mathOutput"></div>
+        </div>
+        
+        <div class="test-section">
+            <div class="test-title">Headers and Lists</div>
+            <textarea class="test-input" id="headersTest"># Main Title
+## Subtitle
+### Section
+#### Subsection
+##### Minor Heading
+###### Small Heading
+
+**Bold text** and *italic text* and ~~strikethrough~~
+
+- Unordered list item 1
+- Unordered list item 2
+  - Nested item
+  - Another nested item
+
+1. Ordered list item 1
+2. Ordered list item 2
+3. Ordered list item 3
+
+- [ ] Unchecked task
+- [x] Checked task
+- [ ] Another unchecked task</textarea>
+            <div class="test-output prose" id="headersOutput"></div>
+        </div>
+        
+        <div class="test-section">
+            <div class="test-title">Blockquotes and Callouts</div>
+            <textarea class="test-input" id="quotesTest">> This is a simple blockquote
+> with multiple lines
+> of text
+
+> 💡 **Tip**: This is a tip callout with an emoji
+> 🔍 **Info**: This is an info callout
+> ⚠️ **Warning**: This is a warning callout
+> ✅ **Success**: This is a success callout
+> ❌ **Error**: This is an error callout
+> 📝 **Note**: This is a note callout
+> 🎯 **Goal**: This is a goal callout</textarea>
+            <div class="test-output prose" id="quotesOutput"></div>
+        </div>
+        
+        <div class="test-section">
+            <div class="test-title">Links and Inline Code</div>
+            <textarea class="test-input" id="linksTest">Here's a [link to GitHub](https://github.com) and some `inline code`.
+
+You can also use `console.log()` in JavaScript or `print()` in Python.
+
+Chemical formulas: H2O, CO2, CH4, C6H12O6
+
+Measurements: 100 m, 50 kg, 25 s, 10 A, 300 K, 2 mol
+
+Mathematical expressions: x^2, y_1, z^3, a_2, b^4</textarea>
+            <div class="test-output prose" id="linksOutput"></div>
+        </div>
+    </div>
+
+    <script>
+        // Import the formatting functions (simplified version for testing)
+        function formatMessageContent(content) {
+            let formattedContent = content;
+            
+            // Handle code blocks
+            formattedContent = formattedContent.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, language, code) => {
+                const lang = language || 'text';
+                const codeId = 'code_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                const escapedCode = escapeHtml(code.trim());
+                return `<div class="code-block language-${lang}" data-language="${lang}">
+                    <div class="code-header">
+                        <span class="code-language">${lang}</span>
+                        <button class="copy-code-btn" data-code-id="${codeId}" title="Copy code">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <pre><code class="language-${lang}">${escapedCode}</code></pre>
+                    <textarea id="${codeId}" style="display: none;">${escapedCode}</textarea>
+                </div>`;
+            });
+            
+            // Handle tables
+            formattedContent = formattedContent.replace(/\|(.+)\|\n\|([\s\-\|]+\|)\n((?:\|.+\|\n?)*)/g, (match, header, separator, rows) => {
+                const headerCells = header.split('|').map(cell => cell.trim()).filter(cell => cell);
+                const rowLines = rows.trim().split('\n').filter(line => line.trim());
+                
+                let tableHtml = '<table class="markdown-table">';
+                
+                // Header
+                tableHtml += '<thead><tr>';
+                headerCells.forEach(cell => {
+                    tableHtml += `<th>${escapeHtml(cell)}</th>`;
+                });
+                tableHtml += '</tr></thead>';
+                
+                // Body
+                tableHtml += '<tbody>';
+                rowLines.forEach(row => {
+                    const cells = row.split('|').map(cell => cell.trim()).filter(cell => cell);
+                    tableHtml += '<tr>';
+                    cells.forEach(cell => {
+                        tableHtml += `<td>${formatInlineMarkdown(cell)}</td>`;
+                    });
+                    tableHtml += '</tr>';
+                });
+                tableHtml += '</tbody></table>';
+                
+                return tableHtml;
+            });
+            
+            // Handle headers
+            formattedContent = formattedContent.replace(/^#{6}\s+(.+)$/gm, '<h6>$1</h6>');
+            formattedContent = formattedContent.replace(/^#{5}\s+(.+)$/gm, '<h5>$1</h5>');
+            formattedContent = formattedContent.replace(/^#{4}\s+(.+)$/gm, '<h4>$1</h4>');
+            formattedContent = formattedContent.replace(/^#{3}\s+(.+)$/gm, '<h3>$1</h3>');
+            formattedContent = formattedContent.replace(/^#{2}\s+(.+)$/gm, '<h2>$1</h2>');
+            formattedContent = formattedContent.replace(/^#{1}\s+(.+)$/gm, '<h1>$1</h1>');
+            
+            // Handle horizontal rules
+            formattedContent = formattedContent.replace(/^---$/gm, '<hr>');
+            
+            // Handle blockquotes
+            formattedContent = formattedContent.replace(/^>\s*(.+)$/gm, '<blockquote>$1</blockquote>');
+            
+            // Handle callouts
+            formattedContent = formattedContent.replace(/^>\s*([💡🔍⚠️✅❌📝🎯💡])\s*\*\*([^*]+)\*\*:\s*(.+)$/gm, '<div class="callout callout-$1"><div class="callout-header"><span class="callout-icon">$1</span><strong>$2</strong></div><div class="callout-content">$3</div></div>');
+            
+            // Handle bold, italic, and strikethrough text
+            formattedContent = formattedContent.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            formattedContent = formattedContent.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+            formattedContent = formattedContent.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+            
+            // Handle links and images
+            formattedContent = formattedContent.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="markdown-link">$1</a>');
+            formattedContent = formattedContent.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="markdown-image" loading="lazy">');
+            
+            // Handle inline code
+            formattedContent = formattedContent.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+            
+            // Handle task lists
+            formattedContent = formattedContent.replace(/^-\s+\[([ x])\]\s+(.+)$/gm, '<li class="task-item" data-checked="$1">$2</li>');
+            
+            // Handle bullet lists
+            formattedContent = formattedContent.replace(/^\*\s+(.+)$/gm, '<li>$1</li>');
+            formattedContent = formattedContent.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+            
+            // Handle numbered lists
+            formattedContent = formattedContent.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+            
+            // Handle line breaks and paragraphs
+            const paragraphs = formattedContent.split('\n\n');
+            formattedContent = paragraphs.map(para => {
+                para = para.trim();
+                if (para.startsWith('<') || para.includes('<table') || para.includes('<code-block')) {
+                    return para;
+                }
+                return `<p>${formatInlineMarkdown(para)}</p>`;
+            }).join('\n');
+            
+            return formattedContent;
+        }
+        
+        function formatInlineMarkdown(text) {
+            let formatted = text;
+            
+            // Handle mathematical formulas
+            formatted = formatted.replace(/\$\$([^$]+)\$\$/g, (match, content) => {
+                const processedContent = processMathContent(content);
+                return `<div class="math-formula display">${processedContent}</div>`;
+            });
+            
+            formatted = formatted.replace(/(?<!\$)\$([^$\n]+?)\$(?!\$)/g, (match, content) => {
+                if (/^[\d,.\s]+$/.test(content.trim())) {
+                    return match;
+                }
+                const processedContent = processMathContent(content);
+                return `<span class="math-formula inline">${processedContent}</span>`;
+            });
+            
+            // Handle common mathematical symbols
+            formatted = formatted.replace(/\\alpha/g, 'α');
+            formatted = formatted.replace(/\\beta/g, 'β');
+            formatted = formatted.replace(/\\gamma/g, 'γ');
+            formatted = formatted.replace(/\\delta/g, 'δ');
+            formatted = formatted.replace(/\\epsilon/g, 'ε');
+            formatted = formatted.replace(/\\theta/g, 'θ');
+            formatted = formatted.replace(/\\lambda/g, 'λ');
+            formatted = formatted.replace(/\\mu/g, 'μ');
+            formatted = formatted.replace(/\\pi/g, 'π');
+            formatted = formatted.replace(/\\sigma/g, 'σ');
+            formatted = formatted.replace(/\\tau/g, 'τ');
+            formatted = formatted.replace(/\\phi/g, 'φ');
+            formatted = formatted.replace(/\\omega/g, 'ω');
+            formatted = formatted.replace(/\\infty/g, '∞');
+            formatted = formatted.replace(/\\sum/g, '∑');
+            formatted = formatted.replace(/\\int/g, '∫');
+            formatted = formatted.replace(/\\partial/g, '∂');
+            formatted = formatted.replace(/\\nabla/g, '∇');
+            formatted = formatted.replace(/\\times/g, '×');
+            formatted = formatted.replace(/\\div/g, '÷');
+            formatted = formatted.replace(/\\pm/g, '±');
+            formatted = formatted.replace(/\\leq/g, '≤');
+            formatted = formatted.replace(/\\geq/g, '≥');
+            formatted = formatted.replace(/\\neq/g, '≠');
+            formatted = formatted.replace(/\\approx/g, '≈');
+            formatted = formatted.replace(/\\propto/g, '∝');
+            formatted = formatted.replace(/\\in/g, '∈');
+            formatted = formatted.replace(/\\subset/g, '⊂');
+            formatted = formatted.replace(/\\supset/g, '⊃');
+            formatted = formatted.replace(/\\cup/g, '∪');
+            formatted = formatted.replace(/\\cap/g, '∩');
+            formatted = formatted.replace(/\\emptyset/g, '∅');
+            
+            // Handle fractions
+            formatted = formatted.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '<span class="math-fraction">$1/$2</span>');
+            
+            // Handle superscripts and subscripts
+            formatted = formatted.replace(/\^\{([^}]+)\}/g, '<sup>$1</sup>');
+            formatted = formatted.replace(/_\{([^}]+)\}/g, '<sub>$1</sub>');
+            formatted = formatted.replace(/\^([a-zA-Z0-9])/g, '<sup>$1</sup>');
+            formatted = formatted.replace(/_([a-zA-Z0-9])/g, '<sub>$1</sub>');
+            
+            // Handle common mathematical patterns
+            formatted = formatted.replace(/\b(\w+)_(\d+)\b/g, '<span class="math-subscript">$1<sub>$2</sub></span>');
+            formatted = formatted.replace(/\b(\w+)_(\w+)\b/g, '<span class="math-subscript">$1<sub>$2</sub></span>');
+            formatted = formatted.replace(/\b(\d+)\^(\d+)\b/g, '<span class="math-superscript">$1<sup>$2</sup></span>');
+            
+            // Handle chemical formulas
+            formatted = formatted.replace(/\b([A-Z][a-z]?)(\d+)\b/g, '<span class="chemical-formula">$1<sub>$2</sub></span>');
+            
+            // Handle measurements
+            formatted = formatted.replace(/\b(\d+(?:\.\d+)?)\s*(m|kg|s|A|K|mol|cd|Hz|N|J|W|V|F|H|T|Pa|C|Wb|lm|lx|Bq|Gy|Sv|kat|m2|m3|kg\/m3|m\/s|m\/s2|N\/m2|J\/kg|W\/m2|V\/m|A\/m|T\/m|H\/m|F\/m|S\/m|Wb\/m|J\/K|Pa\*s|N\*s|kg\*m\/s|J\*s|W\*s|V\*A|A\*s|C\*V|F\*V2|H\*A2|T\*A\*m|Wb\*A|N\*m|Pa\*m3|J\/mol|V\*s|C\*s|F\*V|H\*A|T\*m|Wb\*s|kg\*m2\/s|N\*s\*m|Pa\*s\*m3|J\/(mol\*K)|W\/(m2\*K)|V\*s\/m|A\*s\/m|C\*s\/m|F\*V\/m|H\*A\/m|T\*m\/m|Wb\*s\/m|J\*s\/m|kg\*m2\/(s\*m)|N\*s\*m\/m|Pa\*s\*m3\/m|J\/(mol\*K\*m)|W\/(m2\*K\*m))\b/g, 
+                '<span class="measurement">$1 <span class="unit">$2</span></span>');
+            
+            // Bold and italic
+            formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            formatted = formatted.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+            
+            // Inline code
+            formatted = formatted.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+            
+            return formatted;
+        }
+        
+        function processMathContent(content) {
+            let processed = content;
+            
+            // Handle Greek letters and common symbols
+            const mathSymbols = {
+                '\\alpha': 'α', '\\beta': 'β', '\\gamma': 'γ', '\\delta': 'δ', '\\epsilon': 'ε',
+                '\\theta': 'θ', '\\lambda': 'λ', '\\mu': 'μ', '\\pi': 'π', '\\sigma': 'σ',
+                '\\tau': 'τ', '\\phi': 'φ', '\\omega': 'ω', '\\infty': '∞', '\\sum': '∑',
+                '\\int': '∫', '\\partial': '∂', '\\nabla': '∇', '\\times': '×', '\\div': '÷',
+                '\\pm': '±', '\\leq': '≤', '\\geq': '≥', '\\neq': '≠', '\\approx': '≈',
+                '\\propto': '∝', '\\in': '∈', '\\subset': '⊂', '\\supset': '⊃',
+                '\\cup': '∪', '\\cap': '∩', '\\emptyset': '∅', '\\sqrt': '√'
+            };
+            
+            Object.entries(mathSymbols).forEach(([word, symbol]) => {
+                const regex = new RegExp(word.replace(/\\/g, '\\\\'), 'g');
+                processed = processed.replace(regex, symbol);
+            });
+            
+            // Handle fractions
+            processed = processed.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, 
+                '<span class="math-fraction"><span class="numerator">$1</span><span class="denominator">$2</span></span>');
+            
+            // Handle superscripts and subscripts
+            processed = processed.replace(/\^\{([^}]+)\}/g, '<sup>$1</sup>');
+            processed = processed.replace(/_\{([^}]+)\}/g, '<sub>$1</sub>');
+            processed = processed.replace(/\^([a-zA-Z0-9])/g, '<sup>$1</sup>');
+            processed = processed.replace(/_([a-zA-Z0-9])/g, '<sub>$1</sub>');
+            
+            return processed;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Test all formatting
+        function testFormatting() {
+            const tests = [
+                { input: 'codeTest', output: 'codeOutput' },
+                { input: 'tableTest', output: 'tableOutput' },
+                { input: 'mathTest', output: 'mathOutput' },
+                { input: 'headersTest', output: 'headersOutput' },
+                { input: 'quotesTest', output: 'quotesOutput' },
+                { input: 'linksTest', output: 'linksOutput' }
+            ];
+            
+            tests.forEach(test => {
+                const input = document.getElementById(test.input);
+                const output = document.getElementById(test.output);
+                
+                input.addEventListener('input', () => {
+                    output.innerHTML = formatMessageContent(input.value);
+                });
+                
+                // Initial render
+                output.innerHTML = formatMessageContent(input.value);
+            });
+        }
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', testFormatting);
+    </script>
+</body>
+</html>
