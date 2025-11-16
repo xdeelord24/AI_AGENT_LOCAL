@@ -469,17 +469,50 @@ class CodeAnalyzer:
     
     def _extract_code_from_response(self, response: str, language: str) -> str:
         """Extract clean code from AI response"""
+        import re
+        
         # Remove common prefixes and suffixes
         response = response.strip()
         
-        # Remove markdown code blocks if present
+        # First, try to extract code from markdown code blocks
+        # Pattern: ```language\ncode\n```
+        code_block_pattern = rf'```{re.escape(language)}\s*\n(.*?)\n```'
+        match = re.search(code_block_pattern, response, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        
+        # Pattern: ```\ncode\n```
+        code_block_pattern = r'```\s*\n(.*?)\n```'
+        match = re.search(code_block_pattern, response, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        
+        # Pattern: ```language code ``` (single line or multiline)
+        code_block_pattern = rf'```{re.escape(language)}\s*(.*?)```'
+        match = re.search(code_block_pattern, response, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        
+        # Pattern: ``` code ``` (generic)
+        code_block_pattern = r'```\s*(.*?)```'
+        match = re.search(code_block_pattern, response, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        
+        # Remove markdown code blocks if present at start/end
         if response.startswith(f"```{language}"):
-            response = response[len(f"```{language}"):]
+            response = response[len(f"```{language}"):].strip()
+            if response.startswith('\n'):
+                response = response[1:]
         elif response.startswith("```"):
-            response = response[3:]
+            response = response[3:].strip()
+            if response.startswith('\n'):
+                response = response[1:]
         
         if response.endswith("```"):
-            response = response[:-3]
+            response = response[:-3].strip()
+            if response.endswith('\n'):
+                response = response[:-1]
         
         # Remove common AI response patterns
         patterns_to_remove = [
@@ -542,38 +575,57 @@ class CodeAnalyzer:
         prompt: str, 
         language: str = "python",
         context: Dict[str, Any] = None,
-        max_length: int = 1000
+        max_length: int = 1000,
+        ai_service = None
     ) -> Dict[str, Any]:
         """Generate code based on a prompt"""
-        try:
-            # Import AI service here to avoid circular imports
-            from .ai_service import AIService
-            
-            # Create AI service instance
+        # Import AI service here to avoid circular imports
+        from .ai_service import AIService
+        
+        # Use provided AI service or create a new one
+        if ai_service is None:
             ai_service = AIService()
-            
+        
+        # Check if AI service is available
+        try:
+            is_connected = await ai_service.check_ollama_connection()
+            if not is_connected:
+                raise Exception("Ollama is not running. Please start Ollama and install a model.")
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ AI Service Error: {error_msg}")
+            raise Exception(f"AI service unavailable: {error_msg}. Please ensure Ollama is running.")
+        
+        try:
             # Build a comprehensive prompt for code generation
-            code_prompt = f"""You are an expert {language} programmer. Generate clean, well-documented, and efficient code based on the following request:
+            code_prompt = f"""You are an expert {language} programmer. Generate complete, working code based on the following request.
 
 Request: {prompt}
 
 Requirements:
-- Use {language} programming language
-- Write clean, readable code
-- Include proper comments and documentation
-- Follow best practices for {language}
-- Make the code production-ready
+- Write complete, functional {language} code
+- The code should be ready to run without modifications
+- Include proper comments and documentation within the code
+- Follow {language} best practices and conventions
 - Include error handling where appropriate
+- Make the code production-ready
 
-Context: {json.dumps(context or {}, indent=2) if context else "No additional context provided"}
+{f"Additional Context: {json.dumps(context, indent=2)}" if context else ""}
 
-Please generate the complete {language} code implementation:"""
+Generate the complete {language} code implementation:"""
             
             # Get AI response
             response = await ai_service._call_ollama(code_prompt)
             
+            if not response or len(response.strip()) == 0:
+                raise Exception("Empty response from AI service")
+            
             # Clean up the response to extract just the code
             generated_code = self._extract_code_from_response(response, language)
+            
+            # If the extracted code is still empty, use the raw response
+            if not generated_code or generated_code.strip() == "":
+                generated_code = response.strip()
             
             # Generate explanation
             explanation = f"Generated {language} code based on the prompt: '{prompt}'. The code includes proper structure, documentation, and follows {language} best practices."
@@ -586,24 +638,10 @@ Please generate the complete {language} code implementation:"""
             }
             
         except Exception as e:
-            # Fallback to a more helpful placeholder if AI service fails
-            return {
-                "generated_code": f"""# Generated {language} code for: {prompt}
-# Note: AI service unavailable, showing template structure
-
-def main():
-    \"\"\"
-    Main function for: {prompt}
-    \"\"\"
-    # TODO: Implement the requested functionality
-    pass
-
-if __name__ == "__main__":
-    main()""",
-                "explanation": f"Template structure for {language} code based on '{prompt}'. AI service is currently unavailable, showing recommended code structure.",
-                "language": language,
-                "confidence": 0.5
-            }
+            error_msg = str(e)
+            print(f"❌ Code Generation Error: {error_msg}")
+            # Re-raise the exception so the API can handle it properly
+            raise Exception(f"Error generating code: {error_msg}")
     
     async def search_code(
         self, 

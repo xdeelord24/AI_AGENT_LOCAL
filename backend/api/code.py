@@ -48,6 +48,10 @@ async def get_code_analyzer(request: Request):
     """Dependency to get code analyzer instance"""
     return request.app.state.code_analyzer
 
+async def get_ai_service(request: Request):
+    """Dependency to get AI service instance"""
+    return request.app.state.ai_service
+
 
 @router.post("/analyze/{path:path}", response_model=CodeAnalysis)
 async def analyze_code(
@@ -67,7 +71,8 @@ async def analyze_code(
 @router.post("/generate", response_model=CodeGenerationResponse)
 async def generate_code(
     request: CodeGenerationRequest,
-    code_analyzer = Depends(get_code_analyzer)
+    code_analyzer = Depends(get_code_analyzer),
+    ai_service = Depends(get_ai_service)
 ):
     """Generate code based on a natural language prompt"""
     try:
@@ -75,11 +80,16 @@ async def generate_code(
             prompt=request.prompt,
             language=request.language,
             context=request.context or {},
-            max_length=request.max_length
+            max_length=request.max_length,
+            ai_service=ai_service
         )
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating code: {str(e)}")
+        error_msg = str(e)
+        # Check if it's a service unavailable error
+        if "unavailable" in error_msg.lower() or "ollama" in error_msg.lower():
+            raise HTTPException(status_code=503, detail=error_msg)
+        raise HTTPException(status_code=500, detail=f"Error generating code: {error_msg}")
 
 
 @router.post("/search", response_model=List[CodeSearchResult])
