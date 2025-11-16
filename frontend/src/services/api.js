@@ -118,6 +118,19 @@ class ApiService {
   static async getCodeSuggestions(path, lineNumber) {
     return this.get(`/api/code/suggestions/${path}?line_number=${lineNumber}`);
   }
+
+  // Settings API
+  static async getSettings() {
+    return this.get('/api/settings/settings');
+  }
+
+  static async updateSettings(settings) {
+    return this.put('/api/settings/settings', settings);
+  }
+
+  static async testOllamaConnection() {
+    return this.post('/api/settings/test-connection');
+  }
 }
 
 export { ApiService };

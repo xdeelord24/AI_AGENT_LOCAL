@@ -16,13 +16,21 @@ class AIService:
     """Service for interacting with local AI models via Ollama"""
     
     def __init__(self):
-        # Try proxy first, fallback to direct connection
-        self.ollama_url = "http://localhost:5000"  # Proxy server
-        self.ollama_direct = "http://localhost:11434"  # Direct connection
-        self.current_model = "codellama"
+        # Load from environment variables or use defaults
+        self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:5000")  # Proxy server
+        self.ollama_direct = os.getenv("OLLAMA_DIRECT_URL", "http://localhost:11434")  # Direct connection
+        self.current_model = os.getenv("DEFAULT_MODEL", "codellama")
         self.conversation_history = {}
         self.available_models = []
-        self.use_proxy = True
+        # Default to using proxy if OLLAMA_URL is explicitly set, otherwise try direct first
+        use_proxy_env = os.getenv("USE_PROXY", "").lower()
+        if use_proxy_env in ("true", "1", "yes"):
+            self.use_proxy = True
+        elif use_proxy_env in ("false", "0", "no"):
+            self.use_proxy = False
+        else:
+            # Default: try proxy first if it's not the default direct URL
+            self.use_proxy = self.ollama_url != "http://localhost:11434"
         
     async def check_ollama_connection(self) -> bool:
         """Check if Ollama is running and accessible"""

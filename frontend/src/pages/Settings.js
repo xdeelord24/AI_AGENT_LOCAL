@@ -17,7 +17,9 @@ const Settings = () => {
   const [settings, setSettings] = useState({
     currentModel: 'codellama',
     availableModels: [],
-    ollamaUrl: 'http://localhost:11434',
+    ollamaUrl: 'http://localhost:5000',
+    ollamaDirectUrl: 'http://localhost:11434',
+    useProxy: true,
     autoSave: true,
     theme: 'dark',
     fontSize: 14,
@@ -26,6 +28,8 @@ const Settings = () => {
     minimap: true,
     lineNumbers: true,
   });
+  
+  const [isSaving, setIsSaving] = useState(false);
   
   const [connectionStatus, setConnectionStatus] = useState({
     ollama: false,
@@ -42,15 +46,21 @@ const Settings = () => {
 
   const loadSettings = async () => {
     try {
-      const [modelsResponse, statusResponse] = await Promise.all([
+      const [modelsResponse, statusResponse, backendSettings] = await Promise.all([
         ApiService.getModels(),
-        ApiService.getChatStatus()
+        ApiService.getChatStatus(),
+        ApiService.getSettings().catch(() => null)
       ]);
       
       setSettings(prev => ({
         ...prev,
         availableModels: modelsResponse.models || [],
-        currentModel: statusResponse.current_model || 'codellama'
+        currentModel: statusResponse.current_model || 'codellama',
+        ...(backendSettings && {
+          ollamaUrl: backendSettings.ollama_url || prev.ollamaUrl,
+          ollamaDirectUrl: backendSettings.ollama_direct_url || prev.ollamaDirectUrl,
+          useProxy: backendSettings.use_proxy !== undefined ? backendSettings.use_proxy : prev.useProxy
+        })
       }));
     } catch (error) {
       console.error('Error loading settings:', error);
@@ -87,12 +97,19 @@ const Settings = () => {
   const testOllamaConnection = async () => {
     setIsTestingConnection(true);
     try {
-      const response = await ApiService.getChatStatus();
-      if (response.ollama_connected) {
+      const response = await ApiService.testOllamaConnection();
+      if (response.connected) {
         toast.success('Ollama connection successful!');
         setConnectionStatus(prev => ({ ...prev, ollama: true }));
+        // Reload models if connection successful
+        if (response.available_models) {
+          setSettings(prev => ({
+            ...prev,
+            availableModels: response.available_models
+          }));
+        }
       } else {
-        toast.error('Ollama is not running or not accessible');
+        toast.error(response.message || 'Ollama is not running or not accessible');
         setConnectionStatus(prev => ({ ...prev, ollama: false }));
       }
     } catch (error) {
@@ -101,6 +118,25 @@ const Settings = () => {
       setConnectionStatus(prev => ({ ...prev, ollama: false }));
     } finally {
       setIsTestingConnection(false);
+    }
+  };
+  
+  const saveOllamaSettings = async () => {
+    setIsSaving(true);
+    try {
+      await ApiService.updateSettings({
+        ollama_url: settings.ollamaUrl,
+        ollama_direct_url: settings.ollamaDirectUrl,
+        use_proxy: settings.useProxy
+      });
+      toast.success('Ollama settings saved successfully!');
+      // Test connection after saving
+      await testOllamaConnection();
+    } catch (error) {
+      console.error('Error saving Ollama settings:', error);
+      toast.error(error.response?.data?.detail || 'Failed to save Ollama settings');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -124,11 +160,13 @@ const Settings = () => {
     }));
   };
 
-  const resetSettings = () => {
+  const resetSettings = async () => {
     const defaultSettings = {
       currentModel: 'codellama',
       availableModels: [],
-      ollamaUrl: 'http://localhost:11434',
+      ollamaUrl: 'http://localhost:5000',
+      ollamaDirectUrl: 'http://localhost:11434',
+      useProxy: true,
       autoSave: true,
       theme: 'dark',
       fontSize: 14,
@@ -139,7 +177,19 @@ const Settings = () => {
     };
     setSettings(defaultSettings);
     localStorage.setItem('offline-ai-settings', JSON.stringify(defaultSettings));
-    toast.success('Settings reset to defaults');
+    
+    // Also reset backend settings
+    try {
+      await ApiService.updateSettings({
+        ollama_url: defaultSettings.ollamaUrl,
+        ollama_direct_url: defaultSettings.ollamaDirectUrl,
+        use_proxy: defaultSettings.useProxy
+      });
+      toast.success('Settings reset to defaults');
+    } catch (error) {
+      console.error('Error resetting backend settings:', error);
+      toast.success('Local settings reset to defaults');
+    }
   };
 
   const getStatusIcon = (status) => {
@@ -230,6 +280,91 @@ const Settings = () => {
                 )}
                 <span>Refresh Status</span>
               </button>
+            </div>
+          </div>
+
+          {/* Ollama Configuration */}
+          <div className="bg-dark-800 border border-dark-700 rounded-lg p-6">
+            <h2 className="text-xl font-semibold text-dark-50 mb-4 flex items-center space-x-2">
+              <Database className="w-5 h-5" />
+              <span>Ollama Configuration</span>
+            </h2>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-dark-300 mb-2">
+                  Ollama URL (Proxy)
+                </label>
+                <input
+                  type="text"
+                  value={settings.ollamaUrl}
+                  onChange={(e) => handleSettingChange('ollamaUrl', e.target.value)}
+                  placeholder="http://localhost:5000"
+                  className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+                <p className="text-xs text-dark-400 mt-1">URL for Ollama proxy server (if using proxy)</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-dark-300 mb-2">
+                  Ollama Direct URL
+                </label>
+                <input
+                  type="text"
+                  value={settings.ollamaDirectUrl}
+                  onChange={(e) => handleSettingChange('ollamaDirectUrl', e.target.value)}
+                  placeholder="http://localhost:11434"
+                  className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+                <p className="text-xs text-dark-400 mt-1">Direct URL to Ollama server (default: http://localhost:11434)</p>
+              </div>
+
+              <div>
+                <label className="flex items-center space-x-3">
+                  <input
+                    type="checkbox"
+                    checked={settings.useProxy}
+                    onChange={(e) => handleSettingChange('useProxy', e.target.checked)}
+                    className="w-4 h-4 text-primary-600 bg-dark-700 border-dark-600 rounded focus:ring-primary-500"
+                  />
+                  <span className="text-dark-300">Use Proxy Server</span>
+                </label>
+                <p className="text-xs text-dark-400 mt-1 ml-7">If enabled, uses the proxy URL. Otherwise, uses the direct URL.</p>
+              </div>
+
+              <div className="flex space-x-3">
+                <button
+                  onClick={saveOllamaSettings}
+                  disabled={isSaving}
+                  className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded transition-colors disabled:opacity-50 flex items-center space-x-2"
+                >
+                  {isSaving ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Save Ollama Settings</span>
+                  )}
+                </button>
+                <button
+                  onClick={testOllamaConnection}
+                  disabled={isTestingConnection}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50 flex items-center space-x-2"
+                >
+                  {isTestingConnection ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Testing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Wifi className="w-4 h-4" />
+                      <span>Test Connection</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -404,8 +539,10 @@ const Settings = () => {
               </div>
               
               <div>
-                <div className="text-dark-400">Ollama URL</div>
-                <div className="text-dark-100 font-mono">{settings.ollamaUrl}</div>
+                <div className="text-dark-400">Ollama URL (Current)</div>
+                <div className="text-dark-100 font-mono">
+                  {settings.useProxy ? settings.ollamaUrl : settings.ollamaDirectUrl}
+                </div>
               </div>
               
               <div>
