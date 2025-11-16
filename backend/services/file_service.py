@@ -38,6 +38,7 @@ class FileService:
             '.yml', '.toml', '.ini', '.cfg', '.conf', '.env', '.md', '.txt',
             '.sql', '.dockerfile', '.dockerignore', '.gitignore'
         }
+        self.max_tree_children = 400
     
     async def list_directory(self, path: str) -> List[Dict[str, Any]]:
         """List files and directories in the specified path"""
@@ -192,37 +193,59 @@ class FileService:
         except Exception as e:
             raise Exception(f"Error getting file info: {str(e)}")
     
-    async def get_project_structure(self, path: str = ".") -> Dict[str, Any]:
-        """Get a tree structure of the project"""
+    async def get_project_structure(self, path: str = ".", max_depth: int = 6) -> Dict[str, Any]:
+        """Return a hierarchical representation of the project files."""
         try:
-            def build_tree(current_path: str, max_depth: int = 3, current_depth: int = 0) -> Dict[str, Any]:
-                if current_depth >= max_depth:
-                    return {"name": os.path.basename(current_path), "type": "file"}
-                
-                if os.path.isfile(current_path):
-                    return {
-                        "name": os.path.basename(current_path),
-                        "type": "file",
-                        "extension": os.path.splitext(current_path)[1]
-                    }
-                
-                children = []
-                try:
-                    for item in sorted(os.listdir(current_path)):
-                        if item.startswith('.'):
-                            continue
-                        item_path = os.path.join(current_path, item)
-                        children.append(build_tree(item_path, max_depth, current_depth + 1))
-                except (OSError, PermissionError):
-                    pass
-                
-                return {
-                    "name": os.path.basename(current_path),
-                    "type": "directory",
-                    "children": children
-                }
-            
-            return build_tree(path)
-            
+            target_path = self._resolve_path(path)
+            if not os.path.exists(target_path):
+                raise FileNotFoundError(f"Path not found: {path}")
+
+            depth = max(1, min(max_depth, 20))
+            return self._build_tree(target_path, depth)
+
         except Exception as e:
             raise Exception(f"Error getting project structure: {str(e)}")
+
+    def _build_tree(self, current_path: str, max_depth: int, current_depth: int = 0) -> Dict[str, Any]:
+        is_directory = os.path.isdir(current_path)
+        node = {
+            "name": os.path.basename(current_path) or current_path,
+            "path": self._normalize_path(current_path),
+            "is_directory": is_directory,
+            "children": [],
+            "has_more_children": False
+        }
+
+        if is_directory:
+            if current_depth >= max_depth:
+                node["has_more_children"] = True
+            else:
+                children = []
+                try:
+                    entries = sorted(os.listdir(current_path))
+                except (OSError, PermissionError):
+                    entries = []
+
+                for entry in entries:
+                    if entry.startswith('.'):
+                        continue
+                    entry_path = os.path.join(current_path, entry)
+                    children.append(self._build_tree(entry_path, max_depth, current_depth + 1))
+                    if len(children) >= self.max_tree_children:
+                        node["has_more_children"] = True
+                        break
+
+                node["children"] = children
+
+        return node
+
+    def _resolve_path(self, path: str) -> str:
+        if not path:
+            return self.current_directory
+        if os.path.isabs(path):
+            return os.path.abspath(path)
+        return os.path.abspath(os.path.join(self.current_directory, path))
+
+    @staticmethod
+    def _normalize_path(path: str) -> str:
+        return path.replace("\\", "/")

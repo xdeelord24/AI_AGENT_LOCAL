@@ -23,6 +23,14 @@ class ChatResponse(BaseModel):
     conversation_id: str
     timestamp: str
     context_used: Optional[Dict[str, Any]] = None
+    file_operations: Optional[List[Dict[str, Any]]] = None
+    ai_plan: Optional[Dict[str, Any]] = None
+    agent_statuses: Optional[List[Dict[str, Any]]] = None
+
+
+class StatusPreviewRequest(BaseModel):
+    message: str
+    context: Optional[Dict[str, Any]] = None
 
 
 async def get_ai_service(request: Request):
@@ -37,18 +45,34 @@ async def send_message(
 ):
     """Send a message to the AI agent and get a response"""
     try:
+        history = []
+        if request.conversation_history:
+            for msg in request.conversation_history:
+                if isinstance(msg, dict):
+                    history.append(msg)
+                else:
+                    history.append(msg.dict())
+
         # Process the message with context
         response = await ai_service.process_message(
             message=request.message,
             context=request.context or {},
-            conversation_history=request.conversation_history or []
+            conversation_history=history
+        )
+        agent_statuses = ai_service.generate_agent_statuses(
+            message=request.message,
+            context=request.context or {},
+            file_operations=response.get("file_operations")
         )
         
         return ChatResponse(
             response=response["content"],
             conversation_id=response["conversation_id"],
             timestamp=response["timestamp"],
-            context_used=response.get("context_used")
+            context_used=response.get("context_used"),
+            file_operations=response.get("file_operations"),
+            ai_plan=response.get("ai_plan"),
+            agent_statuses=agent_statuses
         )
         
     except Exception as e:
@@ -89,3 +113,19 @@ async def get_chat_status(ai_service = Depends(get_ai_service)):
         return status
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting status: {str(e)}")
+
+
+@router.post("/status-preview")
+async def get_status_preview(
+    request: StatusPreviewRequest,
+    ai_service = Depends(get_ai_service)
+):
+    """Generate contextual agent status steps for the UI"""
+    try:
+        statuses = ai_service.generate_agent_statuses(
+            message=request.message,
+            context=request.context or {}
+        )
+        return {"agent_statuses": statuses}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating status preview: {str(e)}")

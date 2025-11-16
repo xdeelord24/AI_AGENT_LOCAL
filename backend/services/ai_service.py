@@ -8,7 +8,7 @@ import aiohttp
 import json
 import uuid
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import os
 
 
@@ -31,6 +31,11 @@ class AIService:
         else:
             # Default: try proxy first if it's not the default direct URL
             self.use_proxy = self.ollama_url != "http://localhost:11434"
+
+        try:
+            self.request_timeout = int(os.getenv("OLLAMA_REQUEST_TIMEOUT", "120"))
+        except ValueError:
+            self.request_timeout = 120
         
     async def check_ollama_connection(self) -> bool:
         """Check if Ollama is running and accessible"""
@@ -86,6 +91,133 @@ class AIService:
             "conversation_count": len(self.conversation_history)
         }
     
+    def _normalize_path(self, path: Optional[str]) -> Optional[str]:
+        if not path:
+            return None
+        normalized = path.replace("\\", "/")
+        if normalized.startswith("./"):
+            normalized = normalized[2:]
+        return normalized or None
+    
+    def generate_agent_statuses(
+        self,
+        message: str,
+        context: Optional[Dict[str, Any]] = None,
+        file_operations: Optional[List[Dict[str, Any]]] = None
+    ) -> List[Dict[str, Any]]:
+        """Create contextual agent status steps for the frontend"""
+        context = context or {}
+        statuses: List[Dict[str, Any]] = []
+        delay = 0
+
+        def add_status(key: str, label: str, increment: int = 800):
+            nonlocal delay
+            statuses.append({
+                "key": key,
+                "label": label,
+                "delay_ms": delay
+            })
+            delay += max(increment, 200)
+
+        message_excerpt = (message or "").strip().splitlines()[0][:80]
+        if message_excerpt:
+            add_status("analysis", f"Analyzing request: {message_excerpt}…", 900)
+        else:
+            add_status("analysis", "Analyzing request…", 900)
+
+        active_file = self._normalize_path(context.get("active_file"))
+        if active_file:
+            add_status(f"active:{active_file}", f"Reading {active_file}", 800)
+
+        mentioned_files = context.get("mentioned_files") or []
+        added_paths = set()
+        if active_file:
+            added_paths.add(active_file)
+
+        for mention in mentioned_files[:4]:
+            path = mention.get("path") if isinstance(mention, dict) else mention
+            normalized = self._normalize_path(path)
+            if normalized and normalized not in added_paths:
+                add_status(f"mention:{normalized}", f"Scanning {normalized}", 650)
+                added_paths.add(normalized)
+
+        add_status("context", "Reviewing project context and open files", 700)
+
+        mode_value = (context.get("mode") or context.get("chat_mode") or "").lower()
+        if mode_value in ("agent", "plan") or context.get("composer_mode"):
+            add_status("planning", "Planning next implementation steps", 850)
+        else:
+            add_status("planning", "Preparing direct response", 700)
+
+        if file_operations:
+            for op in file_operations[:6]:
+                op_type = (op.get("type") or "").lower()
+                path = self._normalize_path(op.get("path")) or "workspace"
+                if op_type == "delete_file":
+                    label = f"Preparing removal for {path}"
+                elif op_type == "create_file":
+                    label = f"Drafting new file {path}"
+                else:
+                    label = f"Updating {path}"
+                add_status(f"op:{path}", label, 600)
+        else:
+            add_status("drafting", "Drafting potential code changes", 750)
+
+        add_status("finalizing", "Reviewing updates and finalizing answer", 500)
+
+        return statuses
+    
+    def _parse_response_metadata(self, response: str) -> Tuple[str, Dict[str, Any]]:
+        """Extract metadata such as file operations or AI plans from the response"""
+        cleaned_response = response
+        metadata: Dict[str, Any] = {
+            "file_operations": [],
+            "ai_plan": None
+        }
+
+        import re
+
+        def extract_from_json(json_str: str) -> bool:
+            try:
+                data = json.loads(json_str)
+            except json.JSONDecodeError:
+                return False
+
+            found = False
+            if isinstance(data, dict):
+                file_ops = data.get("file_operations")
+                ai_plan = data.get("ai_plan")
+
+                if isinstance(file_ops, list):
+                    metadata["file_operations"].extend(file_ops)
+                    found = True
+
+                if isinstance(ai_plan, dict):
+                    metadata["ai_plan"] = ai_plan
+                    found = True
+            return found
+
+        # Markdown ```json blocks
+        json_block_pattern = r'```json\s*({[^`]+})\s*```'
+        for match in re.finditer(json_block_pattern, response, re.DOTALL):
+            block = match.group(0)
+            json_str = match.group(1)
+            if extract_from_json(json_str):
+                cleaned_response = cleaned_response.replace(block, "").strip()
+
+        # Inline fallback for older responses
+        inline_patterns = [
+            r'\{[^{}]*"file_operations"[^{}]*\[[^\]]+\][^{}]*\}',
+            r'\{[^{}]*"ai_plan"[^{}]*\}'
+        ]
+        for pattern in inline_patterns:
+            for match in re.finditer(pattern, cleaned_response, re.DOTALL):
+                json_candidate = match.group(0)
+                if extract_from_json(json_candidate):
+                    cleaned_response = cleaned_response.replace(json_candidate, "").strip()
+
+        return cleaned_response, metadata
+
     async def process_message(
         self, 
         message: str, 
@@ -106,18 +238,30 @@ class AIService:
         # Get response from Ollama
         response = await self._call_ollama(prompt)
         
+        # Parse metadata from response
+        cleaned_response, metadata = self._parse_response_metadata(response)
+        
         # Store conversation
         self.conversation_history[conversation_id] = {
             "messages": conversation_history or [],
             "last_updated": datetime.now().isoformat()
         }
         
-        return {
-            "content": response,
+        result = {
+            "content": cleaned_response,
             "conversation_id": conversation_id,
             "timestamp": datetime.now().isoformat(),
             "context_used": context
         }
+        
+        file_operations = metadata.get("file_operations") or []
+        if file_operations:
+            result["file_operations"] = file_operations
+
+        if metadata.get("ai_plan"):
+            result["ai_plan"] = metadata["ai_plan"]
+        
+        return result
     
     def _build_prompt(
         self, 
@@ -127,27 +271,99 @@ class AIService:
     ) -> str:
         """Build a comprehensive prompt with context"""
         
+        mode_value = (context.get("mode") or "").lower()
+        chat_mode_value = (context.get("chat_mode") or "").lower()
+        is_composer = bool(context.get("composer_mode"))
+        is_agent_mode = is_composer or mode_value in ("agent", "plan") or chat_mode_value in ("agent", "plan")
+
         prompt_parts = [
             "You are an expert AI coding assistant similar to Cursor. You help developers with:",
             "- Code generation and completion",
             "- Code analysis and debugging", 
             "- Refactoring and optimization",
             "- Explaining complex code",
+            "- Creating and editing files",
             "- Best practices and patterns",
+            "",
+            "IMPORTANT: When the user asks you to create, edit, or modify files, you MUST include",
+            "file operations in a special JSON format at the end of your response.",
+            "",
+        ]
+
+        if is_agent_mode:
+            prompt_parts.extend([
+                "AGENT MODE REQUIREMENTS:",
+                "- Think step-by-step before responding.",
+                "- Create a concise TODO list (max 5 items) describing how you will fulfill the request.",
+                "- Each task must include an id, title, and status (`pending`, `in_progress`, or `completed`).",
+                "- Include this plan in the `ai_plan` metadata described below even if no file changes are required.",
+                ""
+            ])
+        else:
+            prompt_parts.append("If you develop a TODO plan, include it via the `ai_plan` metadata described below.")
+            prompt_parts.append("")
+
+        prompt_parts.extend([
+            "Metadata format (always include this JSON block when sharing an ai_plan or file operations):",
+            "```json",
+            "{",
+            '  "ai_plan": {',
+            '    "summary": "One-sentence summary of your approach",',
+            '    "tasks": [',
+            '      {',
+            '        "id": "task-1",',
+            '        "title": "Describe the step",',
+            '        "status": "pending"',
+            '      }',
+            '    ]',
+            '  },',
+            '  "file_operations": [',
+            '    {',
+            '      "type": "create_file" | "edit_file" | "delete_file",',
+            '      "path": "file/path.ext",',
+            '      "content": "file content here"',
+            '    }',
+            '  ]',
+            "}",
+            "```",
             "",
             "Always provide practical, working code examples. Be concise but thorough.",
             ""
-        ]
+        ])
         
         # Add context if available
         if context:
             prompt_parts.append("CONTEXT:")
-            if "current_file" in context:
-                prompt_parts.append(f"Current file: {context['current_file']}")
-            if "project_type" in context:
-                prompt_parts.append(f"Project type: {context['project_type']}")
-            if "selected_code" in context:
-                prompt_parts.append(f"Selected code:\n{context['selected_code']}")
+            if context.get("active_file"):
+                prompt_parts.append(f"Active file: {context['active_file']}")
+                if context.get("active_file_content"):
+                    prompt_parts.append(f"Active file content:\n{context['active_file_content'][:1000]}...")
+            
+            if context.get("open_files"):
+                prompt_parts.append(f"\nOpen files ({len(context['open_files'])}):")
+                for file in context["open_files"]:
+                    status = "ACTIVE" if file.get("is_active") else "open"
+                    prompt_parts.append(f"  [{status}] {file['path']} ({file.get('language', 'unknown')})")
+                    if file.get("content") and len(file["content"]) < 500:
+                        prompt_parts.append(f"    Content: {file['content'][:200]}...")
+            
+            if context.get("mentioned_files"):
+                prompt_parts.append(f"\nMentioned files (@mentions):")
+                for file in context["mentioned_files"]:
+                    prompt_parts.append(f"  - {file.get('path', file)}")
+                    if file.get("content"):
+                        prompt_parts.append(f"    Content: {file['content'][:200]}...")
+            
+            if context.get("file_tree_structure"):
+                prompt_parts.append(f"\nProject structure available (use @filename to reference files)")
+                # Show top-level structure
+                top_level = [item["name"] for item in context["file_tree_structure"][:10]]
+                if top_level:
+                    prompt_parts.append(f"  Top files/dirs: {', '.join(top_level)}")
+            
+            if context.get("composer_mode"):
+                prompt_parts.append(f"\nMode: AGENT MODE - You can create, edit, and delete files.")
+            
             prompt_parts.append("")
         
         # Add conversation history
@@ -186,7 +402,7 @@ class AIService:
                 async with session.post(
                     f"{url}/api/generate",
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=60)
+                    timeout=aiohttp.ClientTimeout(total=self.request_timeout)
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -195,7 +411,11 @@ class AIService:
                         error_text = await response.text()
                         raise Exception(f"Ollama API error: {response.status} - {error_text}")
         except asyncio.TimeoutError:
-            raise Exception("Request timed out. The model might be too slow or overloaded.")
+            raise Exception(
+                f"Request timed out after {self.request_timeout}s. "
+                "The model might be too slow or overloaded. "
+                "You can increase OLLAMA_REQUEST_TIMEOUT or try a smaller prompt."
+            )
         except Exception as e:
             raise Exception(f"Error calling Ollama: {str(e)}")
     

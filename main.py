@@ -18,6 +18,7 @@ from backend.api import router as api_router
 from backend.services.ai_service import AIService
 from backend.services.file_service import FileService
 from backend.services.code_analyzer import CodeAnalyzer
+from backend.services.terminal_service import TerminalService
 
 
 @asynccontextmanager
@@ -30,6 +31,7 @@ async def lifespan(app: FastAPI):
     app.state.ai_service = AIService()
     app.state.file_service = FileService()
     app.state.code_analyzer = CodeAnalyzer()
+    app.state.terminal_service = TerminalService(base_path=os.getcwd())
     
     # Check if Ollama is running
     if not await app.state.ai_service.check_ollama_connection():

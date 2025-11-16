@@ -1,11 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
-import Layout from './components/Layout';
-import Chat from './pages/Chat';
-import FileExplorer from './pages/FileExplorer';
-import CodeEditor from './pages/CodeEditor';
-import Settings from './pages/Settings';
+import IDELayout from './components/IDELayout';
 import { ApiService } from './services/api';
 
 function App() {
@@ -47,35 +42,25 @@ function App() {
   };
 
   return (
-    <Router>
-      <div className="App min-h-screen bg-dark-900 text-dark-50">
-        <Layout 
-          isConnected={isConnected}
-          currentModel={currentModel}
-          availableModels={availableModels}
-          onModelSelect={selectModel}
-        >
-          <Routes>
-            <Route path="/" element={<Chat />} />
-            <Route path="/chat" element={<Chat />} />
-            <Route path="/files" element={<FileExplorer />} />
-            <Route path="/editor" element={<CodeEditor />} />
-            <Route path="/settings" element={<Settings />} />
-          </Routes>
-        </Layout>
-        <Toaster 
-          position="top-right"
-          toastOptions={{
-            duration: 4000,
-            style: {
-              background: '#1e293b',
-              color: '#f1f5f9',
-              border: '1px solid #334155',
-            },
-          }}
-        />
-      </div>
-    </Router>
+    <div className="App min-h-screen bg-dark-900 text-dark-50">
+      <IDELayout 
+        isConnected={isConnected}
+        currentModel={currentModel}
+        availableModels={availableModels}
+        onModelSelect={selectModel}
+      />
+      <Toaster 
+        position="top-right"
+        toastOptions={{
+          duration: 4000,
+          style: {
+            background: '#1e293b',
+            color: '#f1f5f9',
+            border: '1px solid #334155',
+          },
+        }}
+      />
+    </div>
   );
 }
 

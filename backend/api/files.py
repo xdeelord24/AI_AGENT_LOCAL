@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import os
 
@@ -25,6 +25,20 @@ class DirectoryListing(BaseModel):
     path: str
     files: List[FileInfo]
     total_files: int
+
+
+class FileTreeNode(BaseModel):
+    name: str
+    path: str
+    is_directory: bool
+    has_more_children: bool = False
+    children: List["FileTreeNode"] = Field(default_factory=list)
+
+
+class FileTreeResponse(BaseModel):
+    root_name: str
+    root_path: str
+    tree: FileTreeNode
 
 
 async def get_file_service(request: Request):
@@ -139,3 +153,29 @@ async def get_file_info(
         raise HTTPException(status_code=404, detail="File not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting file info: {str(e)}")
+
+
+@router.get("/tree/{path:path}", response_model=FileTreeResponse)
+async def get_file_tree(
+    path: str,
+    max_depth: int = 6,
+    file_service = Depends(get_file_service)
+):
+    """Return a hierarchical representation of the directory."""
+    try:
+        tree = await file_service.get_project_structure(path or ".", max_depth=max_depth)
+        return {
+            "root_name": tree["name"],
+            "root_path": tree["path"],
+            "tree": tree
+        }
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Directory not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error building file tree: {str(e)}")
+
+
+try:
+    FileTreeNode.model_rebuild()  # Pydantic v2
+except AttributeError:  # pragma: no cover - fallback for v1
+    FileTreeNode.update_forward_refs()

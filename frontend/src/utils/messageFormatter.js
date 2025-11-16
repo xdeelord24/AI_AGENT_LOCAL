@@ -9,19 +9,17 @@ export const formatMessageContent = (content) => {
   // First, handle code blocks (before other processing)
   formattedContent = formattedContent.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, language, code) => {
     const lang = normalizeLanguage(language || 'text');
-    const codeId = 'code_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     const escapedCode = escapeHtml(code.trim());
     return `<div class="code-block language-${lang}" data-language="${lang}">
       <div class="code-header">
         <span class="code-language">${lang}</span>
-        <button class="copy-code-btn" data-code-id="${codeId}" title="Copy code">
+        <button class="copy-code-btn" type="button" title="Copy code" aria-label="Copy code">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
           </svg>
         </button>
       </div>
       <pre><code class="language-${lang}">${escapedCode}</code></pre>
-      <textarea id="${codeId}" style="display: none;">${escapedCode}</textarea>
     </div>`;
   });
   
@@ -433,24 +431,17 @@ export const escapeHtml = (text) => {
 // Copy to clipboard functionality
 export const copyToClipboard = async (text, button) => {
   try {
-    let cleanText;
+    const cleanText = typeof text === 'string' ? text : (text ?? '').toString();
     
-    // If text is already clean (from textarea), use it directly
-    if (typeof text === 'string' && !text.includes('<')) {
-      cleanText = text;
-    } else {
-      // Clean the text - remove HTML tags and decode entities
-      cleanText = stripHtml(text);
+    if (!cleanText.length) {
+      return false;
     }
     
-    console.log('Copying text:', cleanText); // Debug log
+    const canUseModernClipboard = typeof navigator !== 'undefined' && navigator.clipboard && typeof window !== 'undefined' && window.isSecureContext;
     
-    // Try modern clipboard API first
-    if (navigator.clipboard && window.isSecureContext) {
+    if (canUseModernClipboard) {
       await navigator.clipboard.writeText(cleanText);
-      console.log('Copied using modern API'); // Debug log
-    } else {
-      // Fallback for older browsers or non-secure contexts
+    } else if (typeof document !== 'undefined') {
       const textArea = document.createElement('textarea');
       textArea.value = cleanText;
       textArea.style.position = 'fixed';
@@ -465,20 +456,16 @@ export const copyToClipboard = async (text, button) => {
       if (!successful) {
         throw new Error('execCommand failed');
       }
-      console.log('Copied using fallback method'); // Debug log
+    } else {
+      throw new Error('Clipboard API is not available');
     }
     
-    // Show success feedback
     if (button) {
       const originalIcon = button.innerHTML;
-      const originalClass = button.className;
-      
-      // Add copied class and change icon
       button.classList.add('copied');
       button.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
       button.title = 'Copied!';
       
-      // Reset after animation
       setTimeout(() => {
         button.classList.remove('copied');
         button.innerHTML = originalIcon;
@@ -490,7 +477,6 @@ export const copyToClipboard = async (text, button) => {
   } catch (error) {
     console.error('Failed to copy to clipboard:', error);
     
-    // Reset button state on error
     if (button) {
       button.classList.remove('copied');
       button.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>';
@@ -501,8 +487,45 @@ export const copyToClipboard = async (text, button) => {
   }
 };
 
-export const stripHtml = (html) => {
-  const div = document.createElement('div');
-  div.innerHTML = html;
-  return div.textContent || div.innerText || '';
+const getCodeTextFromButton = (button) => {
+  if (!button) return '';
+  const codeBlock = button.closest('.code-block');
+  if (!codeBlock) return '';
+  
+  const hiddenTextarea = codeBlock.querySelector('textarea');
+  if (hiddenTextarea && typeof hiddenTextarea.value === 'string' && hiddenTextarea.value.length) {
+    return hiddenTextarea.value;
+  }
+  
+  const codeElement = codeBlock.querySelector('code');
+  return codeElement?.textContent ?? '';
+};
+
+const COPY_HANDLER_STORAGE_KEY = '__ai_agent_copy_code_handler__';
+
+const handleCopyButtonClick = (event) => {
+  const target = event.target instanceof Element ? event.target.closest('.copy-code-btn') : null;
+  if (!target) return;
+  
+  event.preventDefault();
+  event.stopPropagation();
+  
+  const codeText = getCodeTextFromButton(target);
+  if (!codeText) return;
+  
+  copyToClipboard(codeText, target);
+};
+
+export const initializeCopyCodeListeners = () => {
+  if (typeof document === 'undefined' || typeof window === 'undefined') {
+    return;
+  }
+  
+  const existingHandler = window[COPY_HANDLER_STORAGE_KEY];
+  if (existingHandler) {
+    document.removeEventListener('click', existingHandler);
+  }
+  
+  document.addEventListener('click', handleCopyButtonClick);
+  window[COPY_HANDLER_STORAGE_KEY] = handleCopyButtonClick;
 };
