@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Menu, X, ChevronLeft, ChevronRight, Maximize2,
   Code2, Bot, Wifi, WifiOff,
@@ -287,6 +287,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const searchInputRef = useRef(null);
   const terminalOutputRef = useRef(null);
   const terminalInputRef = useRef(null);
+  const pendingShellIdRef = useRef(null);
   const agentStatusTimersRef = useRef([]);
   const agentModeMenuRef = useRef(null);
   const webSearchMenuRef = useRef(null);
@@ -567,6 +568,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [terminalOutput, setTerminalOutput] = useState([]);
   const [terminalInput, setTerminalInput] = useState('');
   const [isTerminalBusy, setIsTerminalBusy] = useState(false);
+  const [terminalShells, setTerminalShells] = useState([]);
+  const [isLoadingTerminalShells, setIsLoadingTerminalShells] = useState(false);
+  const [selectedTerminalShellId, setSelectedTerminalShellId] = useState(null);
 
   const loadProjectTree = useCallback(async (path = '.', options = {}) => {
     const { setAsRoot = true, showToastMessage = false, maxDepth = 8 } = options;

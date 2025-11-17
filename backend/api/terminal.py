@@ -77,3 +77,23 @@ async def run_terminal_command(
         ) from exc
 
 
+@router.post("/interrupt")
+async def interrupt_terminal(
+    payload: TerminalSessionPayload,
+    terminal_service=Depends(get_terminal_service),
+):
+    """Send an interrupt signal to the running command within a session."""
+    try:
+        return await terminal_service.cancel_command(payload.session_id)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Terminal interrupt error: {exc}",
+        ) from exc
+
+

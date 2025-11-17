@@ -203,6 +203,12 @@ class ApiService {
       env,
     });
   }
+
+  static async stopTerminalCommand(sessionId) {
+    return this.post('/api/terminal/interrupt', {
+      session_id: sessionId,
+    });
+  }
 }
 
 export { ApiService };
