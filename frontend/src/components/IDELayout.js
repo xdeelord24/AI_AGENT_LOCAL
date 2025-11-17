@@ -11,6 +11,7 @@ import {
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
 import { formatMessageContent, initializeCopyCodeListeners } from '../utils/messageFormatter';
+import { detectNewScriptIntent } from '../utils/intentDetection';
 import toast from 'react-hot-toast';
 
 const createUniqueLineId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1697,6 +1698,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     // Detect file mentions
     const fileMentions = detectFileMentions(finalMessage);
     const mentionedFiles = [];
+    const isNewScriptRequest = detectNewScriptIntent(finalMessage);
     
     // Load content for mentioned files
     for (const mention of fileMentions) {
@@ -1767,7 +1769,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setChatAbortController(abortController);
 
     try {
-      if (mentionedFiles.length === 0 && activeTab) {
+      if (!isNewScriptRequest && mentionedFiles.length === 0 && activeTab) {
         const activeFileData = openFiles.find(f => f.path === activeTab);
         if (activeFileData) {
           mentionedFiles.push({
@@ -1785,15 +1787,20 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       }
 
       // Build comprehensive context
+      const activeFileForContext = isNewScriptRequest ? null : activeTab;
+      const openFilesForContext = isNewScriptRequest ? [] : openFiles;
+
       const context = {
         current_page: 'ide',
         mode: modePayload,
         chat_mode: modePayload,
         web_search_mode: webSearchMode,
-        default_target_file: activeTab,
-        active_file: activeTab,
-        active_file_content: activeTab ? openFiles.find(f => f.path === activeTab)?.content : null,
-        open_files: openFiles.map(f => ({
+        default_target_file: activeFileForContext,
+        active_file: activeFileForContext,
+        active_file_content: activeFileForContext
+          ? openFiles.find(f => f.path === activeFileForContext)?.content
+          : null,
+        open_files: openFilesForContext.map(f => ({
           path: f.path,
           name: f.name,
           content: f.content ? f.content.substring(0, 5000) : null, // Limit content size
@@ -1808,6 +1815,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         file_tree_structure: simplifyFileTree(fileTree), // Simplified file tree without full content
         ...(shouldEnableComposerMode && { composer_mode: true })
       };
+
+      if (isNewScriptRequest) {
+        context.intent = 'new_script';
+        context.requested_new_script = true;
+        context.disable_active_file_context = true;
+        context.new_script_prompt = finalMessage;
+      }
 
       if (shouldEnableComposerMode) {
         ApiService.previewAgentStatuses(finalMessage, context)
