@@ -11,6 +11,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+import logging
+
+if os.name == "nt":
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except AttributeError:
+        pass
 
 
 def _utc_now() -> datetime:
@@ -22,6 +29,9 @@ TERMINAL_COMPLETION_LIMIT = 200
 COMPLETION_DELIMITERS = " \t\n\r;&|="
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass
 class TerminalSession:
     """In-memory representation of a terminal session."""
@@ -30,7 +40,7 @@ class TerminalSession:
     cwd: Path
     created_at: datetime = field(default_factory=_utc_now)
     last_active: datetime = field(default_factory=_utc_now)
-    current_process: Optional[Process] = field(default=None, repr=False, compare=False)
+    current_process: Optional[object] = field(default=None, repr=False, compare=False)
     current_command: Optional[str] = None
     interrupted: bool = False
 
@@ -74,19 +84,50 @@ class TerminalService:
         timeout: int = 120,
         env: Optional[Dict[str, str]] = None,
     ) -> Dict[str, object]:
-        if not command or not command.strip():
-            raise RuntimeError("Command cannot be empty")
-
         session = await self._get_or_create_session(session_id)
-        if session.is_busy():
-            raise RuntimeError("Terminal session is already running a command")
+        try:
+            normalized = (command or "").strip()
 
-        normalized = command.strip()
+            if not normalized:
+                return self._build_response(
+                    session,
+                    stdout="",
+                    stderr="",
+                    exit_code=None,
+                    success=False,
+                    timeout=timeout,
+                    message="Command cannot be empty",
+                    was_cd=False,
+                )
 
-        if self._is_cd_command(normalized):
-            return await self._handle_cd_command(session, normalized, timeout)
+            if session.is_busy():
+                return self._build_response(
+                    session,
+                    stdout="",
+                    stderr="",
+                    exit_code=None,
+                    success=False,
+                    timeout=timeout,
+                    message="Terminal session is already running a command",
+                    was_cd=False,
+                )
 
-        return await self._execute_process(session, normalized, timeout, env)
+            if self._is_cd_command(normalized):
+                return await self._handle_cd_command(session, normalized, timeout)
+
+            return await self._execute_process(session, normalized, timeout, env)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Terminal command failed: %s", command)
+            return self._build_response(
+                session,
+                stdout="",
+                stderr=str(exc),
+                exit_code=None,
+                success=False,
+                timeout=timeout,
+                message=f"Terminal error: {exc}",
+                was_cd=False,
+            )
 
     async def cancel_command(self, session_id: Optional[str]) -> Dict[str, object]:
         session = await self._get_session(session_id)
@@ -254,34 +295,119 @@ class TerminalService:
             env_vars.update({str(key): str(value) for key, value in env.items() if value is not None})
 
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-        process = await asyncio.create_subprocess_shell(
-            command,
-            cwd=str(session.cwd),
-            env=env_vars,
-            stdout=PIPE,
-            stderr=PIPE,
-            start_new_session=os.name != "nt",
-            creationflags=creationflags,
-        )
-        session.current_process = process
-        session.current_command = command
-
-        timed_out = False
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            timed_out = True
-            await self._terminate_process(process)
-            stdout_bytes, stderr_bytes = await process.communicate()
-        finally:
-            session.touch()
-            session.current_process = None
-            session.current_command = None
+            process = await asyncio.create_subprocess_shell(
+                command,
+                cwd=str(session.cwd),
+                env=env_vars,
+                stdout=PIPE,
+                stderr=PIPE,
+                start_new_session=os.name != "nt",
+                creationflags=creationflags,
+            )
+            session.current_process = process
+            session.current_command = command
 
-        stdout = self._decode_output(stdout_bytes)
-        stderr = self._decode_output(stderr_bytes)
+            timed_out = False
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                timed_out = True
+                await self._terminate_process(process)
+                stdout_bytes, stderr_bytes = await process.communicate()
+            finally:
+                session.touch()
+                session.current_process = None
+                session.current_command = None
+
+            stdout = self._decode_output(stdout_bytes)
+            stderr = self._decode_output(stderr_bytes)
+            exit_code = process.returncode if process.returncode is not None else -1
+
+            interrupted = session.interrupted
+            session.interrupted = False
+
+            message = None
+            if timed_out:
+                message = f"Command timed out after {timeout} seconds"
+            elif interrupted:
+                message = "Command interrupted by user"
+
+            success = exit_code == 0 and not timed_out and not interrupted
+
+            return self._build_response(
+                session,
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=exit_code,
+                success=success,
+                timeout=timeout,
+                message=message,
+                was_cd=False,
+                timed_out=timed_out,
+            )
+        except NotImplementedError:
+            logger.warning("Async subprocess unsupported; using blocking fallback")
+            return await self._execute_process_blocking(
+                session,
+                command,
+                timeout,
+                env_vars,
+                creationflags,
+            )
+
+    async def _execute_process_blocking(
+        self,
+        session: TerminalSession,
+        command: str,
+        timeout: int,
+        env_vars: Dict[str, str],
+        creationflags: int,
+    ) -> Dict[str, object]:
+        def runner():
+            process = subprocess.Popen(
+                command,
+                cwd=str(session.cwd),
+                env=env_vars,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                creationflags=creationflags,
+            )
+            session.current_process = process
+            session.current_command = command
+            timed_out = False
+            stdout = ""
+            stderr = ""
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+                timed_out = True
+                stdout = exc.stdout or ""
+                stderr = exc.stderr or ""
+                process.kill()
+            finally:
+                session.touch()
+                session.current_process = None
+                session.current_command = None
+            return process, stdout, stderr, timed_out
+
+        try:
+            process, stdout, stderr, timed_out = await asyncio.to_thread(runner)
+        except Exception as exc:  # noqa: BLE001
+            return self._build_response(
+                session,
+                stdout="",
+                stderr=str(exc),
+                exit_code=-1,
+                success=False,
+                timeout=timeout,
+                message=f"Terminal error: {exc}",
+                was_cd=False,
+            )
+
         exit_code = process.returncode if process.returncode is not None else -1
-
         interrupted = session.interrupted
         session.interrupted = False
 
@@ -305,7 +431,7 @@ class TerminalService:
             timed_out=timed_out,
         )
 
-    async def _interrupt_process(self, process: Process) -> None:
+    async def _interrupt_process(self, process) -> None:
         if process.returncode is not None:
             return
 
@@ -328,7 +454,7 @@ class TerminalService:
         if process.returncode is None:
             process.kill()
 
-    async def _terminate_process(self, process: Process) -> None:
+    async def _terminate_process(self, process) -> None:
         if process.returncode is not None:
             return
 

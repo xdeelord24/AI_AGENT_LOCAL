@@ -4,6 +4,7 @@ Offline AI Agent - Main Application Entry Point
 A Cursor-like AI coding assistant that runs entirely offline.
 """
 
+import asyncio
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,11 @@ from backend.services.ai_service import AIService
 from backend.services.file_service import FileService
 from backend.services.code_analyzer import CodeAnalyzer
 from backend.services.terminal_service import TerminalService
+
+
+# Ensure Windows event loop supports subprocess operations (required for terminal)
+if os.name == "nt":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 
 @asynccontextmanager

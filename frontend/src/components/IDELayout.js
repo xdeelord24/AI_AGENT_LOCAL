@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
-  Menu, X, ChevronLeft, ChevronRight, Maximize2,
+  X, ChevronLeft, ChevronRight, Maximize2,
   Code2, Bot, Wifi, WifiOff,
   Folder, File, FilePlus, FolderPlus,
   ChevronRight as ChevronRightIcon, ChevronDown,
@@ -294,7 +294,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const terminalInputRef = useRef(null);
   const completionRequestIdRef = useRef(0);
   const historyDraftRef = useRef('');
-  const pendingShellIdRef = useRef(null);
   const agentStatusTimersRef = useRef([]);
   const agentModeMenuRef = useRef(null);
   const webSearchMenuRef = useRef(null);
@@ -581,10 +580,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [showHistoryPanel, setShowHistoryPanel] = useState(false);
   const [historyFilter, setHistoryFilter] = useState('');
   const [isCompletingTerminal, setIsCompletingTerminal] = useState(false);
-  const [terminalShells, setTerminalShells] = useState([]);
-  const [isLoadingTerminalShells, setIsLoadingTerminalShells] = useState(false);
-  const [selectedTerminalShellId, setSelectedTerminalShellId] = useState(null);
-
   const filteredHistory = useMemo(() => {
     if (!historyFilter) {
       return terminalHistory;
@@ -758,7 +753,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
   }, [terminalHistory]);
   
-  const getLanguageFromPath = (path) => {
+  const getLanguageFromPath = useCallback((path) => {
     const ext = normalizeEditorPath(path).split('.').pop().toLowerCase();
     const langMap = {
       'py': 'python', 'js': 'javascript', 'ts': 'typescript', 'jsx': 'javascript',
@@ -768,7 +763,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       'rb': 'ruby', 'sh': 'shell', 'sql': 'sql'
     };
     return langMap[ext] || 'plaintext';
-  };
+  }, []);
 
   const loadFile = useCallback(async (filePath) => {
     try {
@@ -2407,28 +2402,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
   };
 
-  const handleChatInputChange = (e) => {
-    const value = e.target.value;
-    setChatInput(value);
-    setSuggestionInputType('chat');
-    
-    // Check for @ mention
-    const cursorPos = e.target.selectionStart;
-    const textBeforeCursor = value.substring(0, cursorPos);
-    const lastAtIndex = textBeforeCursor.lastIndexOf('@');
-    
-    if (lastAtIndex !== -1) {
-      const query = textBeforeCursor.substring(lastAtIndex + 1).split(/\s/)[0];
-      const suggestions = getFileSuggestions(query);
-      setFileSuggestions(suggestions);
-      setShowFileSuggestions(suggestions.length > 0);
-      setMentionPosition({ start: lastAtIndex, end: cursorPos });
-    } else {
-      setShowFileSuggestions(false);
-      setMentionPosition(null);
-    }
-  };
-
   const insertFileMention = (file) => {
     if (!mentionPosition) return;
     const mentionValue = typeof file === 'object'
@@ -2467,12 +2440,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     e.preventDefault();
     setShowFileSuggestions(false);
     await handleSendChat(composerInput, true);
-  };
-
-  const handleChatSubmit = async (e) => {
-    e.preventDefault();
-    setShowFileSuggestions(false);
-    await handleSendChat(chatInput, false);
   };
 
   const openOperationPreview = useCallback(
@@ -3483,11 +3450,102 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                     <span className="text-xs text-dark-500">Session: {terminalSessionId.slice(0, 8)}</span>
                   )}
                 </div>
-                <div className="text-dark-300 flex items-center space-x-2">
-                  <span>Press</span>
-                  <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded text-xs">Ctrl+K</kbd>
-                  <span>to generate command</span>
+                <div className="text-dark-300 text-xs flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span>Shortcuts:</span>
+                    <span className="flex items-center gap-1">
+                      <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">Ctrl+K</kbd>
+                      <span>ask AI</span>
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">Tab</kbd>
+                      <span>complete</span>
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">↑</kbd>
+                      <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">↓</kbd>
+                      <span>history</span>
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">Ctrl+L</kbd>
+                      <span>clear</span>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleHistoryPanelToggle}
+                      className={`flex items-center gap-1 px-2 py-1 rounded border text-xs transition-colors ${
+                        showHistoryPanel
+                          ? 'border-primary-500/60 text-primary-300 bg-primary-500/10'
+                          : 'border-dark-600 text-dark-300 hover:text-dark-100'
+                      }`}
+                    >
+                      <History className="w-3 h-3" />
+                      History
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearTerminalOutput}
+                      className="flex items-center gap-1 px-2 py-1 rounded border text-xs border-dark-600 text-dark-300 hover:text-dark-100 transition-colors"
+                      title="Clear output (Ctrl+L)"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Clear
+                    </button>
+                  </div>
                 </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-dark-400">
+                  <span>Quick:</span>
+                  {QUICK_TERMINAL_COMMANDS.map((cmd) => (
+                    <button
+                      key={cmd}
+                      type="button"
+                      onClick={() => handleQuickCommand(cmd)}
+                      className="px-2 py-1 rounded border border-dark-600 text-dark-300 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      disabled={isTerminalBusy}
+                    >
+                      {cmd}
+                    </button>
+                  ))}
+                </div>
+                {showHistoryPanel && (
+                  <div className="bg-dark-800 border border-dark-700 rounded-md p-3 text-xs space-y-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={historyFilter}
+                        onChange={handleHistoryFilterChange}
+                        placeholder="Filter history..."
+                        className="flex-1 bg-dark-900 border border-dark-600 rounded px-2 py-1 focus:border-primary-500 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleClearTerminalHistory}
+                        className="flex items-center gap-1 px-2 py-1 rounded border border-dark-600 text-dark-300 hover:text-dark-100 transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        Clear history
+                      </button>
+                    </div>
+                    <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
+                      {recentHistoryEntries.length > 0 ? (
+                        recentHistoryEntries.map((command, index) => (
+                          <button
+                            type="button"
+                            key={`${command}-${index}`}
+                            onClick={() => handleHistoryEntrySelect(command)}
+                            className="w-full text-left px-2 py-1 rounded hover:bg-dark-700 text-dark-200 transition-colors truncate"
+                          >
+                            {command}
+                          </button>
+                        ))
+                      ) : (
+                        <div className="text-dark-500">No history yet</div>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <div ref={terminalOutputRef} className="terminal-output-container space-y-1">
                   {terminalOutput.map((line) => (
                     <div
@@ -3541,6 +3599,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                     disabled={isTerminalBusy}
                   />
                 </div>
+                {!isTerminalBusy && isCompletingTerminal && (
+                  <div className="flex items-center text-dark-500 text-xs mt-2">
+                    <Loader2 className="w-3 h-3 mr-2 animate-spin" />
+                    <span>Auto-completing...</span>
+                  </div>
+                )}
               </div>
             )}
             {bottomPanelTab === 'problems' && (

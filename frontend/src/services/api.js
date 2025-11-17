@@ -209,6 +209,14 @@ class ApiService {
       session_id: sessionId,
     });
   }
+
+  static async completeTerminalInput(command, sessionId, cursorPosition = null) {
+    return this.post('/api/terminal/complete', {
+      command,
+      session_id: sessionId,
+      cursor_position: cursorPosition,
+    });
+  }
 }
 
 export { ApiService };

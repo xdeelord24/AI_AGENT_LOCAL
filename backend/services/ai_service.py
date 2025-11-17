@@ -30,6 +30,10 @@ def truncate_text(text: Optional[str], limit: int = 220) -> str:
 class AIService:
     """Service for interacting with local AI models via Ollama"""
     
+    CONFIG_DIR_ENV_VAR = "AI_AGENT_CONFIG_DIR"
+    DEFAULT_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".offline_ai_agent")
+    SETTINGS_FILENAME = "settings.json"
+    
     METADATA_FORMAT_LINES = [
         "Metadata format (always include this JSON block when sharing an ai_plan or file operations):",
         "```json",
@@ -60,9 +64,12 @@ class AIService:
         # Load from environment variables or use defaults
         self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:5000")  # Proxy server
         self.ollama_direct = os.getenv("OLLAMA_DIRECT_URL", "http://localhost:11434")  # Direct connection
-        self.current_model = os.getenv("DEFAULT_MODEL", "codellama")
+        self.default_model = os.getenv("DEFAULT_MODEL", "codellama")
+        self.current_model = self.default_model
         self.conversation_history = {}
         self.available_models = []
+        self._config_dir = os.getenv(self.CONFIG_DIR_ENV_VAR) or self.DEFAULT_CONFIG_DIR
+        self._settings_path = os.path.join(self._config_dir, self.SETTINGS_FILENAME)
         # Default to using proxy if OLLAMA_URL is explicitly set, otherwise try direct first
         use_proxy_env = os.getenv("USE_PROXY", "").lower()
         if use_proxy_env in ("true", "1", "yes"):
@@ -81,6 +88,44 @@ class AIService:
             self.web_search_max_results = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
         except ValueError:
             self.web_search_max_results = 5
+        
+        self._load_persisted_settings()
+    
+    def _load_persisted_settings(self) -> None:
+        """Load saved connectivity settings from disk if they exist."""
+        try:
+            if not os.path.exists(self._settings_path):
+                return
+            with open(self._settings_path, "r", encoding="utf-8") as settings_file:
+                data = json.load(settings_file)
+            self.ollama_url = data.get("ollama_url", self.ollama_url)
+            self.ollama_direct = data.get("ollama_direct_url", self.ollama_direct)
+            if "use_proxy" in data:
+                self.use_proxy = bool(data["use_proxy"])
+            if data.get("default_model"):
+                self.default_model = data["default_model"]
+            if data.get("current_model"):
+                self.current_model = data["current_model"]
+            elif data.get("default_model"):
+                self.current_model = data["default_model"]
+        except Exception as error:
+            print(f"⚠️  Failed to load saved settings: {error}")
+    
+    def save_settings(self) -> None:
+        """Persist the current connectivity settings to disk."""
+        settings_payload = {
+            "ollama_url": self.ollama_url,
+            "ollama_direct_url": self.ollama_direct,
+            "use_proxy": self.use_proxy,
+            "default_model": self.default_model,
+            "current_model": self.current_model,
+        }
+        try:
+            os.makedirs(self._config_dir, exist_ok=True)
+            with open(self._settings_path, "w", encoding="utf-8") as settings_file:
+                json.dump(settings_payload, settings_file, indent=2)
+        except Exception as error:
+            print(f"⚠️  Failed to save settings: {error}")
         
     async def check_ollama_connection(self) -> bool:
         """Check if Ollama is running and accessible"""
@@ -123,6 +168,8 @@ class AIService:
         """Select a specific model"""
         if model_name in self.available_models:
             self.current_model = model_name
+            self.default_model = model_name
+            self.save_settings()
             return True
         return False
     

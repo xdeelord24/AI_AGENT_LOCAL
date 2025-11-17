@@ -3,9 +3,28 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from typing import Dict, Optional
+import logging
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def build_error_response(session_info: Dict[str, str], timeout: int, message: str):
+    return {
+        "session_id": session_info.get("session_id"),
+        "cwd": session_info.get("cwd", "."),
+        "stdout": "",
+        "stdout_lines": [],
+        "stderr": "",
+        "stderr_lines": [],
+        "exit_code": None,
+        "success": False,
+        "timed_out": False,
+        "timeout_seconds": timeout,
+        "message": message,
+        "was_cd": False,
+    }
 
 
 class TerminalSessionPayload(BaseModel):
@@ -17,6 +36,12 @@ class TerminalCommandPayload(BaseModel):
     session_id: Optional[str] = None
     timeout: int = Field(default=120, ge=5, le=600)
     env: Optional[Dict[str, str]] = None
+
+
+class TerminalCompletionPayload(BaseModel):
+    command: str = ""
+    session_id: Optional[str] = None
+    cursor_position: Optional[int] = Field(default=None, ge=0)
 
 
 async def get_terminal_service(request: Request):
@@ -61,19 +86,48 @@ async def run_terminal_command(
             env=payload.env,
         )
     except TimeoutError as exc:
+        logger.warning("Terminal command timed out: %s", payload.command)
         raise HTTPException(
             status_code=status.HTTP_408_REQUEST_TIMEOUT,
             detail=str(exc),
         ) from exc
     except RuntimeError as exc:
+        logger.warning("Terminal runtime error: %s", exc)
+        session_info = await terminal_service.get_session_info(payload.session_id)
+        return build_error_response(
+            session_info,
+            payload.timeout,
+            str(exc) or "Terminal runtime error",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Terminal command crashed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Terminal error: {exc}",
+        ) from exc
+
+
+@router.post("/complete")
+async def complete_terminal_input(
+    payload: TerminalCompletionPayload,
+    terminal_service=Depends(get_terminal_service),
+):
+    """Return completion suggestions for the current command buffer."""
+    try:
+        return await terminal_service.complete_command(
+            payload.session_id,
+            payload.command,
+            payload.cursor_position,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Terminal error: {exc}",
+            detail=f"Terminal completion error: {exc}",
         ) from exc
 
 

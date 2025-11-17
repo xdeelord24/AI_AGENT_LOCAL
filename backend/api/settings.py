@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
-import os
 
 router = APIRouter()
 
@@ -34,7 +33,7 @@ async def get_settings(ai_service = Depends(get_ai_service)):
             "ollama_url": ai_service.ollama_url,
             "ollama_direct_url": ai_service.ollama_direct,
             "use_proxy": ai_service.use_proxy,
-            "default_model": os.getenv("DEFAULT_MODEL", "codellama"),
+            "default_model": getattr(ai_service, "default_model", ai_service.current_model),
             "current_model": ai_service.current_model
         }
     except Exception as e:
@@ -76,8 +75,13 @@ async def update_settings(
         
         # Update default model if provided
         if settings.default_model is not None:
+            ai_service.default_model = settings.default_model
             ai_service.current_model = settings.default_model
             print(f"✅ Updated default model to: {settings.default_model}")
+        
+        # Persist updates before attempting connection tests so that user preferences
+        # survive restarts even if validation fails.
+        ai_service.save_settings()
         
         # Test connection after update
         is_connected = await ai_service.check_ollama_connection()
@@ -88,7 +92,7 @@ async def update_settings(
             "ollama_url": ai_service.ollama_url,
             "ollama_direct_url": ai_service.ollama_direct,
             "use_proxy": ai_service.use_proxy,
-            "default_model": os.getenv("DEFAULT_MODEL", "codellama"),
+            "default_model": getattr(ai_service, "default_model", ai_service.current_model),
             "current_model": ai_service.current_model
         }
     except HTTPException:
