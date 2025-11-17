@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { ApiService } from '../services/api';
 import { formatMessageContent, initializeCopyCodeListeners } from '../utils/messageFormatter';
+import { detectNewScriptIntent } from '../utils/intentDetection';
 import toast from 'react-hot-toast';
 
 const MAX_FILE_SNIPPET = 5000;
@@ -370,6 +371,7 @@ useEffect(() => {
       const shouldShowAgentStatuses = composerModeEnabled;
       const mentionPaths = extractMentionPaths(normalizedMessage);
       const mentionFiles = mentionPaths.length > 0 ? await loadMentionedFiles(mentionPaths) : [];
+      const isNewScriptRequest = detectNewScriptIntent(trimmedMessage);
 
       const context = {
         current_page: 'chat',
@@ -397,6 +399,18 @@ useEffect(() => {
           language: file.path.split('.').pop() || 'plaintext',
           is_active: index === 0
         }));
+      }
+
+      if (isNewScriptRequest) {
+        context.intent = 'new_script';
+        context.requested_new_script = true;
+        context.disable_active_file_context = true;
+        if (!mentionFiles.length) {
+          delete context.active_file;
+          delete context.active_file_content;
+          delete context.default_target_file;
+          context.open_files = [];
+        }
       }
 
       if (shouldShowAgentStatuses) {
