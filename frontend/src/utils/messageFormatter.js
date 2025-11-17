@@ -35,60 +35,69 @@ const ensureRenderer = () => {
 
   const renderer = new marked.Renderer();
 
-  renderer.code = (code, infoString = '') => {
-    const language = (infoString || '').split(/\s+/)[0];
-    const lang = normalizeLanguage(language || 'text');
-    const rawCode = (code || '').trimEnd();
+  renderer.code = ({ text = '', lang = '' } = {}) => {
+    const language = (lang || '').split(/\s+/)[0];
+    const normalizedLang = normalizeLanguage(language || 'text');
+    const rawCode = text.trimEnd();
     const escapedCode = escapeHtml(rawCode);
     const safeRawCode = rawCode.replace(/<\/textarea/gi, '<\\/textarea');
 
-    return `<div class="code-block language-${lang}" data-language="${lang}">
+    return `<div class="code-block language-${normalizedLang}" data-language="${normalizedLang}">
       <div class="code-header">
-        <span class="code-language">${lang}</span>
+        <span class="code-language">${normalizedLang}</span>
         <button class="copy-code-btn" type="button" title="Copy code" aria-label="Copy code">
           <span class="copy-icon" aria-hidden="true">📋</span>
           <span class="copy-text">Copy</span>
         </button>
       </div>
-      <pre><code class="language-${lang}">${escapedCode}</code></pre>
+      <pre><code class="language-${normalizedLang}">${escapedCode}</code></pre>
       <textarea class="code-raw" hidden>${safeRawCode}</textarea>
     </div>`;
   };
 
-  renderer.list = (body, ordered, start) => {
+  renderer.list = function ({ ordered, start, items } = {}) {
     const tag = ordered ? 'ol' : 'ul';
     const classes = ordered
       ? 'markdown-list markdown-list-ordered'
       : 'markdown-list markdown-list-unordered';
-    const startAttr = ordered && typeof start === 'number' && start !== 1 ? ` start="${start}"` : '';
+    const startAttr =
+      ordered && typeof start === 'number' && start !== 1 ? ` start="${start}"` : '';
+    const body = Array.isArray(items)
+      ? items.map((item) => this.listitem(item)).join('')
+      : '';
     return `<${tag} class="${classes}"${startAttr}>${body}</${tag}>`;
   };
 
-  renderer.listitem = (text, task, checked) => {
-    if (task) {
-      return `<li class="task-item markdown-list-item" data-checked="${checked ? 'x' : ' '}">${text}</li>`;
+  renderer.listitem = function (token = {}) {
+    const inner = this.parser.parse(token.tokens || []);
+    if (token.task) {
+      return `<li class="task-item markdown-list-item" data-checked="${
+        token.checked ? 'x' : ' '
+      }">${inner}</li>`;
     }
-    return `<li class="markdown-list-item">${text}</li>`;
+    return `<li class="markdown-list-item">${inner}</li>`;
   };
 
-  renderer.link = (href, title, text) => {
+  renderer.link = function ({ href, title, tokens } = {}) {
     const safeHref = href || '#';
     const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+    const text = this.parser.parseInline(tokens || []);
     return `<a href="${safeHref}"${titleAttr} target="_blank" rel="noopener noreferrer" class="markdown-link">${text}</a>`;
   };
 
-  renderer.image = (href, title, text) => {
+  renderer.image = ({ href, title, text } = {}) => {
     const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
     return `<img src="${href}" alt="${escapeHtml(text || '')}"${titleAttr} class="markdown-image" loading="lazy">`;
   };
 
-  renderer.table = (header, body) => {
-    const tableHeader = header ? `<thead>${header}</thead>` : '';
-    const tableBody = body ? `<tbody>${body}</tbody>` : '<tbody></tbody>';
-    return `<table class="markdown-table">${tableHeader}${tableBody}</table>`;
+  const baseTable = renderer.table.bind(renderer);
+  renderer.table = function (token) {
+    const html = baseTable(token);
+    return html.replace('<table>', '<table class="markdown-table">');
   };
 
-  renderer.text = (text) => formatInlineMarkdown(escapeHtml(text || ''));
+  renderer.text = (token = {}) =>
+    formatInlineMarkdown(escapeHtml(token.text ?? ''));
 
   marked.setOptions({
     renderer,
@@ -167,7 +176,14 @@ export const formatMessageContent = (content) => {
   let formattedContent = '';
 
   try {
-    formattedContent = marked.parse(normalized, { renderer });
+    // Support both marked v4 (function) and v5+ (marked.parse)
+    if (typeof marked.parse === 'function') {
+      formattedContent = marked.parse(normalized, { renderer });
+    } else if (typeof marked === 'function') {
+      formattedContent = marked(normalized, { renderer });
+    } else {
+      formattedContent = '';
+    }
   } catch (error) {
     // eslint-disable-next-line no-console
     console.log('formatMessageContent: marked.parse threw, falling back to plain text HTML', {
@@ -198,7 +214,7 @@ export const formatMessageContent = (content) => {
 };
 
 export const formatInlineMarkdown = (text) => {
-  let formatted = text;
+  let formatted = typeof text === 'string' ? text : String(text ?? '');
   
   // Handle mathematical formulas and scientific notation first
   // Process LaTeX delimiters - handle various escaping scenarios
@@ -232,12 +248,12 @@ export const formatInlineMarkdown = (text) => {
   });
   
   // Handle HTML-escaped backslashes
-  formatted = formatted.replace(/&#92;\(([^)]+)\&#92;\)/g, (match, content) => {
+  formatted = formatted.replace(/&#92;\(([^)]+)&#92;\)/g, (match, content) => {
     const processedContent = processMathContent(content);
     return `<span class="math-formula inline">${processedContent}</span>`;
   });
   
-  formatted = formatted.replace(/&#92;\[([^\]]+)\&#92;\]/g, (match, content) => {
+  formatted = formatted.replace(/&#92;\[([^\]]+)&#92;\]/g, (match, content) => {
     const processedContent = processMathContent(content);
     return `<div class="math-formula display">${processedContent}</div>`;
   });
@@ -353,8 +369,6 @@ export const processMathContent = (content) => {
     '\\rightarrow': '→', '\\leftarrow': '←', '\\leftrightarrow': '↔',
     '\\Rightarrow': '⇒', '\\Leftarrow': '⇐', '\\Leftrightarrow': '⇔',
     '\\forall': '∀', '\\exists': '∃', '\\neg': '¬', '\\land': '∧', '\\lor': '∨',
-    '\\rightarrow': '→', '\\leftarrow': '←', '\\leftrightarrow': '↔',
-    '\\Rightarrow': '⇒', '\\Leftarrow': '⇐', '\\Leftrightarrow': '⇔',
     '\\cdot': '·', '\\bullet': '•', '\\circ': '∘', '\\star': '⋆',
     '\\oplus': '⊕', '\\ominus': '⊖', '\\otimes': '⊗', '\\odot': '⊙'
   };
@@ -504,9 +518,20 @@ export const normalizeLanguage = (lang) => {
 };
 
 export const escapeHtml = (text) => {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  const safeText = text == null ? '' : String(text);
+
+  if (typeof document !== 'undefined' && document?.createElement) {
+    const div = document.createElement('div');
+    div.textContent = safeText;
+    return div.innerHTML;
+  }
+
+  return safeText
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 };
 
 // Copy to clipboard functionality
