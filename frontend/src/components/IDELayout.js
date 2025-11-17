@@ -844,6 +844,54 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setTerminalOutput(prev => [...prev, { id: createUniqueLineId(), text, type }]);
   }, []);
 
+  const processTerminalResponse = useCallback((response, options = {}) => {
+    if (!response) {
+      return response;
+    }
+    const { showExitCode = true } = options;
+
+    if (response.session_id && response.session_id !== terminalSessionId) {
+      setTerminalSessionId(response.session_id);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('terminalSessionId', response.session_id);
+      }
+    }
+
+    if (response.cwd) {
+      setTerminalCwd(response.cwd);
+    }
+
+    if (Array.isArray(response.stdout_lines) && response.stdout_lines.length > 0) {
+      response.stdout_lines.forEach(line => appendTerminalLine(line, 'stdout'));
+    } else if (response.stdout) {
+      appendTerminalLine(response.stdout, 'stdout');
+    }
+
+    if (Array.isArray(response.stderr_lines) && response.stderr_lines.length > 0) {
+      response.stderr_lines.forEach(line => appendTerminalLine(line, 'stderr'));
+    } else if (response.stderr) {
+      appendTerminalLine(response.stderr, 'stderr');
+    }
+
+    if (response.message) {
+      appendTerminalLine(response.message, response.success ? 'info' : 'error');
+    }
+
+    if (response.timed_out) {
+      appendTerminalLine(
+        `Command exceeded the ${response.timeout_seconds || 120}s limit. Continuous tasks (e.g., "ping -t") are not yet supported; try using a bounded option such as "-n 5".`,
+        'error'
+      );
+    }
+
+    if (typeof response.exit_code === 'number' && showExitCode && !response.was_cd) {
+      const type = response.exit_code === 0 ? 'info' : 'error';
+      appendTerminalLine(`Process exited with code ${response.exit_code}`, type);
+    }
+
+    return response;
+  }, [appendTerminalLine, setTerminalCwd, setTerminalSessionId, terminalSessionId]);
+
   const ensureTerminalVisible = useCallback(() => {
     setBottomPanelVisible(true);
     setBottomPanelTab('terminal');
@@ -872,40 +920,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setIsTerminalBusy(true);
     try {
       const response = await ApiService.runTerminalCommand(trimmed, terminalSessionId);
-      if (response?.session_id && response.session_id !== terminalSessionId) {
-        setTerminalSessionId(response.session_id);
-      }
-      if (response?.cwd) {
-        setTerminalCwd(response.cwd);
-      }
-
-      if (Array.isArray(response?.stdout_lines) && response.stdout_lines.length > 0) {
-        response.stdout_lines.forEach(line => appendTerminalLine(line, 'stdout'));
-      } else if (response?.stdout) {
-        appendTerminalLine(response.stdout, 'stdout');
-      }
-
-      if (Array.isArray(response?.stderr_lines) && response.stderr_lines.length > 0) {
-        response.stderr_lines.forEach(line => appendTerminalLine(line, 'stderr'));
-      } else if (response?.stderr) {
-        appendTerminalLine(response.stderr, 'stderr');
-      }
-
-      if (response?.message) {
-        appendTerminalLine(response.message, response.success ? 'info' : 'error');
-      }
-
-      if (response?.timed_out) {
-        appendTerminalLine(
-          `Command exceeded the ${response.timeout_seconds || 120}s limit. Continuous tasks (e.g., "ping -t") are not yet supported; try using a bounded option such as "-n 5".`,
-          'error'
-        );
-      }
-
-      if (typeof response?.exit_code === 'number' && !response.was_cd) {
-        const type = response.exit_code === 0 ? 'info' : 'error';
-        appendTerminalLine(`Process exited with code ${response.exit_code}`, type);
-      }
+      processTerminalResponse(response);
     } catch (error) {
       console.error('Error executing terminal command:', error);
       appendTerminalLine(error.response?.data?.detail || error.message, 'error');
