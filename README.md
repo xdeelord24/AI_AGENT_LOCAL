@@ -29,6 +29,7 @@ A fully offline AI coding assistant that provides intelligent code completion, a
 ## Quick Start
 
 ### Automated Setup
+
 ```bash
 python setup.py
 
@@ -78,9 +79,45 @@ python start_backend.py
 
    Open `http://localhost:3000` in your browser.
 
+### Configuration
+
+- **Copy the example environment file**:
+
+  ```bash
+  cp env.example .env
+  ```
+
+- **Key settings** (see `INSTALL.md` for more):
+  - `API_HOST` / `API_PORT`: where the FastAPI backend listens (defaults to `0.0.0.0:8000`).
+  - `OLLAMA_URL`: Ollama server URL (for example `http://localhost:11434`).
+  - `DEFAULT_MODEL`: default AI model name (for example `codellama`).
+  - `MAX_FILE_SIZE`: maximum file size the agent will read/edit.
+  - `LOG_LEVEL`, `DEBUG`, `RELOAD`, and basic model settings like `MAX_TOKENS`, `TEMPERATURE`, `TOP_P`.
+
+### Start Scripts Overview
+
+- **`start.py`**: Convenience script that:
+  - Checks you are in the project root.
+  - Verifies Ollama is reachable.
+  - Starts the FastAPI backend (`main.py`) and React frontend (`frontend` via `npm start`), installing `node_modules` if needed.
+  - Opens `http://localhost:3000` in your browser.
+- **`start_with_proxy.py`**: Same as `start.py` but also:
+  - Launches the Flask-based Ollama CORS proxy (`ollama_proxy.py`) on `http://localhost:5000`.
+  - Is useful if your browser cannot connect directly to Ollama due to CORS/network limitations.
+- **`start_manual.py`**: Starts only the backend and prints step-by-step instructions for running the frontend manually.
+- **`start_backend.py`**: Minimal helper to run the backend only (handy for API testing or when integrating with another UI).
+
+### Handling Ollama CORS
+
+- **Option 1 – Use the proxy**:
+  - Run: `python start_with_proxy.py` to start the proxy, backend, and frontend together.
+  - The backend will talk to Ollama through the proxy (`ollama_proxy.py`) to avoid browser CORS issues.
+- **Option 2 – Enable CORS directly in Ollama (Windows)**:
+  - Run `fix_ollama_cors.bat`, which sets `OLLAMA_ORIGINS=*` and starts `ollama serve` so the frontend can call Ollama directly.
+
 ### Detailed Installation
 
-See `INSTALL.md` for comprehensive installation instructions.
+See `INSTALL.md` for comprehensive installation instructions, including platform-specific steps, troubleshooting, and advanced deployment.
 
 ## AI Response Format & Markdown Styling
 
