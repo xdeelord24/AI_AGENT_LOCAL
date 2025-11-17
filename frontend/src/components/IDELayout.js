@@ -45,6 +45,7 @@ const MAX_TERMINAL_HISTORY = 500;
 const TERMINAL_HISTORY_STORAGE_KEY = 'terminalHistory';
 const COMPLETION_LIST_COLUMNS = 4;
 const QUICK_TERMINAL_COMMANDS = ['ls', 'dir', 'pwd'];
+const MAX_FILE_SUGGESTIONS = 10;
 
 // Simple line-based diff to power inline change previews for file operations
 const computeLineDiff = (beforeContent = '', afterContent = '', options = {}) => {
@@ -591,6 +592,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const recentHistoryEntries = useMemo(() => {
     return filteredHistory.slice(-50).reverse();
   }, [filteredHistory]);
+
+  const flattenedFileNodes = useMemo(() => {
+    if (!Array.isArray(fileTree) || fileTree.length === 0) {
+      return [];
+    }
+    return flattenTreeNodes(fileTree).filter((node) => !node.is_directory);
+  }, [fileTree]);
 
   const loadProjectTree = useCallback(async (path = '.', options = {}) => {
     const { setAsRoot = true, showToastMessage = false, maxDepth = 8 } = options;
@@ -1822,47 +1830,53 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }));
   };
 
-  // Get file suggestions based on open files and file tree
-  const getFileSuggestions = (query = '') => {
+  // Get file suggestions based on open files and cached file tree nodes
+  const getFileSuggestions = useCallback((query = '') => {
     const suggestions = [];
-    const normalizedQuery = query.toLowerCase();
-    
-    // Add open files
-    openFiles.forEach(file => {
-      if (!query || file.name.toLowerCase().includes(query.toLowerCase()) || 
-          file.path.toLowerCase().includes(query.toLowerCase())) {
-        suggestions.push({
-          path: file.path,
-          name: file.name,
-          type: 'open',
-          isOpen: true,
-          displayPath: formatDisplayPath(file.path)
-        });
-      }
-    });
+    const seenPaths = new Set();
+    const normalizedQuery = (query || '').toLowerCase();
 
-    // Add files from file tree
-    flattenTreeNodes(fileTree).forEach(item => {
-      if (item.is_directory) return;
-      if (
-        !query ||
-        item.name.toLowerCase().includes(normalizedQuery) ||
-        item.path.toLowerCase().includes(normalizedQuery)
-      ) {
-        if (!suggestions.find(s => s.path === item.path)) {
-          suggestions.push({
-            path: item.path,
-            name: item.name,
-            type: 'file',
-            isOpen: false,
-            displayPath: formatDisplayPath(item.path)
-          });
-        }
-      }
-    });
+    const matchesQuery = (name = '', path = '') => {
+      if (!normalizedQuery) return true;
+      const lowerName = name.toLowerCase();
+      const lowerPath = path.toLowerCase();
+      return lowerName.includes(normalizedQuery) || lowerPath.includes(normalizedQuery);
+    };
 
-    return suggestions.slice(0, 10); // Limit to 10 suggestions
-  };
+    const addSuggestion = (item, meta) => {
+      if (!item?.path || seenPaths.has(item.path)) {
+        return;
+      }
+      seenPaths.add(item.path);
+      suggestions.push({
+        path: item.path,
+        name: item.name,
+        type: meta.type,
+        isOpen: meta.isOpen,
+        displayPath: formatDisplayPath(item.path)
+      });
+    };
+
+    for (const file of openFiles) {
+      if (!matchesQuery(file.name, file.path)) continue;
+      addSuggestion(file, { type: 'open', isOpen: true });
+      if (suggestions.length >= MAX_FILE_SUGGESTIONS) {
+        return suggestions.slice(0, MAX_FILE_SUGGESTIONS);
+      }
+    }
+
+    for (const node of flattenedFileNodes) {
+      if (suggestions.length >= MAX_FILE_SUGGESTIONS) {
+        break;
+      }
+      if (!matchesQuery(node.name, node.path)) {
+        continue;
+      }
+      addSuggestion(node, { type: 'file', isOpen: false });
+    }
+
+    return suggestions;
+  }, [openFiles, flattenedFileNodes, formatDisplayPath]);
 
   const planStatusStyles = {
     completed: 'border-green-700 bg-green-500/10 text-green-300',
