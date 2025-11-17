@@ -11,6 +11,20 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 import os
 
+try:
+    from duckduckgo_search import DDGS
+except ImportError:
+    DDGS = None
+
+
+def truncate_text(text: Optional[str], limit: int = 220) -> str:
+    if not text:
+        return ''
+    stripped = text.strip()
+    if len(stripped) <= limit:
+        return stripped
+    return stripped[: limit - 3].rstrip() + '...'
+
 
 class AIService:
     """Service for interacting with local AI models via Ollama"""
@@ -36,6 +50,10 @@ class AIService:
             self.request_timeout = int(os.getenv("OLLAMA_REQUEST_TIMEOUT", "120"))
         except ValueError:
             self.request_timeout = 120
+        try:
+            self.web_search_max_results = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
+        except ValueError:
+            self.web_search_max_results = 5
         
     async def check_ollama_connection(self) -> bool:
         """Check if Ollama is running and accessible"""
@@ -121,13 +139,15 @@ class AIService:
 
         message_excerpt = (message or "").strip().splitlines()[0][:80]
         if message_excerpt:
-            add_status("analysis", f"Analyzing request: {message_excerpt}…", 900)
+            add_status("thinking", f"Thinking about: {message_excerpt}…", 700)
         else:
-            add_status("analysis", "Analyzing request…", 900)
+            add_status("thinking", "Thinking about the request…", 700)
+
+        add_status("analysis", "Analyzing context and recent history", 700)
 
         active_file = self._normalize_path(context.get("active_file"))
         if active_file:
-            add_status(f"active:{active_file}", f"Reading {active_file}", 800)
+            add_status(f"grep-active:{active_file}", f"Grepping {active_file} for relevant code", 750)
 
         mentioned_files = context.get("mentioned_files") or []
         added_paths = set()
@@ -138,8 +158,11 @@ class AIService:
             path = mention.get("path") if isinstance(mention, dict) else mention
             normalized = self._normalize_path(path)
             if normalized and normalized not in added_paths:
-                add_status(f"mention:{normalized}", f"Scanning {normalized}", 650)
+                add_status(f"grep:{normalized}", f"Grepping {normalized} for matches", 600)
                 added_paths.add(normalized)
+
+        if not mentioned_files and not active_file:
+            add_status("grep_workspace", "Grepping workspace for references", 650)
 
         add_status("context", "Reviewing project context and open files", 700)
 
@@ -178,12 +201,36 @@ class AIService:
         import re
 
         def extract_from_json(json_str: str) -> bool:
+            """
+            Try to extract metadata from a JSON string.
+            Supports both the canonical shape:
+              {"file_operations": [...], "ai_plan": {...}}
+            and convenience shapes like:
+              {"type": "create_file", "path": "...", "content": "..."}
+              [{"type": "...", "path": "...", "content": "..."}]
+            """
             try:
                 data = json.loads(json_str)
             except json.JSONDecodeError:
-                return False
+                # Fallback: be more lenient and try to parse as a Python literal.
+                # This allows the model to use triple-quoted strings, trailing commas, etc.
+                try:
+                    import ast
+                    data = ast.literal_eval(json_str)
+                except Exception:
+                    return False
 
             found = False
+
+            # Helper: detect a single file-operation dict
+            def is_file_op(obj: Any) -> bool:
+                if not isinstance(obj, dict):
+                    return False
+                op_type = (obj.get("type") or "").lower()
+                path = obj.get("path")
+                return bool(op_type and path)
+
+            # Canonical metadata shape
             if isinstance(data, dict):
                 file_ops = data.get("file_operations")
                 ai_plan = data.get("ai_plan")
@@ -195,28 +242,79 @@ class AIService:
                 if isinstance(ai_plan, dict):
                     metadata["ai_plan"] = ai_plan
                     found = True
+
+                # Convenience: single file operation object at top level
+                if not found and is_file_op(data):
+                    metadata["file_operations"].append(data)
+                    found = True
+
+            # Convenience: top-level list of file-operations
+            if isinstance(data, list):
+                ops = [op for op in data if is_file_op(op)]
+                if ops:
+                    metadata["file_operations"].extend(ops)
+                    found = True
+
             return found
 
-        # Markdown ```json blocks
-        json_block_pattern = r'```json\s*({[^`]+})\s*```'
+        # First, try to interpret the entire response as JSON.
+        # This covers the common case where the model returns *only* a metadata
+        # object (with ai_plan / file_operations) and no surrounding prose.
+        whole = response.strip()
+        if whole:
+            if extract_from_json(whole):
+                # The whole response was metadata; no user-visible text remains.
+                return "", metadata
+
+        # Markdown ```json blocks (be flexible about the fence language and contents)
+        # We capture the smallest possible fenced block so we don't accidentally
+        # consume surrounding narrative text.
+        json_block_pattern = r'```(?:json|JSON)?\s*([\s\S]*?)```'
         for match in re.finditer(json_block_pattern, response, re.DOTALL):
             block = match.group(0)
-            json_str = match.group(1)
+            json_str = match.group(1).strip()
             if extract_from_json(json_str):
                 cleaned_response = cleaned_response.replace(block, "").strip()
 
-        # Inline fallback for older responses
+        # Inline fallback for responses that embed JSON without fences.
+        # These patterns intentionally allow nested braces by using a
+        # non-greedy "match anything" approach.
         inline_patterns = [
-            r'\{[^{}]*"file_operations"[^{}]*\[[^\]]+\][^{}]*\}',
-            r'\{[^{}]*"ai_plan"[^{}]*\}'
+            # Canonical metadata object
+            r'\{[\s\S]*?"file_operations"[\s\S]*?\}',
+            r'\{[\s\S]*?"ai_plan"[\s\S]*?\}',
+            # Convenience: any JSON object that looks like a file operation
+            r'\{[\s\S]*?"type"\s*:\s*"[a-zA-Z_]+?"[\s\S]*?"path"\s*:\s*"[^\"]+"[\s\S]*?\}',
         ]
         for pattern in inline_patterns:
             for match in re.finditer(pattern, cleaned_response, re.DOTALL):
-                json_candidate = match.group(0)
+                json_candidate = match.group(0).strip()
                 if extract_from_json(json_candidate):
                     cleaned_response = cleaned_response.replace(json_candidate, "").strip()
 
         return cleaned_response, metadata
+
+    async def perform_web_search(self, query: str, max_results: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Fetch search results from DuckDuckGo when browsing is enabled."""
+        if not query or DDGS is None:
+            return []
+
+        loop = asyncio.get_event_loop()
+        target_results = max_results or self.web_search_max_results
+
+        def run_search():
+            collected: List[Dict[str, Any]] = []
+            with DDGS() as ddgs:
+                for result in ddgs.text(query, max_results=target_results):
+                    collected.append({
+                        "title": result.get("title") or "",
+                        "url": result.get("href") or result.get("url") or "",
+                        "snippet": result.get("body") or result.get("description") or "",
+                        "source": result.get("source") or result.get("hostname") or ""
+                    })
+            return collected
+
+        return await loop.run_in_executor(None, run_search)
 
     async def process_message(
         self, 
@@ -231,9 +329,22 @@ class AIService:
         
         # Create conversation ID if not provided
         conversation_id = str(uuid.uuid4())
+
+        # Clone and enrich context
+        context = dict(context or {})
+        web_search_mode = (context.get("web_search_mode") or "off").lower()
+        context["web_search_mode"] = web_search_mode
+
+        if web_search_mode in ("browser_tab", "google_chrome"):
+            try:
+                search_results = await self.perform_web_search(message)
+                if search_results:
+                    context["web_search_results"] = search_results
+            except Exception as error:
+                context["web_search_error"] = f"{type(error).__name__}: {error}"
         
         # Prepare the prompt with context
-        prompt = self._build_prompt(message, context or {}, conversation_history or [])
+        prompt = self._build_prompt(message, context, conversation_history or [])
         
         # Get response from Ollama
         response = await self._call_ollama(prompt)
@@ -297,6 +408,8 @@ class AIService:
                 "- Create a concise TODO list (max 5 items) describing how you will fulfill the request.",
                 "- Each task must include an id, title, and status (`pending`, `in_progress`, or `completed`).",
                 "- Include this plan in the `ai_plan` metadata described below even if no file changes are required.",
+                "- When the user references a specific file or when composer_mode is true, you MUST produce concrete file edits, not just a plan.",
+                "- Plans are only helpful if they are followed by actual file_operations that apply the requested changes.",
                 ""
             ])
         else:
@@ -328,8 +441,42 @@ class AIService:
             "```",
             "",
             "Always provide practical, working code examples. Be concise but thorough.",
+            "",
+            "ABSOLUTE RULES:",
+            "- If the user mentions files via @filename or provides a path, open those files (content is in context) and edit them via file_operations.",
+            "- On follow-up requests like \"change it\" or \"update that code\", assume the target file is the current active_file or default_target_file from context and still produce concrete file_operations.",
+            "- Do not stop after describing a plan; always include the updated file content in file_operations so the IDE can apply the change.",
+            "- Keep natural-language responses short; rely on file_operations to convey the actual modifications.",
+            "- When web_search_mode is not 'off', do NOT reply with generic suggestions to visit websites; instead, read the provided web_search_results and answer the user's question as concretely as possible using those results.",
+            '- When web_search_mode is not \"off\", statements like \"I cannot browse the internet\" or \"I cannot access external information\" are FALSE. You DO have access to web_search_results; never claim that you lack browsing or external access.',
             ""
         ])
+
+        web_search_mode = (context.get("web_search_mode") or "off").lower()
+        if web_search_mode in ("browser_tab", "google_chrome"):
+            prompt_parts.extend([
+                f"WEB SEARCH ACCESS ENABLED (mode: {web_search_mode}):",
+                "- Live DuckDuckGo search results are provided; use them for up-to-date facts.",
+                "- Cite the source (site or URL) when referencing a result.",
+                "- If more information is required, explicitly state the next search query needed.",
+                "- For questions about the current or latest price/value of an asset (e.g. BTC, a stock, or a currency), extract the best available numeric price from the web_search_results and respond with that value, including the currency and a brief note that prices change quickly. Do not merely tell the user to check a website.",
+                "- You MUST NOT tell the user to \"search online\" or \"check a website\" when web_search_results are present; instead, summarize those results directly in your own words."
+            ])
+
+            results = context.get("web_search_results") or []
+            if results:
+                prompt_parts.append("Newest web results:")
+                for idx, result in enumerate(results[:5], start=1):
+                    title = truncate_text(result.get("title") or "Untitled result", 140)
+                    snippet = truncate_text(result.get("snippet") or "", 220)
+                    url = truncate_text(result.get("url") or result.get("source") or "", 180)
+                    prompt_parts.append(f"{idx}. {title} — {snippet} (source: {url})")
+            elif context.get("web_search_error"):
+                prompt_parts.append(f"Web search error: {truncate_text(context['web_search_error'], 160)}")
+            else:
+                prompt_parts.append("No web search results were available for this prompt.")
+
+            prompt_parts.append("")
         
         # Add context if available
         if context:

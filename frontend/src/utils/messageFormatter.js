@@ -1,106 +1,193 @@
+import { marked } from 'marked';
+
 /**
  * Comprehensive message formatting utility
  * Based on the reference Ollama chat implementation
  */
 
-export const formatMessageContent = (content) => {
-  let formattedContent = content;
-  
-  // First, handle code blocks (before other processing)
-  formattedContent = formattedContent.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, language, code) => {
+const CALLOUT_ICONS = '💡🔍⚠️✅❌📝🎯';
+let rendererInstance = null;
+
+const safeStringifyValue = (value, spacing = 2) => {
+  const seen = new WeakSet();
+  const serializer = (key, val) => {
+    if (typeof val === 'bigint') {
+      return val.toString();
+    }
+    if (typeof val === 'object' && val !== null) {
+      if (seen.has(val)) {
+        return '[Circular]';
+      }
+      seen.add(val);
+    }
+    if (typeof val === 'function') {
+      return `[Function ${val.name || 'anonymous'}]`;
+    }
+    return val;
+  };
+  return JSON.stringify(value, serializer, spacing);
+};
+
+const ensureRenderer = () => {
+  if (rendererInstance) {
+    return rendererInstance;
+  }
+
+  const renderer = new marked.Renderer();
+
+  renderer.code = (code, infoString = '') => {
+    const language = (infoString || '').split(/\s+/)[0];
     const lang = normalizeLanguage(language || 'text');
-    const escapedCode = escapeHtml(code.trim());
+    const escapedCode = escapeHtml((code || '').trimEnd());
+
     return `<div class="code-block language-${lang}" data-language="${lang}">
       <div class="code-header">
         <span class="code-language">${lang}</span>
         <button class="copy-code-btn" type="button" title="Copy code" aria-label="Copy code">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-          </svg>
+          <span class="copy-icon" aria-hidden="true">📋</span>
+          <span class="copy-text">Copy</span>
         </button>
       </div>
       <pre><code class="language-${lang}">${escapedCode}</code></pre>
     </div>`;
-  });
-  
-  // Handle tables
-  formattedContent = formattedContent.replace(/\|(.+)\|\n\|([\s\-\|]+\|)\n((?:\|.+\|\n?)*)/g, (match, header, separator, rows) => {
-    const headerCells = header.split('|').map(cell => cell.trim()).filter(cell => cell);
-    const rowLines = rows.trim().split('\n').filter(line => line.trim());
-    
-    let tableHtml = '<table class="markdown-table">';
-    
-    // Header
-    tableHtml += '<thead><tr>';
-    headerCells.forEach(cell => {
-      tableHtml += `<th>${escapeHtml(cell)}</th>`;
-    });
-    tableHtml += '</tr></thead>';
-    
-    // Body
-    tableHtml += '<tbody>';
-    rowLines.forEach(row => {
-      const cells = row.split('|').map(cell => cell.trim()).filter(cell => cell);
-      tableHtml += '<tr>';
-      cells.forEach(cell => {
-        tableHtml += `<td>${formatInlineMarkdown(cell)}</td>`;
-      });
-      tableHtml += '</tr>';
-    });
-    tableHtml += '</tbody></table>';
-    
-    return tableHtml;
-  });
-  
-  // Handle headers
-  formattedContent = formattedContent.replace(/^#{6}\s+(.+)$/gm, '<h6>$1</h6>');
-  formattedContent = formattedContent.replace(/^#{5}\s+(.+)$/gm, '<h5>$1</h5>');
-  formattedContent = formattedContent.replace(/^#{4}\s+(.+)$/gm, '<h4>$1</h4>');
-  formattedContent = formattedContent.replace(/^#{3}\s+(.+)$/gm, '<h3>$1</h3>');
-  formattedContent = formattedContent.replace(/^#{2}\s+(.+)$/gm, '<h2>$1</h2>');
-  formattedContent = formattedContent.replace(/^#{1}\s+(.+)$/gm, '<h1>$1</h1>');
-  
-  // Handle horizontal rules
-  formattedContent = formattedContent.replace(/^---$/gm, '<hr>');
-  
-  // Handle blockquotes
-  formattedContent = formattedContent.replace(/^>\s*(.+)$/gm, '<blockquote>$1</blockquote>');
-  
-  // Handle callouts (enhanced blockquotes with emojis)
-  formattedContent = formattedContent.replace(/^>\s*([💡🔍⚠️✅❌📝🎯💡])\s*\*\*([^*]+)\*\*:\s*(.+)$/gm, '<div class="callout callout-$1"><div class="callout-header"><span class="callout-icon">$1</span><strong>$2</strong></div><div class="callout-content">$3</div></div>');
-  
-  // Handle bold, italic, and strikethrough text
-  formattedContent = formattedContent.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  formattedContent = formattedContent.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-  formattedContent = formattedContent.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-  
-  // Handle links and images
-  formattedContent = formattedContent.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="markdown-link">$1</a>');
-  formattedContent = formattedContent.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="markdown-image" loading="lazy">');
-  
-  // Handle inline code (after other processing to avoid conflicts)
-  formattedContent = formattedContent.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
-  
-  // Handle task lists (checkboxes) - must be before regular bullet lists
-  formattedContent = formattedContent.replace(/^-\s+\[([ x])\]\s+(.+)$/gm, '<li class="task-item" data-checked="$1">$2</li>');
-  
-  // Handle bullet lists
-  formattedContent = formattedContent.replace(/^\*\s+(.+)$/gm, '<li>$1</li>');
-  formattedContent = formattedContent.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
-  
-  // Handle numbered lists
-  formattedContent = formattedContent.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-  
-  // Handle line breaks and paragraphs
-  const paragraphs = formattedContent.split('\n\n');
-  formattedContent = paragraphs.map(para => {
-    para = para.trim();
-    if (para.startsWith('<') || para.includes('<table') || para.includes('<code-block')) {
-      return para;
+  };
+
+  renderer.list = (body, ordered, start) => {
+    const tag = ordered ? 'ol' : 'ul';
+    const startAttr = ordered && typeof start === 'number' && start !== 1 ? ` start="${start}"` : '';
+    return `<${tag}${startAttr}>${body}</${tag}>`;
+  };
+
+  renderer.listitem = (text, task, checked) => {
+    if (task) {
+      return `<li class="task-item" data-checked="${checked ? 'x' : ' '}">${text}</li>`;
     }
-    return `<p>${formatInlineMarkdown(para)}</p>`;
-  }).join('\n');
-  
+    return `<li>${text}</li>`;
+  };
+
+  renderer.link = (href, title, text) => {
+    const safeHref = href || '#';
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+    return `<a href="${safeHref}"${titleAttr} target="_blank" rel="noopener noreferrer" class="markdown-link">${text}</a>`;
+  };
+
+  renderer.image = (href, title, text) => {
+    const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+    return `<img src="${href}" alt="${escapeHtml(text || '')}"${titleAttr} class="markdown-image" loading="lazy">`;
+  };
+
+  renderer.table = (header, body) => {
+    const tableHeader = header ? `<thead>${header}</thead>` : '';
+    const tableBody = body ? `<tbody>${body}</tbody>` : '<tbody></tbody>';
+    return `<table class="markdown-table">${tableHeader}${tableBody}</table>`;
+  };
+
+  renderer.text = (text) => formatInlineMarkdown(escapeHtml(text || ''));
+
+  marked.setOptions({
+    renderer,
+    gfm: true,
+    breaks: true,
+    smartLists: true,
+    mangle: false,
+    headerIds: false
+  });
+
+  rendererInstance = renderer;
+  return rendererInstance;
+};
+
+const normalizeInputContent = (content) => {
+  if (content == null) {
+    return '';
+  }
+  if (typeof content === 'string' || typeof content === 'number' || typeof content === 'boolean') {
+    return String(content);
+  }
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => normalizeInputContent(item))
+      .filter((segment) => segment !== '')
+      .join('\n\n');
+  }
+  if (typeof content === 'object') {
+    try {
+      return safeStringifyValue(content, 2);
+    } catch (error) {
+      // Debug fallback to help track down [object Object] issues
+      // eslint-disable-next-line no-console
+      console.log(
+        'normalizeInputContent: failed to stringify object content, using Object.toString fallback',
+        {
+          contentType: Object.prototype.toString.call(content),
+          content,
+          error,
+        }
+      );
+      return Object.prototype.toString.call(content);
+    }
+  }
+  return String(content);
+};
+
+const applyCalloutEnhancements = (html) => {
+  if (!html) return html;
+
+  const calloutRegex = new RegExp(
+    `<blockquote>\\s*<p>([${CALLOUT_ICONS}])\\s*<strong>([^<]+)</strong>:\\s*([\\s\\S]*?)</p>([\\s\\S]*?)</blockquote>`,
+    'g'
+  );
+
+  return html.replace(calloutRegex, (match, icon, title, lead, rest) => {
+    const leadContent = lead?.trim() ? `<p>${lead.trim()}</p>` : '';
+    const trailingContent = rest?.trim() || '';
+    const combinedContent = [leadContent, trailingContent].filter(Boolean).join('');
+
+    return `<div class="callout callout-${icon}">
+      <div class="callout-header">
+        <span class="callout-icon">${icon}</span>
+        <strong>${title.trim()}</strong>
+      </div>
+      <div class="callout-content">
+        ${combinedContent}
+      </div>
+    </div>`;
+  });
+};
+
+export const formatMessageContent = (content) => {
+  const renderer = ensureRenderer();
+  const normalized = normalizeInputContent(content).replace(/\r\n/g, '\n');
+  let formattedContent = '';
+
+  try {
+    formattedContent = marked.parse(normalized, { renderer });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.log('formatMessageContent: marked.parse threw, falling back to plain text HTML', {
+      error,
+      normalized,
+    });
+    formattedContent = '';
+  }
+
+  formattedContent = applyCalloutEnhancements(formattedContent);
+
+  // If something in the markdown pipeline produced [object Object],
+  // fall back to a very simple escaped HTML representation so the
+  // user at least sees the actual text instead of the JS object tag.
+  const trimmed = (formattedContent || '').trim();
+  if (
+    !trimmed ||
+    trimmed === '[object Object]' ||
+    trimmed === '<p>[object Object]</p>' ||
+    trimmed === '<p>[object Object]</p>\n' ||
+    /\[object Object\]/.test(trimmed)
+  ) {
+    const safe = escapeHtml(normalized);
+    return `<p>${safe.replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br />')}</p>`;
+  }
+
   return formattedContent;
 };
 
@@ -108,12 +195,9 @@ export const formatInlineMarkdown = (text) => {
   let formatted = text;
   
   // Handle mathematical formulas and scientific notation first
-  console.log('Original text:', formatted);
-  
   // Process LaTeX delimiters - handle various escaping scenarios
   // First, handle display math (double dollar signs)
   formatted = formatted.replace(/\$\$([^$]+)\$\$/g, (match, content) => {
-    console.log('Found display math $$:', match, 'content:', content);
     const processedContent = processMathContent(content);
     return `<div class="math-formula display">${processedContent}</div>`;
   });
@@ -124,7 +208,6 @@ export const formatInlineMarkdown = (text) => {
     if (/^[\d,.\s]+$/.test(content.trim())) {
       return match;
     }
-    console.log('Found inline math $:', match, 'content:', content);
     const processedContent = processMathContent(content);
     return `<span class="math-formula inline">${processedContent}</span>`;
   });
@@ -132,32 +215,26 @@ export const formatInlineMarkdown = (text) => {
   // Handle LaTeX delimiters with backslashes
   // Inline math: \( ... \)
   formatted = formatted.replace(/\\\(([^)]+)\\\)/g, (match, content) => {
-    console.log('Found LaTeX inline math:', match, 'content:', content);
     const processedContent = processMathContent(content);
     return `<span class="math-formula inline">${processedContent}</span>`;
   });
   
   // Display math: \[ ... \]
   formatted = formatted.replace(/\\\[([^\]]+)\\\]/g, (match, content) => {
-    console.log('Found LaTeX display math:', match, 'content:', content);
     const processedContent = processMathContent(content);
     return `<div class="math-formula display">${processedContent}</div>`;
   });
   
   // Handle HTML-escaped backslashes
   formatted = formatted.replace(/&#92;\(([^)]+)\&#92;\)/g, (match, content) => {
-    console.log('Found HTML-escaped inline math:', match, 'content:', content);
     const processedContent = processMathContent(content);
     return `<span class="math-formula inline">${processedContent}</span>`;
   });
   
   formatted = formatted.replace(/&#92;\[([^\]]+)\&#92;\]/g, (match, content) => {
-    console.log('Found HTML-escaped display math:', match, 'content:', content);
     const processedContent = processMathContent(content);
     return `<div class="math-formula display">${processedContent}</div>`;
   });
-  
-  console.log('After LaTeX processing:', formatted);
   
   // Since LaTeX delimiters aren't being caught, let's process mathematical content directly
   // This will handle the content even if the delimiters aren't being processed
@@ -257,7 +334,6 @@ export const formatInlineMarkdown = (text) => {
 
 export const processMathContent = (content) => {
   let processed = content;
-  console.log('Processing math content:', content);
   
   // Handle Greek letters and common symbols first
   const mathSymbols = {
@@ -326,7 +402,6 @@ export const processMathContent = (content) => {
   processed = processed.replace(/\\,|\\:|\\;|\\quad|\\qquad/g, ' ');
   processed = processed.replace(/\\hspace\{[^}]+\}/g, ' ');
   
-  console.log('Processed math content:', processed);
   return processed;
 };
 
@@ -463,7 +538,7 @@ export const copyToClipboard = async (text, button) => {
     if (button) {
       const originalIcon = button.innerHTML;
       button.classList.add('copied');
-      button.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
+      button.innerHTML = '<span class="copy-icon" aria-hidden="true">✓</span><span class="copy-text">Copied</span>';
       button.title = 'Copied!';
       
       setTimeout(() => {
@@ -479,7 +554,7 @@ export const copyToClipboard = async (text, button) => {
     
     if (button) {
       button.classList.remove('copied');
-      button.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>';
+      button.innerHTML = '<span class="copy-icon" aria-hidden="true">📋</span><span class="copy-text">Copy</span>';
       button.title = 'Copy code';
     }
     

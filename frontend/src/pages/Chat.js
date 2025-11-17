@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { 
-  Send, Bot, User, Loader2, Clock, MoreVertical,
-  ChevronDown, AtSign, Globe, Image as ImageIcon, Monitor,
-  Infinity, Workflow
+import {
+  Send, Bot, User, Loader2,
+  ChevronDown, Monitor, Infinity, Workflow,
+  Globe, CheckCircle
 } from 'lucide-react';
 import { ApiService } from '../services/api';
 import { formatMessageContent, initializeCopyCodeListeners } from '../utils/messageFormatter';
@@ -89,20 +89,67 @@ const loadMentionedFiles = async (mentions = []) => {
   return files;
 };
 
+const safeStringifyInput = (value, spacing = 2) => {
+  const seen = new WeakSet();
+  const serializer = (key, val) => {
+    if (typeof val === 'bigint') {
+      return val.toString();
+    }
+    if (typeof val === 'object' && val !== null) {
+      if (seen.has(val)) {
+        return '[Circular]';
+      }
+      seen.add(val);
+    }
+    if (typeof val === 'function') {
+      return `[Function ${val.name || 'anonymous'}]`;
+    }
+    return val;
+  };
+  return JSON.stringify(value, serializer, spacing);
+};
+
+const normalizeMessageInput = (value) => {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizeMessageInput(item))
+      .filter((segment) => segment !== '')
+      .join('\n\n');
+  }
+  if (typeof value === 'object') {
+    try {
+      return safeStringifyInput(value, 2);
+    } catch (error) {
+      return Object.prototype.toString.call(value);
+    }
+  }
+  return String(value);
+};
+
 const Chat = () => {
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
   const [composerInput, setComposerInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [conversationHistory, setConversationHistory] = useState([]);
-  const [agentMode, setAgentMode] = useState('Agent');
+  // Default to full agent behavior so follow-up chats stay in agent mode
+  const [agentMode, setAgentMode] = useState('agent');
   const [showAgentDropdown, setShowAgentDropdown] = useState(false);
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
-  const [pastChats] = useState([
-    { id: 1, title: 'Enhance UI with AI features', time: '2m' },
-    { id: 2, title: 'Fix code generation for even o...', time: '20m' },
-    { id: 3, title: 'Fix code generation for even o...', time: '44m' }
-  ]);
+  const webSearchOptions = [
+    { id: 'off', label: 'Off', description: 'AI stays within the workspace context.' },
+    { id: 'browser_tab', label: 'Browser Tab', description: 'Let AI use in-app web search.' },
+    { id: 'google_chrome', label: 'Google Chrome', description: 'Let AI request an external Chrome window.' }
+  ];
+  const [webSearchMode, setWebSearchMode] = useState('off');
+  const [showWebSearchDropdown, setShowWebSearchDropdown] = useState(false);
+  const [lastUserPrompt, setLastUserPrompt] = useState('');
+  const [lastPromptDraft, setLastPromptDraft] = useState('');
+  const [thinkingStart, setThinkingStart] = useState(null);
+  const [thinkingElapsed, setThinkingElapsed] = useState(0);
   const messagesEndRef = useRef(null);
   const agentStatusTimersRef = useRef([]);
 
@@ -114,11 +161,15 @@ const Chat = () => {
   };
 
   const [agentStatuses, setAgentStatuses] = useState([]);
+  const selectedWebSearchMode =
+    webSearchOptions.find((mode) => mode.id === webSearchMode) || webSearchOptions[0];
 
   const PlanCard = ({ plan }) => {
     if (!plan) return null;
 
-    const summary = plan.summary || plan.thoughts || plan.description;
+    const summary = normalizeMessageInput(
+      plan.summary || plan.thoughts || plan.description || ''
+    );
     const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
 
     return (
@@ -131,8 +182,13 @@ const Chat = () => {
         {tasks.length > 0 && (
           <div className="space-y-1">
             {tasks.slice(0, 6).map((task, idx) => {
-              const statusKey = (task.status || 'pending').toLowerCase();
+              const statusKey = String(task.status || 'pending').toLowerCase();
               const statusClass = planStatusStyles[statusKey] || planStatusStyles.pending;
+              const title = normalizeMessageInput(
+                task.title || task.summary || `Task ${idx + 1}`
+              );
+              const details =
+                task.details != null ? normalizeMessageInput(task.details) : '';
               return (
                 <div
                   key={task.id || `${task.title || 'task'}-${idx}`}
@@ -142,10 +198,10 @@ const Chat = () => {
                     {statusKey.replace('_', ' ')}
                   </span>
                   <div className="flex-1">
-                    <div className="font-medium">{task.title || task.summary || `Task ${idx + 1}`}</div>
-                    {task.details && (
+                    <div className="font-medium">{title}</div>
+                    {details && (
                       <div className="text-xs text-dark-300">
-                        {task.details}
+                        {details}
                       </div>
                     )}
                   </div>
@@ -256,13 +312,36 @@ const Chat = () => {
     initializeCopyCodeListeners();
   }, []);
 
+useEffect(() => {
+  if (!thinkingStart) {
+    setThinkingElapsed(0);
+    return;
+  }
+  setThinkingElapsed(Date.now() - thinkingStart);
+  const intervalId = setInterval(() => {
+    setThinkingElapsed(Date.now() - thinkingStart);
+  }, 1000);
+  return () => clearInterval(intervalId);
+}, [thinkingStart]);
+
   const handleSendMessage = async (message, isComposer = false) => {
-    if (!message?.trim() || isLoading) return;
+    const originalMessage = message;
+    const normalizedMessage = normalizeMessageInput(message);
+    const safeRawContent =
+      typeof originalMessage === 'string' ? originalMessage : normalizedMessage;
+    if (!normalizedMessage.trim() || isLoading) return;
+
+    const trimmedMessage = normalizedMessage.trim();
+    setThinkingStart(Date.now());
+    setThinkingElapsed(0);
+    setLastUserPrompt(trimmedMessage);
+    setLastPromptDraft(trimmedMessage);
 
     const userMessage = {
       id: Date.now(),
       role: 'user',
-      content: message,
+      content: normalizedMessage,
+      rawContent: safeRawContent,
       timestamp: new Date().toISOString(),
       isComposer: isComposer
     };
@@ -272,7 +351,7 @@ const Chat = () => {
       ...prev,
       {
         role: 'user',
-        content: message,
+        content: normalizedMessage,
         timestamp: userMessage.timestamp
       }
     ]);
@@ -282,17 +361,22 @@ const Chat = () => {
       setInputMessage('');
     }
     setIsLoading(true);
-
+  
     try {
       const modePayload = (agentMode || 'agent').toLowerCase();
-      const shouldShowAgentStatuses = modePayload !== 'ask' || isComposer;
-      const mentionPaths = extractMentionPaths(message);
+      // Treat both agent and plan as "agent-like" modes that should keep the agent behavior active
+      const isAgentLikeMode = modePayload === 'agent' || modePayload === 'plan';
+      const composerModeEnabled = isComposer || isAgentLikeMode;
+      const shouldShowAgentStatuses = composerModeEnabled;
+      const mentionPaths = extractMentionPaths(normalizedMessage);
       const mentionFiles = mentionPaths.length > 0 ? await loadMentionedFiles(mentionPaths) : [];
 
       const context = {
         current_page: 'chat',
         mode: modePayload,
-        ...(isComposer && { composer_mode: true })
+        chat_mode: modePayload,
+        web_search_mode: webSearchMode,
+        ...(composerModeEnabled && { composer_mode: true })
       };
 
       if (mentionFiles.length > 0) {
@@ -316,7 +400,7 @@ const Chat = () => {
       }
 
       if (shouldShowAgentStatuses) {
-        ApiService.previewAgentStatuses(message, context)
+        ApiService.previewAgentStatuses(normalizedMessage, context)
           .then((preview) => {
             if (preview?.agent_statuses?.length) {
               scheduleAgentStatuses(preview.agent_statuses);
@@ -328,16 +412,34 @@ const Chat = () => {
       }
 
       const response = await ApiService.sendMessage(
-        message,
+        normalizedMessage,
         context,
         conversationHistory,
         { mode: modePayload }
       );
 
+      // Debug: inspect raw response payload from backend
+      // eslint-disable-next-line no-console
+      console.log('Chat.handleSendMessage: ApiService.sendMessage response', {
+        response,
+        responseType: typeof response,
+        responseResponseType: typeof response?.response,
+      });
+
+      const assistantContent = normalizeMessageInput(response.response);
+
+      // Debug: inspect assistant content after normalization
+      // eslint-disable-next-line no-console
+      console.log('Chat.handleSendMessage: assistantContent after normalizeMessageInput', {
+        assistantContent,
+        assistantContentType: typeof assistantContent,
+      });
+
       const assistantMessage = {
         id: Date.now() + 1,
         role: 'assistant',
-        content: response.response,
+        content: assistantContent,
+        rawContent: assistantContent,
         timestamp: response.timestamp,
         plan: response.ai_plan || null
       };
@@ -347,7 +449,7 @@ const Chat = () => {
         ...prev,
         {
           role: 'assistant',
-          content: response.response,
+          content: assistantContent,
           timestamp: response.timestamp
         }
       ]);
@@ -379,6 +481,7 @@ const Chat = () => {
             id: Date.now() + 2,
             role: 'assistant',
             content: summaryLines.join('\n'),
+            rawContent: summaryLines.join('\n'),
             timestamp: new Date().toISOString()
           };
 
@@ -409,6 +512,20 @@ const Chat = () => {
     } finally {
       setIsLoading(false);
       clearAgentStatuses();
+      setThinkingStart(null);
+    }
+  };
+
+  const handleResendEditedPrompt = async () => {
+    if (!lastPromptDraft.trim() || isLoading) return;
+    await handleSendMessage(lastPromptDraft, agentMode.toLowerCase() !== 'ask');
+  };
+
+  const handleLoadEditedPrompt = () => {
+    setComposerInput(lastPromptDraft);
+    const composerAnchor = document.getElementById('chat-composer');
+    if (composerAnchor) {
+      composerAnchor.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   };
 
@@ -419,7 +536,8 @@ const Chat = () => {
 
   const handleChatSubmit = async (e) => {
     e.preventDefault();
-    await handleSendMessage(inputMessage, false);
+    const shouldUseComposer = agentMode.toLowerCase() !== 'ask';
+    await handleSendMessage(inputMessage, shouldUseComposer);
   };
 
   const clearChat = () => {
@@ -434,91 +552,28 @@ const Chat = () => {
     clearChat();
   };
 
-  const quickTabs = [
-    { id: 'improve', label: 'Improve system functionality and fix issues' },
-    { id: 'format', label: 'Fix the chat format' },
-    { id: 'enhance', label: 'Enhance UI with AI features' },
-  ];
-  const [activeQuickTab, setActiveQuickTab] = useState(quickTabs[0].id);
-
   return (
-    <div className="flex flex-col h-full bg-[#050514] text-dark-100">
-      <div className="px-4 py-3 border-b border-dark-800">
-        <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
-          {quickTabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveQuickTab(tab.id)}
-              className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
-                activeQuickTab === tab.id
-                  ? 'bg-dark-700 text-white'
-                  : 'text-dark-300 hover:text-dark-100'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-          <button
-            onClick={handleNewChat}
-            className="px-3 py-1.5 rounded-full text-sm bg-primary-600 hover:bg-primary-700 text-white transition-colors"
-          >
-            New Chat
-          </button>
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              onClick={() => document.getElementById('past-chat-list')?.scrollIntoView({ behavior: 'smooth' })}
-              className="p-1.5 hover:bg-dark-700 rounded transition-colors"
-              title="Scroll to past chats"
-            >
-              <Clock className="w-4 h-4 text-dark-400" />
-            </button>
-            <div className="relative">
-              <button
-                onClick={() => setShowMoreMenu(!showMoreMenu)}
-                className="p-1.5 hover:bg-dark-700 rounded transition-colors"
-                title="More"
-              >
-                <MoreVertical className="w-4 h-4 text-dark-400" />
-              </button>
-              {showMoreMenu && (
-                <div className="absolute right-0 top-full mt-2 bg-dark-800 border border-dark-600 rounded shadow-lg z-50 min-w-[200px] py-2">
-                  <button
-                    type="button"
-                    onClick={handleNewChat}
-                    className="w-full text-left px-4 py-2 text-sm text-dark-300 hover:bg-dark-700"
-                  >
-                    Start fresh chat
-                  </button>
-                  <button
-                    type="button"
-                    onClick={clearChat}
-                    className="w-full text-left px-4 py-2 text-sm text-dark-300 hover:bg-dark-700"
-                  >
-                    Clear current thread
-                  </button>
-                </div>
-              )}
+    <div className="min-h-screen bg-[#04030F] text-dark-100 flex flex-col">
+      <header className="border-b border-dark-800 bg-[#050514]">
+        <div className="max-w-3xl mx-auto px-4 py-5 space-y-3">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs uppercase tracking-wide text-dark-500">Copilot chat</p>
+              <h1 className="text-2xl font-semibold text-white">Fix code modification issue</h1>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="border-b border-dark-800 bg-[#050514] px-4 py-4">
-        <div className="max-w-4xl mx-auto w-full">
-          <div className="bg-dark-800 border border-dark-700 rounded-2xl p-4 space-y-3 shadow-xl shadow-black/40">
-            <div className="flex flex-wrap items-center gap-2 text-sm text-dark-300">
+            <div className="flex items-center gap-2">
               <div className="relative">
                 <button
                   type="button"
                   onClick={() => setShowAgentDropdown(!showAgentDropdown)}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-dark-700 border border-dark-600 rounded-full hover:bg-dark-600 transition-colors"
+                  className="flex items-center gap-1 px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-full text-sm text-dark-200 hover:bg-dark-700 transition-colors"
                 >
                   <Infinity className="w-4 h-4" />
                   <span>{agentMode.charAt(0).toUpperCase() + agentMode.slice(1)}</span>
                   <ChevronDown className="w-3 h-3" />
                 </button>
                 {showAgentDropdown && (
-                  <div className="absolute mt-2 bg-dark-800 border border-dark-600 rounded shadow-lg z-50 min-w-[200px] py-2">
+                  <div className="absolute right-0 mt-2 bg-dark-900 border border-dark-700 rounded-xl shadow-lg z-50 min-w-[220px] py-2">
                     {['agent', 'plan', 'ask'].map((mode) => (
                       <button
                         key={mode}
@@ -527,7 +582,11 @@ const Chat = () => {
                           setAgentMode(mode);
                           setShowAgentDropdown(false);
                         }}
-                        className="w-full text-left px-4 py-2 text-sm text-dark-300 hover:bg-dark-700 capitalize flex items-center gap-2"
+                        className={`w-full text-left px-4 py-2 text-sm capitalize flex items-center gap-2 ${
+                          agentMode === mode
+                            ? 'text-white bg-primary-600/20'
+                            : 'text-dark-200 hover:bg-dark-800'
+                        }`}
                       >
                         {mode === 'agent' ? <Infinity className="w-4 h-4" /> : <Workflow className="w-4 h-4" />}
                         {mode}
@@ -536,138 +595,194 @@ const Chat = () => {
                   </div>
                 )}
               </div>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowWebSearchDropdown((prev) => !prev)}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-full text-[11px] text-dark-300 hover:bg-dark-700 transition-colors"
+                  title={`Web Search (${selectedWebSearchMode.label})`}
+                >
+                  <Globe className="w-4 h-4" />
+                  <span className="uppercase tracking-wide">{selectedWebSearchMode.label}</span>
+                  <ChevronDown className="w-3 h-3" />
+                </button>
+                {showWebSearchDropdown && (
+                  <div className="absolute right-0 mt-2 bg-dark-900 border border-dark-700 rounded-xl shadow-lg z-50 min-w-[220px] py-2">
+                    {webSearchOptions.map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => {
+                          setWebSearchMode(option.id);
+                          setShowWebSearchDropdown(false);
+                        }}
+                        className={`w-full text-left px-4 py-2 text-xs flex items-center justify-between ${
+                          webSearchMode === option.id
+                            ? 'text-white bg-primary-600/20'
+                            : 'text-dark-200 hover:bg-dark-800'
+                        }`}
+                      >
+                        <div className="flex flex-col">
+                          <span>{option.label}</span>
+                          {option.description && (
+                            <span className="text-[10px] text-dark-500 mt-0.5">
+                              {option.description}
+                            </span>
+                          )}
+                        </div>
+                        {webSearchMode === option.id && (
+                          <CheckCircle className="w-3 h-3 text-primary-400" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
-                className="flex items-center gap-1 px-3 py-1.5 bg-dark-700 border border-dark-600 rounded-full text-sm text-dark-300"
+                className="flex items-center gap-1 px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-full text-xs text-dark-300"
               >
                 GPT-5.1 Codex High
                 <ChevronDown className="w-3 h-3" />
               </button>
-              <div className="flex items-center gap-1 text-xs text-dark-500 ml-auto">
-                <Monitor className="w-4 h-4" />
-                <span>Local</span>
-              </div>
-            </div>
-
-            <form onSubmit={handleComposerSubmit} className="flex items-center gap-3">
-              <input
-                type="text"
-                value={composerInput}
-                onChange={(e) => setComposerInput(e.target.value)}
-                placeholder="Plan, @ for context, / for commands"
-                className="flex-1 px-4 py-3 bg-dark-900/60 border border-dark-600 rounded-xl text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                disabled={isLoading}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleComposerSubmit(e);
-                  }
-                }}
-              />
-              <button
-                type="submit"
-                disabled={!composerInput.trim() || isLoading}
-                className="p-3 rounded-xl bg-primary-600 hover:bg-primary-700 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                title="Send plan"
-              >
-                <Send className="w-4 h-4" />
-              </button>
-            </form>
-
-            <div className="flex items-center gap-3 text-xs text-dark-400">
-              <span>Press @ to link files, / for commands</span>
-              <div className="flex items-center gap-2 ml-auto">
-                <button
-                  type="button"
-                  onClick={() => setComposerInput((prev) => prev + '@')}
-                  className="p-1.5 rounded hover:bg-dark-700"
-                >
-                  <AtSign className="w-4 h-4" />
-                </button>
-                <button className="p-1.5 rounded hover:bg-dark-700">
-                  <Globe className="w-4 h-4" />
-                </button>
-                <button className="p-1.5 rounded hover:bg-dark-700">
-                  <ImageIcon className="w-4 h-4" />
-                </button>
-              </div>
             </div>
           </div>
+          <div className="flex items-center gap-2 text-xs text-dark-400">
+            <span className="px-2 py-0.5 rounded-full border border-dark-700 bg-dark-900/60">
+              {messages.length} message{messages.length === 1 ? '' : 's'}
+            </span>
+            {isLoading && (
+              <span className="px-2 py-0.5 rounded-full bg-primary-600/10 text-primary-300 border border-primary-700/40">
+                Thought for {Math.max(1, Math.round(thinkingElapsed / 1000))}s
+              </span>
+            )}
+          </div>
         </div>
-      </div>
+      </header>
 
-      <div className="flex-1 overflow-y-auto px-4 py-6 bg-[#050514]">
-        <div className="max-w-4xl mx-auto w-full">
-          {messages.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-dark-500 text-sm">
-              Start a conversation to see responses here.
+      <main className="flex-1 overflow-y-auto">
+        <div className="max-w-3xl mx-auto px-4 py-6 space-y-8">
+          <section className="bg-dark-800/70 border border-dark-700 rounded-2xl p-4 space-y-3 shadow-xl shadow-black/30">
+            <div className="flex items-center justify-between text-xs uppercase tracking-wide text-dark-400">
+              <span>Previous prompt</span>
+              {lastUserPrompt && (
+                <span className="text-dark-500">{lastUserPrompt.length} chars</span>
+              )}
             </div>
-          ) : (
-            <div className="space-y-4">
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`flex space-x-3 ${
-                    message.role === 'user' ? 'justify-end' : 'justify-start'
-                  }`}
-                >
-                  {message.role === 'assistant' && (
-                    <div className="flex-shrink-0">
-                      <div className="w-8 h-8 bg-primary-600 rounded-full flex items-center justify-center">
-                        <Bot className="w-4 h-4 text-white" />
-                      </div>
-                    </div>
-                  )}
+            <textarea
+              value={lastPromptDraft}
+              onChange={(e) => setLastPromptDraft(e.target.value)}
+              placeholder="Your last prompt will appear here after you send a message"
+              rows={Math.min(8, Math.max(3, Math.ceil((lastPromptDraft.length || 40) / 80)))}
+              className="w-full bg-dark-900/60 border border-dark-600 rounded-xl px-3 py-2 text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:ring-2 focus:ring-primary-600"
+            />
+            <div className="flex flex-wrap gap-2 text-sm">
+              <button
+                type="button"
+                onClick={() => setLastPromptDraft(lastUserPrompt)}
+                disabled={!lastUserPrompt}
+                className="px-3 py-1.5 rounded-lg border border-dark-600 text-dark-200 hover:bg-dark-800 disabled:opacity-40"
+              >
+                Reset to original
+              </button>
+              <button
+                type="button"
+                onClick={handleLoadEditedPrompt}
+                disabled={!lastPromptDraft.trim()}
+                className="px-3 py-1.5 rounded-lg border border-primary-700 text-primary-300 hover:bg-primary-600/10 disabled:opacity-40"
+              >
+                Load into composer
+              </button>
+              <button
+                type="button"
+                onClick={handleResendEditedPrompt}
+                disabled={!lastPromptDraft.trim() || isLoading}
+                className="px-3 py-1.5 rounded-lg bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-60"
+              >
+                Send edited prompt
+              </button>
+            </div>
+          </section>
 
+          <section className="space-y-4">
+            {messages.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-dark-700 bg-dark-900/40 p-6 text-center text-sm text-dark-400">
+                Start a conversation to see responses here.
+              </div>
+            ) : (
+              <>
+                {messages.map((message) => (
                   <div
-                    className={`max-w-3xl px-4 py-3 rounded-2xl ${
+                    key={message.id}
+                    className={`rounded-2xl border ${
                       message.role === 'user'
-                        ? 'bg-primary-600 text-white'
+                        ? 'border-primary-700 bg-primary-700/10'
                         : message.isError
-                        ? 'bg-red-900/20 border border-red-700 text-red-300'
-                        : 'bg-dark-800 border border-dark-700 text-dark-100'
-                    }`}
+                        ? 'border-red-800 bg-red-900/20'
+                        : 'border-dark-700 bg-dark-900/60'
+                    } p-4 space-y-3`}
                   >
-                    <div
-                      className="prose prose-invert max-w-none"
-                      dangerouslySetInnerHTML={{
-                        __html: formatMessageContent(message.content)
-                      }}
-                    />
+                    {/* Debug: log each message as it is rendered in the Copilot Chat page */}
+                    {(() => {
+                      const normalizedContent = normalizeMessageInput(
+                        message.rawContent ?? message.content
+                      );
+                      const formattedHtml = formatMessageContent(normalizedContent);
+                      // eslint-disable-next-line no-console
+                      console.log('Chat page render message bubble', {
+                        id: message.id,
+                        role: message.role,
+                        content: message.content,
+                        rawContent: message.rawContent,
+                        contentType: typeof message.content,
+                        rawContentType: typeof message.rawContent,
+                        normalizedContent,
+                        formattedHtml,
+                        formattedHtmlType: typeof formattedHtml,
+                      });
+                      return (
+                        <div
+                          className="prose prose-invert max-w-none text-[15px]"
+                          dangerouslySetInnerHTML={{
+                            __html: formattedHtml,
+                          }}
+                        />
+                      );
+                    })()}
+                    <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-dark-400">
+                      {message.role === 'user' ? (
+                        <>
+                          <User className="w-4 h-4 text-primary-400" />
+                          <span>User</span>
+                        </>
+                      ) : (
+                        <>
+                          <Bot className="w-4 h-4 text-primary-400" />
+                          <span>AI Assistant</span>
+                        </>
+                      )}
+                      <span className="text-dark-600">•</span>
+                      <span>{new Date(message.timestamp).toLocaleTimeString()}</span>
+                    </div>
                     {message.plan && message.role === 'assistant' && (
                       <PlanCard plan={message.plan} />
                     )}
-                    <div className="text-xs opacity-70 mt-2">
-                      {new Date(message.timestamp).toLocaleTimeString()}
-                    </div>
                   </div>
+                ))}
 
-                  {message.role === 'user' && (
-                    <div className="flex-shrink-0">
-                      <div className="w-8 h-8 bg-dark-700 rounded-full flex items-center justify-center">
-                        <User className="w-4 h-4 text-dark-300" />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              {isLoading && (
-                <div className="flex space-x-3 justify-start">
-                  <div className="flex-shrink-0">
-                    <div className="w-8 h-8 bg-primary-600 rounded-full flex items-center justify-center">
-                      <Bot className="w-4 h-4 text-white" />
-                    </div>
-                  </div>
-                  <div className="bg-dark-800 border border-dark-700 rounded-2xl px-4 py-3">
-                    <div className="flex items-center space-x-2">
+                {isLoading && (
+                  <div className="rounded-2xl border border-dark-700 bg-dark-900/60 p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-sm text-dark-300">
                       <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
-                      <span className="text-dark-300">AI is thinking...</span>
+                      <span>AI is thinking...</span>
                     </div>
                     {agentStatuses.length > 0 && (
-                      <div className="mt-3 space-y-1 text-xs text-dark-300">
+                      <div className="grid gap-1 text-xs text-dark-300">
                         {agentStatuses.map((status) => (
-                          <div key={status.key} className="flex items-center gap-2">
+                          <div
+                            key={status.key}
+                            className="flex items-center gap-2 rounded-lg bg-dark-800/80 px-3 py-2"
+                          >
                             <Loader2 className="w-3 h-3 animate-spin text-primary-500" />
                             <span>{status.label}</span>
                           </div>
@@ -675,18 +790,20 @@ const Chat = () => {
                       </div>
                     )}
                   </div>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
-            </div>
-          )}
+                )}
+                <div ref={messagesEndRef} />
+              </>
+            )}
+          </section>
         </div>
-      </div>
+      </main>
 
-      <div className="px-4 py-4 border-t border-dark-800 bg-[#050514]">
-        <div className="max-w-4xl mx-auto">
-          <form onSubmit={handleChatSubmit} className="flex items-center gap-3 bg-dark-800 border border-dark-700 rounded-full px-4 py-2">
+      <footer className="border-t border-dark-800 bg-[#050514]" id="chat-composer">
+        <div className="max-w-3xl mx-auto px-4 py-4 space-y-3">
+          <form
+            onSubmit={handleChatSubmit}
+            className="flex items-center gap-3 bg-dark-900 border border-dark-700 rounded-2xl px-4 py-3"
+          >
             <input
               type="text"
               value={inputMessage}
@@ -697,60 +814,31 @@ const Chat = () => {
                   handleChatSubmit(e);
                 }
               }}
-              placeholder="Continue the conversation..."
-              className="flex-1 bg-transparent text-dark-100 placeholder-dark-400 focus:outline-none"
+              placeholder="Write a follow-up…"
+              className="flex-1 bg-transparent text-dark-100 placeholder-dark-500 focus:outline-none"
               disabled={isLoading}
             />
             <button
               type="submit"
               disabled={!inputMessage.trim() || isLoading}
-              className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="p-3 bg-primary-600 hover:bg-primary-700 rounded-xl text-white disabled:opacity-50"
             >
               <Send className="w-4 h-4" />
             </button>
           </form>
-          <div className="flex items-center justify-between mt-4 text-xs text-dark-400">
-            <div className="flex items-center gap-2">
-              <Monitor className="w-4 h-4" />
-              <span>Local workspace</span>
-            </div>
-            <button className="text-dark-400 hover:text-dark-200 transition-colors">
-              View settings
-            </button>
+          <div className="text-xs text-dark-500 flex items-center gap-2">
+            <Monitor className="w-4 h-4" />
+            <span>Local workspace • Agent mode keeps editing context active</span>
           </div>
         </div>
-      </div>
+      </footer>
 
-      <div id="past-chat-list" className="p-4 border-t border-dark-800 bg-dark-900">
-        <div className="flex items-center justify-between mb-2">
-          <h4 className="text-xs font-semibold text-dark-400 flex items-center space-x-1">
-            <span>Past Chats</span>
-            <ChevronDown className="w-3 h-3" />
-          </h4>
-          <button className="text-xs text-dark-400 hover:text-dark-300 transition-colors">
-            View All
-          </button>
-        </div>
-        <div className="space-y-1">
-          {pastChats.map((chat) => (
-            <div
-              key={chat.id}
-              className="text-xs text-dark-400 hover:text-dark-200 cursor-pointer py-1 px-2 hover:bg-dark-800 rounded transition-colors flex items-center justify-between"
-            >
-              <span className="truncate">{chat.title}</span>
-              <span className="ml-2 text-dark-500">{chat.time}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {(showAgentDropdown || showMoreMenu) && (
+      {(showAgentDropdown || showWebSearchDropdown) && (
         <div
           className="fixed inset-0 z-40"
           onClick={() => {
             setShowAgentDropdown(false);
-            setShowAutoDropdown(false);
-            setShowMoreMenu(false);
+            setShowWebSearchDropdown(false);
           }}
         />
       )}

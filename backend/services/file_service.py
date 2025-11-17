@@ -116,6 +116,8 @@ class FileService:
             
             async with aiofiles.open(path, 'w', encoding='utf-8') as f:
                 await f.write(content)
+            
+            await self._format_file(path)
                 
         except Exception as e:
             raise Exception(f"Error writing file {path}: {str(e)}")
@@ -171,6 +173,33 @@ class FileService:
             
         except Exception as e:
             raise Exception(f"Error searching files: {str(e)}")
+
+    async def _format_file(self, path: str) -> None:
+        """Format files using language-specific formatters when available."""
+        extension = os.path.splitext(path)[1].lower()
+        formatter_cmd = None
+
+        if extension == '.go':
+            formatter_cmd = ['gofmt', '-w', path]
+        elif extension == '.py':
+            formatter_cmd = ['black', path]
+
+        if not formatter_cmd:
+            return
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *formatter_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            _, stderr = await process.communicate()
+            if process.returncode != 0:
+                print(f"⚠️ Formatter {' '.join(formatter_cmd)} failed: {stderr.decode().strip()}")
+        except FileNotFoundError:
+            print(f"⚠️ Formatter not found for command: {' '.join(formatter_cmd)}")
+        except Exception as e:
+            print(f"⚠️ Failed to format {path}: {str(e)}")
     
     async def get_file_info(self, path: str) -> Dict[str, Any]:
         """Get detailed information about a file or directory"""

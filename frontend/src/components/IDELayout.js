@@ -2,10 +2,11 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Menu, X, ChevronLeft, ChevronRight, Maximize2,
   Code2, Bot, Wifi, WifiOff,
-  Folder, File, ChevronRight as ChevronRightIcon, ChevronDown,
+  Folder, File, FilePlus, FolderPlus,
+  ChevronRight as ChevronRightIcon, ChevronDown,
   Send, User, Loader2, CheckCircle, AlertCircle,
   Infinity, AtSign, Globe, Image, Mic, Square, Plus, Clock, MoreVertical,
-  Workflow
+  RefreshCw, Minimize2, Workflow
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
@@ -34,11 +35,129 @@ const flattenTreeNodes = (nodes = [], accumulator = []) => {
   return accumulator;
 };
 
+const normalizeEditorPath = (path = '') => {
+  if (!path) return '';
+  return path.replace(/\\/g, '/');
+};
+
+// Simple line-based diff to power inline change previews for file operations
+const computeLineDiff = (beforeContent = '', afterContent = '', options = {}) => {
+  const maxLines = options.maxLines ?? 220;
+  const beforeLines = (beforeContent || '').split('\n').slice(0, maxLines);
+  const afterLines = (afterContent || '').split('\n').slice(0, maxLines);
+
+  const m = beforeLines.length;
+  const n = afterLines.length;
+
+  // Dynamic programming table for longest common subsequence
+  const dp = Array(m + 1)
+    .fill(null)
+    .map(() => Array(n + 1).fill(0));
+
+  for (let i = 1; i <= m; i += 1) {
+    for (let j = 1; j <= n; j += 1) {
+      if (beforeLines[i - 1] === afterLines[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  // Backtrack to build diff
+  const result = [];
+  let i = m;
+  let j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && beforeLines[i - 1] === afterLines[j - 1]) {
+      result.push({
+        type: 'context',
+        oldNumber: i,
+        newNumber: j,
+        text: beforeLines[i - 1],
+      });
+      i -= 1;
+      j -= 1;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.push({
+        type: 'added',
+        oldNumber: null,
+        newNumber: j,
+        text: afterLines[j - 1],
+      });
+      j -= 1;
+    } else if (i > 0) {
+      result.push({
+        type: 'removed',
+        oldNumber: i,
+        newNumber: null,
+        text: beforeLines[i - 1],
+      });
+      i -= 1;
+    } else {
+      break;
+    }
+  }
+
+  result.reverse();
+
+  // If the diff is extremely long, trim the middle to keep previews readable
+  const maxDiffLines = options.maxDiffLines ?? 260;
+  if (result.length > maxDiffLines) {
+    const head = result.slice(0, Math.floor(maxDiffLines / 2));
+    const tail = result.slice(result.length - Math.floor(maxDiffLines / 2));
+    return [...head, { type: 'skip', text: `… ${result.length - maxDiffLines} more changed lines …` }, ...tail];
+  }
+
+  return result;
+};
+
 const generateTerminalSessionId = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
   }
   return `terminal-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const safeStringifyInput = (value, spacing = 2) => {
+  const seen = new WeakSet();
+  const serializer = (key, val) => {
+    if (typeof val === 'bigint') {
+      return val.toString();
+    }
+    if (typeof val === 'object' && val !== null) {
+      if (seen.has(val)) {
+        return '[Circular]';
+      }
+      seen.add(val);
+    }
+    if (typeof val === 'function') {
+      return `[Function ${val.name || 'anonymous'}]`;
+    }
+    return val;
+  };
+  return JSON.stringify(value, serializer, spacing);
+};
+
+const normalizeChatInput = (value) => {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizeChatInput(item))
+      .filter((segment) => segment !== '')
+      .join('\n\n');
+  }
+  if (typeof value === 'object') {
+    try {
+      return safeStringifyInput(value, 2);
+    } catch (error) {
+      return Object.prototype.toString.call(value);
+    }
+  }
+  return String(value);
 };
 
 const MenuDropdown = ({ label, items }) => (
@@ -116,6 +235,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     wordWrap: 'on',
     lineNumbers: 'on',
     automaticLayout: true,
+    glyphMargin: true,
   });
   const [isEditorReady, setIsEditorReady] = useState(false);
   
@@ -133,7 +253,15 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     { id: 'plan', label: 'Plan', description: 'Have the AI outline steps before acting.' },
     { id: 'agent', label: 'Agent', description: 'Let the AI act like a coding copilot.' }
   ];
-  const [agentMode, setAgentMode] = useState('ask');
+  const webSearchOptions = [
+    { id: 'off', label: 'Off', description: 'AI stays within the workspace context.' },
+    { id: 'browser_tab', label: 'Browser Tab', description: 'Let AI open the in-app browser tab.' },
+    { id: 'google_chrome', label: 'Google Chrome', description: 'Let AI request an external Chrome window.' }
+  ];
+  // Default to full agent behavior so follow-up chats stay in agent mode
+  const [agentMode, setAgentMode] = useState('agent');
+  const [webSearchMode, setWebSearchMode] = useState('off');
+  const [showWebSearchMenu, setShowWebSearchMenu] = useState(false);
   const [showFileSuggestions, setShowFileSuggestions] = useState(false);
   const [fileSuggestions, setFileSuggestions] = useState([]);
   const [mentionPosition, setMentionPosition] = useState(null);
@@ -160,11 +288,77 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const terminalInputRef = useRef(null);
   const agentStatusTimersRef = useRef([]);
   const agentModeMenuRef = useRef(null);
+  const webSearchMenuRef = useRef(null);
+  const monacoRef = useRef(null);
+  const editorDiffDecorationsRef = useRef([]);
   const selectedChatMode = chatModeOptions.find(mode => mode.id === agentMode) || chatModeOptions[0];
+  const selectedWebSearchMode = webSearchOptions.find(mode => mode.id === webSearchMode) || webSearchOptions[0];
 
   useEffect(() => {
     initializeCopyCodeListeners();
   }, []);
+
+  const buildFileOperationPreviews = useCallback(
+    async (operations = []) => {
+      const enhanced = [];
+
+      for (const op of operations) {
+        const opType = (op.type || '').toLowerCase();
+        const targetPath = op.path;
+
+        let beforeContent = '';
+        let afterContent = '';
+
+        try {
+          if (opType === 'create_file') {
+            beforeContent = '';
+            afterContent = op.content || '';
+          } else if (opType === 'edit_file') {
+            // Prefer current in-memory content if the file is already open
+            const openMatch = openFiles.find((f) => f.path === targetPath);
+            if (openMatch && typeof openMatch.content === 'string') {
+              beforeContent = openMatch.content;
+            } else {
+              const existing = await ApiService.readFile(targetPath);
+              beforeContent = existing?.content || '';
+            }
+            afterContent = op.content || '';
+          } else if (opType === 'delete_file') {
+            const openMatch = openFiles.find((f) => f.path === targetPath);
+            if (openMatch && typeof openMatch.content === 'string') {
+              beforeContent = openMatch.content;
+            } else {
+              const existing = await ApiService.readFile(targetPath);
+              beforeContent = existing?.content || '';
+            }
+            afterContent = '';
+          } else {
+            afterContent = op.content || '';
+          }
+        } catch (error) {
+          // If we fail to load the original content, fall back to whatever we have
+          // eslint-disable-next-line no-console
+          console.warn('buildFileOperationPreviews: failed to load original content for', targetPath, error);
+          if (!beforeContent) {
+            const openMatch = openFiles.find((f) => f.path === targetPath);
+            beforeContent = openMatch?.content || '';
+          }
+        }
+
+        const diff = computeLineDiff(beforeContent, afterContent);
+
+        enhanced.push({
+          ...op,
+          beforeContent,
+          afterContent,
+          diff,
+        });
+      }
+
+      return enhanced;
+    },
+    [openFiles]
+  );
 
   const focusSearchInput = useCallback(() => {
     if (searchInputRef.current) {
@@ -238,6 +432,26 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [showAgentModeMenu]);
+
+  useEffect(() => {
+    if (!showWebSearchMenu) return;
+    const handleClickOutside = (event) => {
+      if (webSearchMenuRef.current && !webSearchMenuRef.current.contains(event.target)) {
+        setShowWebSearchMenu(false);
+      }
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setShowWebSearchMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showWebSearchMenu]);
 
   const handleSaveConnectivity = async () => {
     if (!connectivitySettings) return;
@@ -447,6 +661,14 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     await loadProjectTree(currentPath || '.', { setAsRoot: true, showToastMessage: false });
   }, [currentPath, loadProjectTree]);
 
+  const handleCollapseExplorer = useCallback(() => {
+    setExpandedFolders(new Set());
+  }, []);
+
+  const handleRefreshExplorer = useCallback(async () => {
+    await refreshFileTree();
+  }, [refreshFileTree]);
+
   useEffect(() => {
     if (!activeTab) {
       editorRef.current = null;
@@ -476,7 +698,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   }, [terminalSessionId]);
   
   const getLanguageFromPath = (path) => {
-    const ext = path.split('.').pop().toLowerCase();
+    const ext = normalizeEditorPath(path).split('.').pop().toLowerCase();
     const langMap = {
       'py': 'python', 'js': 'javascript', 'ts': 'typescript', 'jsx': 'javascript',
       'tsx': 'typescript', 'html': 'html', 'css': 'css', 'json': 'json',
@@ -489,7 +711,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   const loadFile = useCallback(async (filePath) => {
     try {
-      const normalizedPath = filePath.replace(/\\/g, '/');
+      const normalizedPath = normalizeEditorPath(filePath);
       const existingFile = openFiles.find(f => f.path === normalizedPath);
       if (existingFile) {
         setActiveTab(normalizedPath);
@@ -501,7 +723,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       const response = await ApiService.readFile(normalizedPath);
       const fileInfo = {
         path: normalizedPath,
-        name: normalizedPath.split('/').pop() || normalizedPath.split('\\').pop() || 'untitled',
+        name: normalizedPath.split('/').pop() || 'untitled',
         content: response.content,
         language: getLanguageFromPath(normalizedPath),
         modified: false
@@ -1076,7 +1298,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     { type: 'separator' },
     { label: 'Open File...', shortcut: 'Ctrl+P', onSelect: handleGoToFile },
     { label: 'Open Folder...', onSelect: handleOpenFolderPrompt },
-    { label: 'Refresh Explorer', shortcut: 'F5', onSelect: refreshFileTree },
+    { label: 'Refresh Explorer', shortcut: 'F5', onSelect: handleRefreshExplorer },
     { type: 'separator' },
     { label: 'Save', shortcut: 'Ctrl+S', onSelect: () => activeTab && saveFile(activeTab), disabled: !activeTab },
     { label: 'Save As...', onSelect: handleSaveAs, disabled: !activeTab },
@@ -1298,32 +1520,98 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   };
 
   const renderOperationPreview = (op) => {
-    if (!op.content) return null;
+    const hasDiff = Array.isArray(op.diff) && op.diff.length > 0;
     const className = operationHighlightStyles[op.type] || 'border-dark-700 bg-dark-800/70';
-    const lines = op.content.split('\n');
-    const limitedLines = lines.slice(0, 200);
+
+    if (!hasDiff && !op.content) {
+      return null;
+    }
+
+    const diffLines = hasDiff
+      ? op.diff
+      : computeLineDiff(op.beforeContent || '', op.afterContent || op.content || '');
+
+    const legend =
+      op.type === 'create_file'
+        ? 'New file contents'
+        : op.type === 'delete_file'
+        ? 'File to be removed'
+        : 'Proposed changes';
 
     return (
       <div className={`mt-2 rounded-lg border ${className}`}>
-        <div className="max-h-48 overflow-y-auto font-mono text-[11px] text-dark-100">
-          {limitedLines.map((line, idx) => (
+        <div className="px-3 py-1 border-b border-dark-700 text-[11px] uppercase tracking-wide text-dark-400 flex items-center justify-between">
+          <span>{legend}</span>
+          <div className="flex gap-2">
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-green-500/70" />
+              <span>Added</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-red-500/70" />
+              <span>Removed</span>
+            </span>
+          </div>
+        </div>
+        <div className="max-h-56 overflow-y-auto font-mono text-[11px] text-dark-100">
+          <div className="flex sticky top-0 bg-dark-900/95 border-b border-dark-700 text-[10px] text-dark-400">
+            <div className="w-10 px-2 py-1 text-right border-r border-dark-700">Old</div>
+            <div className="w-10 px-2 py-1 text-right border-r border-dark-700">New</div>
+            <div className="w-6 px-1 py-1 text-center border-r border-dark-700"> </div>
+            <div className="flex-1 px-3 py-1">Code</div>
+          </div>
+          {diffLines.map((line, idx) => {
+            if (line.type === 'skip') {
+              return (
+                <div
+                  key={`${op.path}-skip-${idx}`}
+                  className="flex items-stretch bg-dark-900/80 text-dark-400"
+                >
+                  <div className="w-10 px-2 py-1 text-right border-r border-dark-800 text-dark-700">
+                    …
+                  </div>
+                  <div className="w-10 px-2 py-1 text-right border-r border-dark-800 text-dark-700">
+                    …
+                  </div>
+                  <div className="w-6 px-1 py-1 text-center border-r border-dark-800 text-dark-700">
+                    …
+                  </div>
+                  <div className="flex-1 px-3 py-1 italic whitespace-pre-wrap">
+                    {line.text}
+                  </div>
+                </div>
+              );
+            }
+
+            const isAdded = line.type === 'added';
+            const isRemoved = line.type === 'removed';
+            const bgClass = isAdded
+              ? 'bg-green-500/10'
+              : isRemoved
+              ? 'bg-red-500/10'
+              : 'bg-transparent';
+            const indicator = isAdded ? '+' : isRemoved ? '-' : '';
+
+            return (
             <div
               key={`${op.path}-${idx}`}
-              className="flex items-start even:bg-dark-900/40"
+                className={`flex items-stretch ${bgClass} even:bg-dark-900/40`}
             >
-              <div className="w-12 px-2 py-1 text-right text-dark-400 border-r border-dark-700">
-                {idx + 1}
+                <div className="w-10 px-2 py-1 text-right text-dark-400 border-r border-dark-800">
+                  {line.oldNumber ?? ''}
+                </div>
+                <div className="w-10 px-2 py-1 text-right text-dark-400 border-r border-dark-800">
+                  {line.newNumber ?? ''}
+                </div>
+                <div className="w-6 px-1 py-1 text-center text-[10px] border-r border-dark-800 text-dark-400">
+                  {indicator}
               </div>
               <pre className="flex-1 px-3 py-1 whitespace-pre-wrap">
-                {line || '\u00A0'}
+                  {line.text || '\u00A0'}
               </pre>
             </div>
-          ))}
-          {lines.length > limitedLines.length && (
-            <div className="px-3 py-1 text-[10px] text-dark-400 border-t border-dark-700 bg-dark-900/60">
-              +{lines.length - limitedLines.length} more lines
-            </div>
-          )}
+            );
+          })}
         </div>
       </div>
     );
@@ -1331,7 +1619,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   const renderAiPlan = (plan) => {
     if (!plan) return null;
-    const summary = plan.summary || plan.thoughts || plan.description;
+    const summary = normalizeChatInput(
+      plan.summary || plan.thoughts || plan.description || ''
+    );
     const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
 
     return (
@@ -1344,8 +1634,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         {tasks.length > 0 && (
           <div className="space-y-1">
             {tasks.slice(0, 6).map((task, idx) => {
-              const statusKey = (task.status || 'pending').toLowerCase();
+              const statusKey = String(task.status || 'pending').toLowerCase();
               const badgeClass = planStatusStyles[statusKey] || planStatusStyles.pending;
+              const title = normalizeChatInput(
+                task.title || task.summary || `Task ${idx + 1}`
+              );
+              const details =
+                task.details != null ? normalizeChatInput(task.details) : '';
               return (
                 <div
                   key={task.id || `${task.title || 'task'}-${idx}`}
@@ -1355,10 +1650,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                     {statusKey.replace('_', ' ')}
                   </span>
                   <div className="flex-1">
-                    <div className="font-medium">{task.title || task.summary || `Task ${idx + 1}`}</div>
-                    {task.details && (
+                    <div className="font-medium">{title}</div>
+                    {details && (
                       <div className="text-xs text-dark-300">
-                        {task.details}
+                        {details}
                       </div>
                     )}
                   </div>
@@ -1372,7 +1667,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   };
 
   const handleSendChat = async (message, isComposer = false) => {
-    if (!message?.trim() || isLoadingChat) return;
+    const originalMessage = message;
+    const normalizedMessage = normalizeChatInput(message);
+    const safeRawContent =
+      typeof originalMessage === 'string' ? originalMessage : normalizedMessage;
+    if (!normalizedMessage.trim() || isLoadingChat) return;
 
     const sanitizedHistory = chatMessages
       .filter(msg => msg.role === 'user' || msg.role === 'assistant')
@@ -1382,10 +1681,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         timestamp: msg.timestamp,
       }));
 
-    const modePayload = agentMode || 'ask';
-    const shouldEnableComposerMode = isComposer || agentMode !== 'ask';
+    const modePayload = (agentMode || 'agent').toLowerCase();
+    const isAgentLikeMode = modePayload === 'agent' || modePayload === 'plan';
+    const shouldEnableComposerMode = isComposer || isAgentLikeMode;
 
-    let finalMessage = message;
+    let finalMessage = normalizedMessage;
     if (activeTab) {
       const activeTag = `@${activeTab}`;
       finalMessage = finalMessage
@@ -1448,6 +1748,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       id: Date.now(),
       role: 'user',
       content: finalMessage,
+      rawContent: safeRawContent,
       timestamp: new Date().toISOString(),
       isComposer: isComposer
     };
@@ -1488,6 +1789,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         current_page: 'ide',
         mode: modePayload,
         chat_mode: modePayload,
+        web_search_mode: webSearchMode,
         default_target_file: activeTab,
         active_file: activeTab,
         active_file_content: activeTab ? openFiles.find(f => f.path === activeTab)?.content : null,
@@ -1538,15 +1840,33 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         { mode: modePayload, signal: abortController.signal }
       );
       
+      // Debug: inspect raw response payload from backend
+      // eslint-disable-next-line no-console
+      console.log('IDELayout.handleSendChat: ApiService.sendMessage response', {
+        response,
+        responseType: typeof response,
+        responseResponseType: typeof response?.response,
+      });
+      
       // Check if request was aborted
       if (abortController.signal.aborted) {
         return;
       }
 
+      const assistantContent = normalizeChatInput(response.response);
+
+      // Debug: inspect assistant content after normalization
+      // eslint-disable-next-line no-console
+      console.log('IDELayout.handleSendChat: assistantContent after normalizeChatInput', {
+        assistantContent,
+        assistantContentType: typeof assistantContent,
+      });
+
       const assistantMessage = {
         id: Date.now() + 1,
         role: 'assistant',
-        content: response.response,
+        content: assistantContent,
+        rawContent: assistantContent,
         timestamp: response.timestamp,
         plan: response.ai_plan || null
       };
@@ -1554,8 +1874,14 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setChatMessages(prev => [...prev, assistantMessage]);
 
       if (response.file_operations && response.file_operations.length > 0) {
+        const operationsWithPreviews = await buildFileOperationPreviews(
+          response.file_operations.map((op) => ({
+            ...op,
+            path: normalizeEditorPath(op.path),
+          }))
+        );
         setPendingFileOperations({
-          operations: response.file_operations,
+          operations: operationsWithPreviews,
           assistantMessageId: assistantMessage.id,
           mode: modePayload
         });
@@ -1582,12 +1908,23 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setFollowUpInput('');
   };
 
-  // Process file operations from AI response
+  // Clear any inline diff decorations in the editor
+  const clearEditorDiffDecorations = useCallback(() => {
+    if (!editorRef.current || !monacoRef.current) return;
+    editorDiffDecorationsRef.current = editorRef.current.deltaDecorations(
+      editorDiffDecorationsRef.current,
+      []
+    );
+  }, []);
+
+  // Process file operations from AI response (writes to disk and updates open files)
   const processFileOperations = async (operations) => {
     for (const op of operations) {
       try {
-        if (op.type === 'create_file') {
-          const filePath = op.path;
+        const opType = op.type;
+        const filePath = normalizeEditorPath(op.path);
+
+        if (opType === 'create_file') {
           const content = op.content || '';
           
           // Create file
@@ -1597,8 +1934,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           if (!openFiles.find(f => f.path === filePath)) {
             const fileInfo = {
               path: filePath,
-              name: filePath.split('/').pop() || filePath.split('\\').pop() || 'untitled',
-              content: content,
+              name: filePath.split('/').pop() || 'untitled',
+              content,
               language: getLanguageFromPath(filePath),
               modified: false
             };
@@ -1609,9 +1946,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           }
           
           toast.success(`Created file: ${filePath}`);
-        } else if (op.type === 'edit_file') {
-          const filePath = op.path;
-          const content = op.content;
+        } else if (opType === 'edit_file') {
+          const content = op.content || '';
           
           // Update file
           await ApiService.writeFile(filePath, content);
@@ -1620,7 +1956,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           const fileIndex = openFiles.findIndex(f => f.path === filePath);
           if (fileIndex >= 0) {
             setOpenFiles(prev => prev.map((f, idx) => 
-              idx === fileIndex ? { ...f, content: content, modified: false } : f
+              idx === fileIndex ? { ...f, content, modified: false } : f
             ));
             
             // Update editor if active
@@ -1631,8 +1967,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             // Open the file
             const fileInfo = {
               path: filePath,
-              name: filePath.split('/').pop() || filePath.split('\\').pop() || 'untitled',
-              content: content,
+              name: filePath.split('/').pop() || 'untitled',
+              content,
               language: getLanguageFromPath(filePath),
               modified: false
             };
@@ -1643,13 +1979,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           }
           
           toast.success(`Updated file: ${filePath}`);
-        } else if (op.type === 'delete_file') {
-          await ApiService.deleteFile(op.path);
+        } else if (opType === 'delete_file') {
+          await ApiService.deleteFile(filePath);
           
           // Remove from openFiles if open
-          setOpenFiles(prev => prev.filter(f => f.path !== op.path));
-          if (activeTab === op.path) {
-            const remaining = openFiles.filter(f => f.path !== op.path);
+          setOpenFiles(prev => prev.filter(f => f.path !== filePath));
+          if (activeTab === filePath) {
+            const remaining = openFiles.filter(f => f.path !== filePath);
             if (remaining.length > 0) {
               const lastFile = remaining[remaining.length - 1];
               setActiveTab(lastFile.path);
@@ -1661,13 +1997,14 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             }
           }
           
-          toast.success(`Deleted file: ${op.path}`);
+          toast.success(`Deleted file: ${filePath}`);
         }
       } catch (error) {
         console.error(`Error processing file operation ${op.type}:`, error);
         toast.error(`Failed to ${op.type} file: ${op.path}`);
       }
     }
+    clearEditorDiffDecorations();
     await refreshFileTree();
   };
 
@@ -1761,6 +2098,69 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setShowFileSuggestions(false);
     await handleSendChat(chatInput, false);
   };
+
+  const openOperationPreview = useCallback(
+    (op) => {
+      const targetPath = normalizeEditorPath(op.path);
+      const afterContent = op.afterContent || op.content || '';
+
+      // Update or create the open file entry with the AI-proposed content
+      setOpenFiles((prev) => {
+        const existingIndex = prev.findIndex((f) => f.path === targetPath);
+        const baseFile = {
+          path: targetPath,
+          name: targetPath.split('/').pop() || 'untitled',
+          content: afterContent,
+          language: getLanguageFromPath(targetPath),
+          modified: true,
+          aiPreview: true,
+        };
+
+        if (existingIndex >= 0) {
+          const next = [...prev];
+          next[existingIndex] = { ...next[existingIndex], ...baseFile };
+          return next;
+        }
+        return [...prev, baseFile];
+      });
+
+      setActiveTab(targetPath);
+      setEditorContent(afterContent);
+      setEditorLanguage(getLanguageFromPath(targetPath));
+
+      if (!editorRef.current || !monacoRef.current || !Array.isArray(op.diff)) {
+        return;
+      }
+
+      const monaco = monacoRef.current;
+      const editor = editorRef.current;
+      const model = editor.getModel();
+      if (!model) return;
+
+      const decorations = [];
+
+      op.diff.forEach((line) => {
+        if (line.type === 'added' && typeof line.newNumber === 'number') {
+          const lineNumber = line.newNumber;
+          decorations.push({
+            range: new monaco.Range(lineNumber, 1, lineNumber, 1),
+            options: {
+              isWholeLine: true,
+              className: 'ai-editor-line-added',
+              glyphMarginClassName: 'ai-editor-glyph-added',
+              glyphMarginHoverMessage: { value: 'AI: added line' },
+            },
+          });
+        }
+      });
+
+      editorDiffDecorationsRef.current = editor.deltaDecorations(
+        editorDiffDecorationsRef.current,
+        decorations
+      );
+    },
+    [getLanguageFromPath, setOpenFiles]
+  );
 
   const handleApplyPendingFileOperations = async () => {
     if (!pendingFileOperations) return;
@@ -1922,15 +2322,62 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
               style={{ width: `${leftSidebarWidth}px`, minWidth: '200px', maxWidth: '600px' }}
             >
             <div className="p-3 border-b border-dark-700">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="text-sm font-semibold text-dark-200 truncate">{projectRoot.name}</h3>
-                <button
-                  onClick={() => setLeftSidebarVisible(false)}
-                  className="p-1 hover:bg-dark-700 rounded transition-colors"
-                  title="Hide sidebar (Ctrl+B)"
-                >
-                  <X className="w-4 h-4 text-dark-400" />
-                </button>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-sm font-semibold text-dark-200 truncate">{projectRoot.name}</h3>
+                    <div className="flex items-center gap-1 text-dark-400">
+                      <button
+                        type="button"
+                        onClick={handleCreateFile}
+                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors"
+                        title="New File"
+                        aria-label="New File"
+                      >
+                        <FilePlus className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCreateFolder}
+                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors"
+                        title="New Folder"
+                        aria-label="New Folder"
+                      >
+                        <FolderPlus className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleRefreshExplorer}
+                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Refresh Explorer"
+                        aria-label="Refresh Explorer"
+                        disabled={isFileTreeLoading}
+                      >
+                        {isFileTreeLoading ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-4 h-4" />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCollapseExplorer}
+                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors"
+                        title="Collapse folders"
+                        aria-label="Collapse folders"
+                      >
+                        <Minimize2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setLeftSidebarVisible(false)}
+                    className="p-1 hover:bg-dark-700 rounded transition-colors"
+                    title="Hide sidebar (Ctrl+B)"
+                  >
+                    <X className="w-4 h-4 text-dark-400" />
+                  </button>
+                </div>
               </div>
             </div>
             <div className="flex-1 overflow-y-auto p-2">
@@ -2003,6 +2450,68 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             </div>
           )}
 
+          {pendingFileOperations && (
+            <div className="border-b border-primary-700/40 bg-primary-900/10 text-sm p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-dark-100 font-semibold">Review AI changes</h4>
+                  <p className="text-xs text-dark-300">
+                    {pendingFileOperations.operations.length} proposed change(s) from {pendingFileOperations.mode?.toUpperCase() || 'AI'}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleApplyPendingFileOperations}
+                    disabled={isApplyingFileOperations}
+                    className="px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs disabled:opacity-60"
+                  >
+                    {isApplyingFileOperations ? 'Applying…' : 'Apply'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDiscardPendingFileOperations}
+                    disabled={isApplyingFileOperations}
+                    className="px-3 py-1.5 rounded-lg border border-dark-600 text-dark-200 text-xs hover:bg-dark-800 disabled:opacity-60"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+              <div className="grid gap-3 max-h-60 overflow-y-auto">
+                {pendingFileOperations.operations.map((op, idx) => {
+                  const normalizedPath = normalizeEditorPath(op.path);
+                  const isActive = activeTab === normalizedPath;
+                  return (
+                    <div
+                      key={`${normalizedPath}-${idx}`}
+                      className="rounded-lg border border-dark-700 bg-dark-900/70 p-3 space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded bg-dark-800 text-primary-400 uppercase text-[10px]">
+                            {op.type.replace('_', ' ')}
+                          </span>
+                          <span className="text-dark-200 truncate max-w-[240px]">{normalizedPath}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openOperationPreview(op)}
+                          className={`px-2 py-0.5 rounded text-[11px] border ${
+                            isActive ? 'border-primary-500 text-primary-300 bg-primary-500/10' : 'border-dark-600 text-dark-300 hover:bg-dark-800'
+                          }`}
+                        >
+                          {isActive ? 'Viewing' : 'Open'}
+                        </button>
+                      </div>
+                      {renderOperationPreview(op)}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Editor Content */}
           <div className="flex-1 relative">
             {activeTab ? (
@@ -2010,8 +2519,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                 height="100%"
                 language={editorLanguage}
                 value={editorContent}
-                onMount={(editorInstance) => {
+                onMount={(editorInstance, monacoInstance) => {
                   editorRef.current = editorInstance;
+                  monacoRef.current = monacoInstance;
                   setIsEditorReady(true);
                 }}
                 onChange={(value) => {
@@ -2188,30 +2698,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                       e.target.style.height = Math.min(e.target.scrollHeight, 128) + 'px';
                     }}
                   />
-                  <div className="flex items-start space-x-1 pt-2">
-                    <button 
-                      type="button"
-                      onClick={() => {
-                        setComposerInput(prev => prev + '@');
-                        if (composerInputRef.current) {
-                          composerInputRef.current.focus();
-                        }
-                      }}
-                      className="hover:bg-dark-700 rounded p-1.5 transition-colors" 
-                      title="Mention"
-                    >
-                      <AtSign className="w-4 h-4 text-dark-400" />
-                    </button>
-                    <button type="button" className="hover:bg-dark-700 rounded p-1.5 transition-colors" title="Web Search">
-                      <Globe className="w-4 h-4 text-dark-400" />
-                    </button>
-                    <button type="button" className="hover:bg-dark-700 rounded p-1.5 transition-colors" title="Upload Image">
-                      <Image className="w-4 h-4 text-dark-400" />
-                    </button>
-                    <button type="button" className="hover:bg-dark-700 rounded p-1.5 transition-colors" title="Voice Input">
-                      <Mic className="w-4 h-4 text-dark-400" />
-                    </button>
-                  </div>
                 </div>
                 {showFileSuggestions && fileSuggestions.length > 0 && suggestionInputType === 'composer' && (
                   <div className="file-suggestions-container absolute top-full left-0 right-0 mt-2 w-full bg-dark-800 border border-dark-600 rounded-lg shadow-lg z-50 max-h-60 overflow-y-auto">
@@ -2236,13 +2722,14 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                 )}
                 
                 {/* Dropdown Menus */}
-                <div className="flex items-center gap-2 mt-3">
+                <div className="flex flex-wrap items-center gap-2 mt-3">
                 <div className="relative" ref={agentModeMenuRef}>
                   <button
                     type="button"
                     onClick={() => {
                       setShowAgentModeMenu(prev => !prev);
                       setShowAutoDropdown(false);
+                      setShowWebSearchMenu(false);
                     }}
                     className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
                   >
@@ -2276,6 +2763,79 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                     </div>
                   )}
                 </div>
+                <div className="flex items-center gap-1 rounded-lg border border-dark-600 bg-dark-700/40 px-2 py-1 text-dark-400">
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setComposerInput(prev => prev + '@');
+                      if (composerInputRef.current) {
+                        composerInputRef.current.focus();
+                      }
+                      setShowWebSearchMenu(false);
+                    }}
+                    className="hover:text-dark-200 transition-colors"
+                    title="Mention"
+                  >
+                    <AtSign className="w-4 h-4" />
+                  </button>
+                  <div className="relative" ref={webSearchMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowWebSearchMenu(prev => !prev);
+                        setShowAgentModeMenu(false);
+                        setShowAutoDropdown(false);
+                      }}
+                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors ${
+                        showWebSearchMenu ? 'bg-dark-600 text-dark-100' : 'hover:text-dark-200'
+                      }`}
+                      title={`Web Search (${selectedWebSearchMode.label})`}
+                    >
+                      <Globe className="w-4 h-4" />
+                      <span className="text-[10px] uppercase tracking-wide">{selectedWebSearchMode.label}</span>
+                      <ChevronDown className="w-3 h-3" />
+                    </button>
+                    {showWebSearchMenu && (
+                      <div className="absolute top-full left-0 mt-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[200px]">
+                        {webSearchOptions.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            onClick={() => {
+                              setWebSearchMode(option.id);
+                              setShowWebSearchMenu(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                              webSearchMode === option.id
+                                ? 'bg-primary-600 text-white'
+                                : 'text-dark-300 hover:bg-dark-700'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span>{option.label}</span>
+                              {webSearchMode === option.id && <CheckCircle className="w-3 h-3" />}
+                            </div>
+                            <p className="text-[10px] text-dark-500 mt-1">{option.description}</p>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="hover:text-dark-200 transition-colors"
+                    title="Upload Image"
+                  >
+                    <Image className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    className="hover:text-dark-200 transition-colors"
+                    title="Voice Input"
+                  >
+                    <Mic className="w-4 h-4" />
+                  </button>
+                </div>
                 <div className="relative group" data-auto-dropdown>
                   <button
                     type="button"
@@ -2284,6 +2844,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                       if (!showAutoDropdown && ollamaModels.length === 0) {
                         loadAvailableModels();
                       }
+                      setShowAgentModeMenu(false);
+                      setShowWebSearchMenu(false);
                     }}
                     className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
                   >
@@ -2354,24 +2916,55 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                         message.role === 'user' ? 'justify-end' : 'justify-start'
                       }`}
                     >
+                      {/* Debug: log each message as it is rendered in the IDE chat */}
+                      {(() => {
+                        // eslint-disable-next-line no-console
+                        console.log('IDELayout render chat message bubble', {
+                          id: message.id,
+                          role: message.role,
+                          content: message.content,
+                          rawContent: message.rawContent,
+                          contentType: typeof message.content,
+                          rawContentType: typeof message.rawContent,
+                        });
+                        return null;
+                      })()}
                       {message.role === 'assistant' && (
                         <Bot className="w-5 h-5 text-primary-500 mt-1 flex-shrink-0" />
                       )}
-                      <div
-                        className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
-                          message.role === 'user'
-                            ? 'bg-primary-600 text-white'
-                            : 'bg-dark-700 text-dark-200'
-                        }`}
-                      >
+                    {(() => {
+                      const normalizedContent = normalizeChatInput(
+                        message.rawContent ?? message.content
+                      );
+                      const formattedHtml = formatMessageContent(normalizedContent);
+                      // eslint-disable-next-line no-console
+                      console.log('IDELayout render formatted HTML', {
+                        id: message.id,
+                        role: message.role,
+                        normalizedContent,
+                        formattedHtml,
+                        formattedHtmlType: typeof formattedHtml,
+                      });
+                      return (
                         <div
-                          className="prose prose-invert max-w-none"
-                          dangerouslySetInnerHTML={{
-                            __html: formatMessageContent(message.content)
-                          }}
-                        />
-                        {message.plan && message.role === 'assistant' && renderAiPlan(message.plan)}
-                      </div>
+                          className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
+                            message.role === 'user'
+                              ? 'bg-primary-600 text-white'
+                              : 'bg-dark-700 text-dark-200'
+                          }`}
+                        >
+                          <div
+                            className="prose prose-invert max-w-none"
+                            dangerouslySetInnerHTML={{
+                              __html: formattedHtml,
+                            }}
+                          />
+                          {message.plan &&
+                            message.role === 'assistant' &&
+                            renderAiPlan(message.plan)}
+                        </div>
+                      );
+                    })()}
                       {message.role === 'user' && (
                         <User className="w-5 h-5 text-dark-400 mt-1 flex-shrink-0" />
                       )}
@@ -2428,53 +3021,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                     <Send className="w-4 h-4" />
                   </button>
                 </form>
-              </div>
-            )}
-
-            {pendingFileOperations && (
-              <div className="border-t border-dark-700 bg-dark-900/80 p-3 text-sm flex-shrink-0">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-semibold text-dark-100">Review AI changes</div>
-                    <div className="text-xs text-dark-400">
-                      {pendingFileOperations.operations.length} proposed change(s) from {pendingFileOperations.mode?.toUpperCase() || 'AI'} mode
-                    </div>
-                  </div>
-                  <span className="text-xs text-dark-500 uppercase">
-                    {pendingFileOperations.mode}
-                  </span>
-                </div>
-                <div className="mt-2 space-y-3 max-h-72 overflow-y-auto text-xs text-dark-100">
-                  {pendingFileOperations.operations.map((op, idx) => (
-                    <div key={`${op.path}-${idx}`} className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 rounded bg-dark-700 text-primary-400 uppercase text-[10px]">
-                          {op.type.replace('_', ' ')}
-                        </span>
-                        <span className="truncate">{op.path}</span>
-                      </div>
-                      {renderOperationPreview(op)}
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-3 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={handleApplyPendingFileOperations}
-                    disabled={isApplyingFileOperations}
-                    className="flex-1 px-3 py-2 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-sm disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    {isApplyingFileOperations ? 'Applying…' : 'Apply Changes'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDiscardPendingFileOperations}
-                    disabled={isApplyingFileOperations}
-                    className="px-3 py-2 rounded-lg border border-dark-600 text-dark-200 text-sm hover:bg-dark-800 disabled:opacity-60 disabled:cursor-not-allowed"
-                  >
-                    Dismiss
-                  </button>
-                </div>
               </div>
             )}
 
