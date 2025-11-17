@@ -29,6 +29,32 @@ def truncate_text(text: Optional[str], limit: int = 220) -> str:
 class AIService:
     """Service for interacting with local AI models via Ollama"""
     
+    METADATA_FORMAT_LINES = [
+        "Metadata format (always include this JSON block when sharing an ai_plan or file operations):",
+        "```json",
+        "{",
+        '  "ai_plan": {',
+        '    "summary": "One-sentence summary of your approach",',
+        '    "tasks": [',
+        '      {',
+        '        "id": "task-1",',
+        '        "title": "Describe the step",',
+        '        "status": "pending"',
+        '      }',
+        '    ]',
+        '  },',
+        '  "file_operations": [',
+        '    {',
+        '      "type": "create_file" | "edit_file" | "delete_file",',
+        '      "path": "file/path.ext",',
+        '      "content": "file content here"',
+        '    }',
+        '  ]',
+        "}",
+        "```",
+        "",
+    ]
+    
     def __init__(self):
         # Load from environment variables or use defaults
         self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:5000")  # Proxy server
@@ -352,6 +378,23 @@ class AIService:
         # Parse metadata from response
         cleaned_response, metadata = self._parse_response_metadata(response)
         
+        if not metadata.get("file_operations") and self._should_force_file_operations(message, cleaned_response, context):
+            fallback_cleaned, fallback_metadata = await self._generate_file_operations_metadata(
+                message=message,
+                context=context,
+                history=conversation_history or [],
+                assistant_response=cleaned_response
+            )
+            fallback_ops = fallback_metadata.get("file_operations") or []
+            if fallback_ops:
+                metadata["file_operations"] = fallback_ops
+                if fallback_metadata.get("ai_plan") and not metadata.get("ai_plan"):
+                    metadata["ai_plan"] = fallback_metadata["ai_plan"]
+                cleaned_response = (
+                    f"{cleaned_response}\n\n_(Generated concrete file operations automatically.)_"
+                    if cleaned_response else "_(Generated concrete file operations automatically.)_"
+                )
+        
         # Store conversation
         self.conversation_history[conversation_id] = {
             "messages": conversation_history or [],
@@ -430,30 +473,8 @@ class AIService:
             prompt_parts.append("If you develop a TODO plan, include it via the `ai_plan` metadata described below.")
             prompt_parts.append("")
 
+        prompt_parts.extend(self.METADATA_FORMAT_LINES)
         prompt_parts.extend([
-            "Metadata format (always include this JSON block when sharing an ai_plan or file operations):",
-            "```json",
-            "{",
-            '  "ai_plan": {',
-            '    "summary": "One-sentence summary of your approach",',
-            '    "tasks": [',
-            '      {',
-            '        "id": "task-1",',
-            '        "title": "Describe the step",',
-            '        "status": "pending"',
-            '      }',
-            '    ]',
-            '  },',
-            '  "file_operations": [',
-            '    {',
-            '      "type": "create_file" | "edit_file" | "delete_file",',
-            '      "path": "file/path.ext",',
-            '      "content": "file content here"',
-            '    }',
-            '  ]',
-            "}",
-            "```",
-            "",
             "Always provide practical, working code examples. Be concise but thorough.",
             "",
             "ABSOLUTE RULES:",
@@ -541,6 +562,95 @@ class AIService:
         prompt_parts.append("ASSISTANT RESPONSE:")
         
         return "\n".join(prompt_parts)
+    
+    def _is_agent_context(self, context: Dict[str, Any]) -> bool:
+        if not context:
+            return False
+        mode_value = (context.get("mode") or "").lower()
+        chat_mode_value = (context.get("chat_mode") or "").lower()
+        if context.get("composer_mode"):
+            return True
+        return mode_value in ("agent", "plan") or chat_mode_value in ("agent", "plan")
+    
+    def _should_force_file_operations(
+        self,
+        message: str,
+        assistant_response: str,
+        context: Dict[str, Any]
+    ) -> bool:
+        if not self._is_agent_context(context):
+            return False
+        
+        combined = f"{message or ''}\n{assistant_response or ''}".lower()
+        keywords = [
+            "fix", "update", "change", "modify", "refactor",
+            "implement", "add ", "remove", "rewrite", "improve",
+            "adjust", "patch", "bug", "issue", "error"
+        ]
+        contains_keyword = any(keyword in combined for keyword in keywords)
+        has_code_block = "```" in (assistant_response or "")
+        mentions_file_section = "file operation" in combined
+        has_context_files = bool(context.get("active_file") or context.get("mentioned_files"))
+        
+        return contains_keyword or has_code_block or mentions_file_section or has_context_files
+    
+    async def _generate_file_operations_metadata(
+        self,
+        message: str,
+        context: Dict[str, Any],
+        history: List[Dict[str, str]],
+        assistant_response: str
+    ) -> Tuple[str, Dict[str, Any]]:
+        history_lines = []
+        for item in history[-4:]:
+            role = item.get("role", "assistant").title()
+            snippet = truncate_text(item.get("content", ""), 400)
+            history_lines.append(f"{role}: {snippet}")
+        history_text = "\n".join(history_lines) if history_lines else "None"
+        
+        context_snapshot = ""
+        if context:
+            try:
+                context_snapshot = truncate_text(json.dumps(context, indent=2), 2000)
+            except Exception:
+                context_snapshot = truncate_text(str(context), 2000)
+        
+        prompt_lines = [
+            "You previously responded to the developer but failed to include the required file_operations metadata.",
+            "Your last assistant response (for reference):",
+            truncate_text(assistant_response or "", 2000),
+            "",
+            "The developer's original request:",
+            truncate_text(message or "", 1000),
+            "",
+        ]
+        
+        if context_snapshot:
+            prompt_lines.extend([
+                "Workspace context snapshot:",
+                context_snapshot,
+                "",
+            ])
+        
+        prompt_lines.append("Recent conversation history:")
+        prompt_lines.append(history_text)
+        prompt_lines.append("")
+        prompt_lines.append(
+            "Provide ONLY the JSON metadata block that includes ai_plan and file_operations as previously specified."
+        )
+        prompt_lines.extend(self.METADATA_FORMAT_LINES)
+        prompt_lines.append("Respond with JSON only. Do not include prose, explanations, or markdown headings.")
+        prompt_lines.append("If no file changes are actually required, return an empty file_operations array.")
+        
+        fallback_prompt = "\n".join(prompt_lines)
+        
+        try:
+            fallback_response = await self._call_ollama(fallback_prompt)
+        except Exception as error:
+            print(f"Failed to regenerate file operations metadata: {error}")
+            return "", {"file_operations": [], "ai_plan": None}
+        
+        return self._parse_response_metadata(fallback_response)
     
     async def _call_ollama(self, prompt: str) -> str:
         """Make API call to Ollama"""
