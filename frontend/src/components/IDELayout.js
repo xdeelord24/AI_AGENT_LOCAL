@@ -568,6 +568,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [terminalOutput, setTerminalOutput] = useState([]);
   const [terminalInput, setTerminalInput] = useState('');
   const [isTerminalBusy, setIsTerminalBusy] = useState(false);
+  const [isStoppingTerminal, setIsStoppingTerminal] = useState(false);
   const [terminalShells, setTerminalShells] = useState([]);
   const [isLoadingTerminalShells, setIsLoadingTerminalShells] = useState(false);
   const [selectedTerminalShellId, setSelectedTerminalShellId] = useState(null);
