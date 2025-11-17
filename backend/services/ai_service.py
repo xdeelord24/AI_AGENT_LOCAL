@@ -238,11 +238,18 @@ class AIService:
         if not mentioned_files and not active_file:
             add_status("grep_workspace", "Grepping workspace for references", 650)
 
-        add_status("context", "Reviewing project context and open files", 700)
+        add_status("context", "Collecting workspace structure, open files, and directory info", 700)
 
         mode_value = (context.get("mode") or context.get("chat_mode") or "").lower()
-        if mode_value in ("agent", "plan") or context.get("composer_mode"):
-            add_status("planning", "Planning next implementation steps", 850)
+        web_mode = (context.get("web_search_mode") or "").lower()
+        agent_like = mode_value in ("agent", "plan") or context.get("composer_mode")
+
+        if web_mode in ("browser_tab", "google_chrome"):
+            add_status("web_lookup", "Reviewing latest web search findings", 650)
+
+        if agent_like:
+            add_status("subtasks", "Breaking work into actionable subtasks", 650)
+            add_status("planning", "Sequencing tasks for execution", 750)
         else:
             add_status("planning", "Preparing direct response", 700)
 
@@ -260,7 +267,11 @@ class AIService:
         else:
             add_status("drafting", "Drafting potential code changes", 750)
 
-        add_status("finalizing", "Reviewing updates and finalizing answer", 500)
+        if agent_like:
+            add_status("progress", "Monitoring TODO progress and updating task statuses", 600)
+
+        add_status("verification", "Verifying updates and running quick checks", 600)
+        add_status("reporting", "Reporting outcomes and next steps", 500)
 
         return statuses
     
@@ -522,12 +533,19 @@ class AIService:
         if is_agent_mode:
             prompt_parts.extend([
                 "AGENT MODE REQUIREMENTS:",
-                "- Think step-by-step before responding.",
-                "- Create a concise TODO list (max 5 items) describing how you will fulfill the request.",
-                "- Each task must include an id, title, and status (`pending`, `in_progress`, or `completed`).",
+                "- Think step-by-step before responding and explicitly narrate your reasoning.",
+                "- Break large requests into 3–6 concrete subtasks that flow through this lifecycle: gather information ➜ plan ➜ implement ➜ verify ➜ report.",
+                "- Always begin with at least one information-gathering task (inspect mentioned files, open files, file_tree_structure, or provided web_search_results when browsing is enabled) and actually perform it before you present the plan.",
+                "- Maintain a TODO list (max 5 items) where every task has an id, title, and status (`pending`, `in_progress`, or `completed`). Update statuses as you make progress so the user can monitor it.",
                 "- Include this plan in the `ai_plan` metadata described below even if no file changes are required.",
+                "- After planning, proactively execute the tasks: gather the requested information, produce concrete file edits (via file_operations), or clearly state which files/commands you ran.",
+                "- When creating or editing files, emit the necessary file_operations and then immediately move on to the next task—do not stop after the first modification if other tasks remain.",
+                "- Only mark a task as `completed` if you actually performed that step in the current response. Mark the task you are actively doing as `in_progress`; leave future work as `pending`.",
+                "- Do not leave tasks pending unless you hit a hard blocker; otherwise continue working until every task is marked `completed` within this response.",
+                "- Add a verification task (linting, reasoning, or test strategy) before reporting back, and end with a reporting task that summarizes outcomes and remaining risks.",
                 "- When the user references a specific file or when composer_mode is true, you MUST produce concrete file edits, not just a plan.",
                 "- Plans are only helpful if they are followed by actual file_operations that apply the requested changes.",
+                "- When web_search_mode is not 'off', treat the supplied web_search_results as part of your information-gathering step—never claim you lack browsing ability.",
                 ""
             ])
         else:

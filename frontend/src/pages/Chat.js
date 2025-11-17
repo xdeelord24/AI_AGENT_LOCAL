@@ -10,6 +10,7 @@ import { detectNewScriptIntent } from '../utils/intentDetection';
 import toast from 'react-hot-toast';
 
 const MAX_FILE_SNIPPET = 5000;
+const PLAN_PREVIEW_DELAY_MS = 350;
 
 const extractMentionPaths = (text = '') => {
   const regex = /@([^\s]+)/g;
@@ -162,6 +163,7 @@ const Chat = () => {
   };
 
   const [agentStatuses, setAgentStatuses] = useState([]);
+  const [thinkingAiPlan, setThinkingAiPlan] = useState(null);
   const selectedWebSearchMode =
     webSearchOptions.find((mode) => mode.id === webSearchMode) || webSearchOptions[0];
 
@@ -214,6 +216,15 @@ const Chat = () => {
       </div>
     );
   };
+
+  const previewAiPlanBeforeAnswer = useCallback(async (plan) => {
+    if (!plan) {
+      setThinkingAiPlan(null);
+      return;
+    }
+    setThinkingAiPlan(plan);
+    await new Promise((resolve) => setTimeout(resolve, PLAN_PREVIEW_DELAY_MS));
+  }, [setThinkingAiPlan]);
 
   const clearAgentStatuses = useCallback(() => {
     agentStatusTimersRef.current.forEach((timerId) => clearTimeout(timerId));
@@ -361,6 +372,7 @@ useEffect(() => {
     } else {
       setInputMessage('');
     }
+    setThinkingAiPlan(null);
     setIsLoading(true);
   
     try {
@@ -440,6 +452,9 @@ useEffect(() => {
         responseResponseType: typeof response?.response,
       });
 
+      const assistantPlan = response.ai_plan || null;
+      await previewAiPlanBeforeAnswer(assistantPlan);
+
       const assistantContent = normalizeMessageInput(response.response);
 
       // Debug: inspect assistant content after normalization
@@ -455,7 +470,7 @@ useEffect(() => {
         content: assistantContent,
         rawContent: assistantContent,
         timestamp: response.timestamp,
-        plan: response.ai_plan || null
+        plan: assistantPlan
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -510,6 +525,8 @@ useEffect(() => {
           ]);
         }
       }
+      setIsLoading(false);
+      setThinkingAiPlan(null);
     } catch (error) {
       console.error('Error sending message:', error);
       toast.error('Failed to send message. Please check your connection.');
@@ -523,8 +540,9 @@ useEffect(() => {
       };
       
       setMessages(prev => [...prev, errorMessage]);
-    } finally {
       setIsLoading(false);
+      setThinkingAiPlan(null);
+    } finally {
       clearAgentStatuses();
       setThinkingStart(null);
     }
@@ -801,6 +819,11 @@ useEffect(() => {
                             <span>{status.label}</span>
                           </div>
                         ))}
+                      </div>
+                    )}
+                    {thinkingAiPlan && (
+                      <div className="pt-3 border-t border-dark-800">
+                        <PlanCard plan={thinkingAiPlan} />
                       </div>
                     )}
                   </div>

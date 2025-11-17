@@ -1,19 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Toaster } from 'react-hot-toast';
 import IDELayout from './components/IDELayout';
 import { ApiService } from './services/api';
+
+const CONNECTION_CHECK_INTERVAL_MS = 5000;
 
 function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [currentModel, setCurrentModel] = useState('codellama');
   const [availableModels, setAvailableModels] = useState([]);
 
-  useEffect(() => {
-    checkConnection();
-    loadModels();
-  }, []);
-
-  const checkConnection = async () => {
+  const checkConnection = useCallback(async () => {
     try {
       const response = await ApiService.get('/health');
       setIsConnected(response.status === 'healthy');
@@ -21,16 +18,39 @@ function App() {
       console.error('Connection check failed:', error);
       setIsConnected(false);
     }
-  };
+  }, []);
 
-  const loadModels = async () => {
+  const loadModels = useCallback(async () => {
     try {
       const response = await ApiService.get('/api/chat/models');
       setAvailableModels(response.models || []);
     } catch (error) {
       console.error('Failed to load models:', error);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    let intervalId;
+
+    const startMonitoring = () => {
+      checkConnection();
+      intervalId = setInterval(checkConnection, CONNECTION_CHECK_INTERVAL_MS);
+    };
+
+    startMonitoring();
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [checkConnection]);
+
+  useEffect(() => {
+    if (isConnected) {
+      loadModels();
+    }
+  }, [isConnected, loadModels]);
 
   const selectModel = async (modelName) => {
     try {

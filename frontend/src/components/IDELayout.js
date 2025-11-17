@@ -45,6 +45,7 @@ const MAX_TERMINAL_HISTORY = 500;
 const TERMINAL_HISTORY_STORAGE_KEY = 'terminalHistory';
 const COMPLETION_LIST_COLUMNS = 4;
 const QUICK_TERMINAL_COMMANDS = ['ls', 'dir', 'pwd'];
+const PLAN_PREVIEW_DELAY_MS = 350;
 const MAX_FILE_SUGGESTIONS = 10;
 
 // Simple line-based diff to power inline change previews for file operations
@@ -278,6 +279,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [chatStatus, setChatStatus] = useState(null);
   const [isLoadingStatus, setIsLoadingStatus] = useState(false);
   const [showConnectivityPanel, setShowConnectivityPanel] = useState(false);
+  const [thinkingAiPlan, setThinkingAiPlan] = useState(null);
   const [connectivitySettings, setConnectivitySettings] = useState(null);
   const [isConnectivityLoading, setIsConnectivityLoading] = useState(false);
   const [isConnectivitySaving, setIsConnectivitySaving] = useState(false);
@@ -502,23 +504,38 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setIsTestingConnectivity(true);
     try {
       const response = await ApiService.testOllamaConnection();
-      if (response.connected) {
-        toast.success('Ollama connection successful');
-        // Update available models from test response if available
-        if (response.available_models && response.available_models.length > 0) {
+      const isConnected = !!response?.connected;
+      const statusMessage =
+        response?.message ||
+        (isConnected ? 'Ollama connection successful' : 'Ollama connection failed');
+
+      if (isConnected) {
+        toast.success(statusMessage);
+        if (Array.isArray(response?.available_models) && response.available_models.length > 0) {
           setOllamaModels(response.available_models);
         } else {
-          // Otherwise fetch them separately
           await loadAvailableModels();
         }
       } else {
-        toast.error(response.message || 'Ollama connection failed');
+        toast.error(statusMessage);
       }
-      const status = await ApiService.getChatStatus();
-      setChatStatus(status);
+
+      try {
+        const status = await ApiService.getChatStatus();
+        setChatStatus(status);
+      } catch (statusError) {
+        console.warn('Failed to refresh chat status after connectivity test', statusError);
+      }
     } catch (error) {
       console.error('Failed to test connectivity:', error);
-      toast.error('Failed to test Ollama connection');
+      const detail =
+        error?.response?.data?.detail ||
+        error?.message ||
+        'Failed to test Ollama connection';
+      const message = detail.includes('Failed to test')
+        ? detail
+        : `Failed to test Ollama connection: ${detail}`;
+      toast.error(message);
     } finally {
       setIsTestingConnectivity(false);
     }
@@ -2038,6 +2055,15 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     );
   };
 
+  const previewAiPlanBeforeAnswer = useCallback(async (plan) => {
+    if (!plan) {
+      setThinkingAiPlan(null);
+      return;
+    }
+    setThinkingAiPlan(plan);
+    await new Promise((resolve) => setTimeout(resolve, PLAN_PREVIEW_DELAY_MS));
+  }, [setThinkingAiPlan]);
+
   const handleSendChat = async (message, isComposer = false) => {
     const originalMessage = message;
     const normalizedMessage = normalizeChatInput(message);
@@ -2132,6 +2158,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     } else {
       setChatInput('');
     }
+    setThinkingAiPlan(null);
     setIsLoadingChat(true);
     setShowFileSuggestions(false);
 
@@ -2235,8 +2262,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       
       // Check if request was aborted
       if (abortController.signal.aborted) {
+        setIsLoadingChat(false);
+        setThinkingAiPlan(null);
         return;
       }
+
+      const assistantPlan = response.ai_plan || null;
+      await previewAiPlanBeforeAnswer(assistantPlan);
 
       const assistantContent = normalizeChatInput(response.response);
 
@@ -2253,7 +2285,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         content: assistantContent,
         rawContent: assistantContent,
         timestamp: response.timestamp,
-        plan: response.ai_plan || null
+        plan: assistantPlan
       };
 
       setChatMessages(prev => [...prev, assistantMessage]);
@@ -2271,6 +2303,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           mode: modePayload
         });
       }
+      setIsLoadingChat(false);
+      setThinkingAiPlan(null);
     } catch (error) {
       if (error.name === 'AbortError' || abortController.signal.aborted) {
         toast('Chat stopped');
@@ -2278,8 +2312,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         console.error('Error sending message:', error);
         toast.error(error.response?.data?.detail || 'Failed to send message');
       }
-    } finally {
       setIsLoadingChat(false);
+      setThinkingAiPlan(null);
+    } finally {
       setChatAbortController(null);
       clearAgentStatuses();
     }
@@ -3330,19 +3365,24 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                   {isLoadingChat && (
                     <div className="flex space-x-2">
                       <Bot className="w-5 h-5 text-primary-500 mt-1" />
-                  <div className="bg-dark-700 px-3 py-2 rounded-lg">
-                    <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
-                    {agentStatuses.length > 0 && (
-                      <div className="mt-2 space-y-1 text-xs text-dark-300">
-                        {agentStatuses.map((status) => (
-                          <div key={status.key} className="flex items-center gap-2">
-                            <Loader2 className="w-3 h-3 animate-spin text-primary-500" />
-                            <span>{status.label}</span>
+                      <div className="bg-dark-700 px-3 py-2 rounded-lg">
+                        <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
+                        {agentStatuses.length > 0 && (
+                          <div className="mt-2 space-y-1 text-xs text-dark-300">
+                            {agentStatuses.map((status) => (
+                              <div key={status.key} className="flex items-center gap-2">
+                                <Loader2 className="w-3 h-3 animate-spin text-primary-500" />
+                                <span>{status.label}</span>
+                              </div>
+                            ))}
                           </div>
-                        ))}
+                        )}
+                        {thinkingAiPlan && (
+                          <div className="mt-3 border-t border-dark-600 pt-3">
+                            {renderAiPlan(thinkingAiPlan)}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
                     </div>
                   )}
                 </div>
