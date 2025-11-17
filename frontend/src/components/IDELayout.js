@@ -927,7 +927,23 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     } finally {
       setIsTerminalBusy(false);
     }
-  }, [appendTerminalLine, ensureTerminalVisible, terminalCwd, terminalSessionId, isTerminalBusy]);
+  }, [appendTerminalLine, ensureTerminalVisible, terminalCwd, terminalSessionId, isTerminalBusy, processTerminalResponse]);
+
+  const handleStopTerminalCommand = useCallback(async () => {
+    if (!terminalSessionId || !isTerminalBusy || isStoppingTerminal) {
+      return;
+    }
+    setIsStoppingTerminal(true);
+    try {
+      const response = await ApiService.stopTerminalCommand(terminalSessionId);
+      processTerminalResponse(response, { showExitCode: false });
+    } catch (error) {
+      console.error('Error interrupting terminal command:', error);
+      appendTerminalLine(error.response?.data?.detail || error.message, 'error');
+    } finally {
+      setIsStoppingTerminal(false);
+    }
+  }, [appendTerminalLine, isStoppingTerminal, isTerminalBusy, processTerminalResponse, terminalSessionId]);
 
   const handleTerminalInputKeyDown = async (e) => {
     if (e.key === 'Enter' && !isTerminalBusy) {
@@ -3166,9 +3182,23 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                     </div>
                   ))}
                   {isTerminalBusy && (
-                    <div className="flex items-center text-dark-500">
-                      <Loader2 className="w-3 h-3 mr-2 animate-spin" />
-                      <span>Running...</span>
+                    <div className="flex items-center text-dark-500 space-x-3">
+                      <div className="flex items-center">
+                        <Loader2 className="w-3 h-3 mr-2 animate-spin" />
+                        <span>{isStoppingTerminal ? 'Stopping...' : 'Running...'}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleStopTerminalCommand}
+                        disabled={isStoppingTerminal}
+                        className={`text-xs px-2 py-1 rounded border border-dark-600 transition-colors ${
+                          isStoppingTerminal
+                            ? 'text-dark-600 cursor-not-allowed'
+                            : 'text-red-400 hover:text-red-300 border-red-500/50'
+                        }`}
+                      >
+                        Stop
+                      </button>
                     </div>
                   )}
                 </div>
