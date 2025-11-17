@@ -11,6 +11,157 @@ import toast from 'react-hot-toast';
 
 const MAX_FILE_SNIPPET = 5000;
 const PLAN_PREVIEW_DELAY_MS = 350;
+const MAX_PENDING_FILE_OP_PREVIEW = 6;
+
+const formatDuration = (ms = 0) => {
+  if (ms == null || Number.isNaN(ms)) {
+    return '—';
+  }
+  if (ms < 1000) {
+    return '<1s';
+  }
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  return `${seconds}s`;
+};
+
+const summarizePrompt = (text = '', limit = 80) => {
+  const trimmed = (text || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (trimmed.length <= limit) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, limit - 1)}…`;
+};
+
+const CollapsibleSection = ({
+  title,
+  badge,
+  defaultCollapsed = false,
+  children,
+  accent = 'primary'
+}) => {
+  const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
+  const borderClass =
+    accent === 'primary'
+      ? 'border-primary-700/40 bg-dark-900/60'
+      : 'border-dark-700 bg-dark-900/60';
+
+  return (
+    <div className={`rounded-2xl border ${borderClass} p-3 space-y-3`}>
+      <button
+        type="button"
+        onClick={() => setIsCollapsed((prev) => !prev)}
+        className="w-full flex items-center justify-between gap-3 text-sm text-dark-200"
+      >
+        <span className="font-medium">{title}</span>
+        <div className="flex items-center gap-2 text-xs text-dark-400">
+          {badge && (
+            <span className="px-2 py-0.5 rounded-full border border-dark-600 text-[11px] uppercase tracking-wide">
+              {badge}
+            </span>
+          )}
+          <ChevronDown
+            className={`w-4 h-4 transition-transform ${isCollapsed ? '' : 'rotate-180'}`}
+          />
+        </div>
+      </button>
+      {!isCollapsed && <div className="space-y-2">{children}</div>}
+    </div>
+  );
+};
+
+const ActivityTimeline = ({
+  timeline = [],
+  title = 'AI workflow activity',
+  defaultCollapsed = false,
+  isLive = false,
+}) => {
+  if (!Array.isArray(timeline) || timeline.length === 0) {
+    return null;
+  }
+
+  const normalizedTimeline = timeline.map((step, idx) => {
+    const activatedAt =
+      step.activatedAt ??
+      (step.started_at ? Date.parse(step.started_at) : Date.now());
+    const durationMs =
+      step.durationMs ??
+      step.duration_ms ??
+      (step.completedAt && activatedAt ? Math.max(0, step.completedAt - activatedAt) : 0);
+    const completedAt =
+      step.completedAt ??
+      (durationMs && activatedAt ? activatedAt + durationMs : null);
+    return {
+      key: step.key || `step-${idx}`,
+      label: step.label || `Step ${idx + 1}`,
+      activatedAt,
+      completedAt,
+      durationMs: durationMs || null,
+    };
+  });
+
+  const now = isLive ? Date.now() : null;
+
+  return (
+    <CollapsibleSection
+      title={title}
+      defaultCollapsed={defaultCollapsed}
+      badge={`${normalizedTimeline.length} step${normalizedTimeline.length === 1 ? '' : 's'}`}
+      accent="dark"
+    >
+      <ol className="space-y-2 text-sm text-dark-100">
+        {normalizedTimeline.map((step, idx) => {
+          const activatedAt = step.activatedAt || Date.now();
+          const baselineDuration = step.durationMs ? Math.max(0, step.durationMs) : 0;
+          const isRunning = isLive && !step.completedAt;
+          const runningDuration = isRunning && now ? Math.max(0, now - activatedAt) : baselineDuration;
+          const durationLabel = runningDuration ? formatDuration(runningDuration) : '—';
+          const chipText = isRunning ? `${durationLabel} • live` : durationLabel;
+          const borderClass = isRunning
+            ? 'border-primary-700/60 bg-primary-900/10 text-primary-100'
+            : 'border-dark-700 bg-dark-800/70 text-dark-100';
+
+          return (
+            <li
+              key={`${step.key}-${idx}`}
+              className={`flex items-center justify-between gap-3 rounded-xl px-3 py-2 ${borderClass}`}
+            >
+              <div className="flex items-center gap-3">
+                <span
+                  className={`px-2 py-0.5 rounded-full border text-[11px] uppercase tracking-wide ${
+                    isRunning ? 'border-primary-600 text-primary-200' : 'border-dark-600 text-dark-300'
+                  }`}
+                >
+                  {idx + 1}
+                </span>
+                <div className="flex flex-col">
+                  <span className="font-semibold text-sm">
+                    {`${durationLabel} • ${step.label}`}
+                  </span>
+                  {!isRunning && baselineDuration > 0 && (
+                    <span className="text-[11px] text-dark-400">
+                      Finished after {formatDuration(baselineDuration)}
+                    </span>
+                  )}
+                  {isRunning && (
+                    <span className="text-[11px] text-primary-200">
+                      In progress — started {formatDuration(Math.max(1, runningDuration))} ago
+                    </span>
+                  )}
+                </div>
+              </div>
+              <span className={`text-xs font-mono ${isRunning ? 'text-primary-200' : 'text-dark-400'}`}>
+                {chipText}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </CollapsibleSection>
+  );
+};
 
 const extractMentionPaths = (text = '') => {
   const regex = /@([^\s]+)/g;
@@ -153,7 +304,6 @@ const Chat = () => {
   const [thinkingStart, setThinkingStart] = useState(null);
   const [thinkingElapsed, setThinkingElapsed] = useState(0);
   const messagesEndRef = useRef(null);
-  const agentStatusTimersRef = useRef([]);
 
   const planStatusStyles = {
     completed: 'border-green-700 bg-green-500/10 text-green-300',
@@ -164,6 +314,10 @@ const Chat = () => {
 
   const [agentStatuses, setAgentStatuses] = useState([]);
   const [thinkingAiPlan, setThinkingAiPlan] = useState(null);
+  const [pendingFileOpsQueue, setPendingFileOpsQueue] = useState([]);
+  const thinkingPlanTaskCount = Array.isArray(thinkingAiPlan?.tasks)
+    ? thinkingAiPlan.tasks.length
+    : 0;
   const selectedWebSearchMode =
     webSearchOptions.find((mode) => mode.id === webSearchMode) || webSearchOptions[0];
 
@@ -227,24 +381,22 @@ const Chat = () => {
   }, [setThinkingAiPlan]);
 
   const clearAgentStatuses = useCallback(() => {
-    agentStatusTimersRef.current.forEach((timerId) => clearTimeout(timerId));
-    agentStatusTimersRef.current = [];
     setAgentStatuses([]);
   }, []);
 
-  const scheduleAgentStatuses = useCallback((statuses = []) => {
-    clearAgentStatuses();
-    statuses.forEach((status) => {
-      const timerId = setTimeout(() => {
-        setAgentStatuses((prev) => {
-          if (prev.find((item) => item.key === status.key)) {
-            return prev;
-          }
-          return [...prev, status];
-        });
-      }, Math.max(status.delay_ms ?? 0, 0));
-      agentStatusTimersRef.current.push(timerId);
-    });
+  const showThinkingStatus = useCallback((label) => {
+    if (!label) {
+      clearAgentStatuses();
+      return;
+    }
+    const now = Date.now();
+    setAgentStatuses([{
+      key: `thinking-${now}`,
+      label,
+      activatedAt: now,
+      completedAt: null,
+      durationMs: null,
+    }]);
   }, [clearAgentStatuses]);
 
   useEffect(() => {
@@ -312,6 +464,83 @@ const Chat = () => {
     return summary;
   }, []);
 
+  const appendFileOpsSummaryMessage = useCallback(
+    (summary) => {
+      const appliedCount = summary?.applied?.length || 0;
+      const failedCount = summary?.failed?.length || 0;
+
+      if (!appliedCount && !failedCount) {
+        return;
+      }
+
+      const summaryLines = [];
+
+      if (appliedCount) {
+        summaryLines.push(
+          `Applied ${appliedCount} change${appliedCount > 1 ? 's' : ''}:`
+        );
+        summary.applied.forEach((op) => {
+          summaryLines.push(`- ${op.type.replace('_', ' ')} \`${op.path}\``);
+        });
+      }
+
+      if (failedCount) {
+        if (summaryLines.length) {
+          summaryLines.push('');
+        }
+        summaryLines.push(
+          `Failed ${failedCount} change${failedCount > 1 ? 's' : ''}:`
+        );
+        summary.failed.forEach((op) => {
+          summaryLines.push(`- ${op.type.replace('_', ' ')} \`${op.path}\``);
+        });
+      }
+
+      const content = summaryLines.join('\n');
+      const opsMessage = {
+        id: Date.now() + 2,
+        role: 'assistant',
+        content,
+        rawContent: content,
+        timestamp: new Date().toISOString()
+      };
+
+      setMessages((prev) => [...prev, opsMessage]);
+      setConversationHistory((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: opsMessage.content,
+          timestamp: opsMessage.timestamp
+        }
+      ]);
+    },
+    [setMessages, setConversationHistory]
+  );
+
+  const handleApplyPendingFileOps = useCallback(
+    async (entry) => {
+      if (!entry?.operations?.length) {
+        toast.error('No file changes to apply.');
+        setPendingFileOpsQueue((prev) => prev.filter((item) => item.id !== entry?.id));
+        return;
+      }
+
+      const summary = await applyFileOperations(entry.operations);
+      appendFileOpsSummaryMessage(summary);
+      setPendingFileOpsQueue((prev) => prev.filter((item) => item.id !== entry.id));
+    },
+    [applyFileOperations, appendFileOpsSummaryMessage, setPendingFileOpsQueue]
+  );
+
+  const handleDeclinePendingFileOps = useCallback(
+    (entryId) => {
+      setPendingFileOpsQueue((prev) => prev.filter((item) => item.id !== entryId));
+      toast('AI file changes discarded.');
+    },
+    [setPendingFileOpsQueue]
+  );
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -344,6 +573,24 @@ useEffect(() => {
     if (!normalizedMessage.trim() || isLoading) return;
 
     const trimmedMessage = normalizedMessage.trim();
+    const modePayload = (agentMode || 'agent').toLowerCase();
+    const isAgentLikeMode = modePayload === 'agent' || modePayload === 'plan';
+    const composerModeEnabled = isComposer || isAgentLikeMode;
+    const shouldShowAgentStatuses = composerModeEnabled;
+    const triggerPhase = (key, label) => {
+      if (!shouldShowAgentStatuses) {
+        return;
+      }
+      if (key === 'thinking') {
+        showThinkingStatus(label);
+      }
+    };
+
+    clearAgentStatuses();
+    const initialLabel = trimmedMessage
+      ? `Thinking about: ${summarizePrompt(trimmedMessage, 90)}`
+      : 'Thinking about the new request…';
+    triggerPhase('thinking', initialLabel);
     setThinkingStart(Date.now());
     setThinkingElapsed(0);
     setLastUserPrompt(trimmedMessage);
@@ -376,13 +623,10 @@ useEffect(() => {
     setIsLoading(true);
   
     try {
-      const modePayload = (agentMode || 'agent').toLowerCase();
-      // Treat both agent and plan as "agent-like" modes that should keep the agent behavior active
-      const isAgentLikeMode = modePayload === 'agent' || modePayload === 'plan';
-      const composerModeEnabled = isComposer || isAgentLikeMode;
-      const shouldShowAgentStatuses = composerModeEnabled;
+      triggerPhase('analysis', 'Analyzing context and recent history');
       const mentionPaths = extractMentionPaths(normalizedMessage);
       const mentionFiles = mentionPaths.length > 0 ? await loadMentionedFiles(mentionPaths) : [];
+      triggerPhase('grepping', 'Grepping workspace for references');
       const isNewScriptRequest = detectNewScriptIntent(trimmedMessage);
 
       const context = {
@@ -424,18 +668,10 @@ useEffect(() => {
           context.open_files = [];
         }
       }
-
-      if (shouldShowAgentStatuses) {
-        ApiService.previewAgentStatuses(normalizedMessage, context)
-          .then((preview) => {
-            if (preview?.agent_statuses?.length) {
-              scheduleAgentStatuses(preview.agent_statuses);
-            }
-          })
-          .catch((error) => {
-            console.warn('Failed to load agent status preview', error);
-          });
-      }
+      triggerPhase('collecting', 'Collecting workspace structure, open files, and directory info');
+      triggerPhase('subtasks', 'Breaking work into actionable subtasks');
+      triggerPhase('sequencing', 'Sequencing tasks for execution');
+      triggerPhase('drafting', 'Drafting potential code changes');
 
       const response = await ApiService.sendMessage(
         normalizedMessage,
@@ -443,6 +679,7 @@ useEffect(() => {
         conversationHistory,
         { mode: modePayload }
       );
+      triggerPhase('monitoring', 'Monitoring TODO progress and updating task statuses');
 
       // Debug: inspect raw response payload from backend
       // eslint-disable-next-line no-console
@@ -470,7 +707,10 @@ useEffect(() => {
         content: assistantContent,
         rawContent: assistantContent,
         timestamp: response.timestamp,
-        plan: assistantPlan
+        plan: assistantPlan,
+        ...(Array.isArray(response.activity_log) && response.activity_log.length
+          ? { activityLog: response.activity_log }
+          : {})
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -484,47 +724,17 @@ useEffect(() => {
       ]);
 
       if (response.file_operations?.length) {
-        const summary = await applyFileOperations(response.file_operations);
-
-        if (summary.applied.length || summary.failed.length) {
-          const summaryLines = [];
-
-          if (summary.applied.length) {
-            summaryLines.push(
-              `Applied ${summary.applied.length} change${summary.applied.length > 1 ? 's' : ''}:`
-            );
-            summary.applied.forEach((op) => {
-              summaryLines.push(`- ${op.type.replace('_', ' ')} \`${op.path}\``);
-            });
-          }
-
-          if (summary.failed.length) {
-            summaryLines.push('');
-            summaryLines.push(`Failed ${summary.failed.length} change${summary.failed.length > 1 ? 's' : ''}:`);
-            summary.failed.forEach((op) => {
-              summaryLines.push(`- ${op.type.replace('_', ' ')} \`${op.path}\``);
-            });
-          }
-
-          const opsMessage = {
-            id: Date.now() + 2,
-            role: 'assistant',
-            content: summaryLines.join('\n'),
-            rawContent: summaryLines.join('\n'),
-            timestamp: new Date().toISOString()
-          };
-
-          setMessages(prev => [...prev, opsMessage]);
-          setConversationHistory(prev => [
-            ...prev,
-            {
-              role: 'assistant',
-              content: opsMessage.content,
-              timestamp: opsMessage.timestamp
-            }
-          ]);
-        }
+        const pendingEntry = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          operations: response.file_operations,
+          receivedAt: new Date().toISOString(),
+          sourceMessageId: assistantMessage.id
+        };
+        setPendingFileOpsQueue((prev) => [...prev, pendingEntry]);
+        toast.success('Review the pending AI file changes before applying them.');
       }
+      triggerPhase('verifying', 'Verifying updates and running quick checks');
+      triggerPhase('reporting', 'Reporting outcomes and next steps');
       setIsLoading(false);
       setThinkingAiPlan(null);
     } catch (error) {
@@ -577,6 +787,9 @@ useEffect(() => {
     setConversationHistory([]);
     setInputMessage('');
     setComposerInput('');
+    setPendingFileOpsQueue([]);
+    clearAgentStatuses();
+    setThinkingAiPlan(null);
     toast.success('Chat cleared');
   };
 
@@ -736,6 +949,60 @@ useEffect(() => {
             </div>
           </section>
 
+          {pendingFileOpsQueue.length > 0 && (
+            <section className="bg-dark-800/70 border border-primary-700/40 rounded-2xl p-4 space-y-3 shadow-xl shadow-primary-900/20">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide text-primary-200">
+                <span>Pending AI file changes</span>
+                <span>
+                  {pendingFileOpsQueue.length} package{pendingFileOpsQueue.length === 1 ? '' : 's'}
+                </span>
+              </div>
+              {pendingFileOpsQueue.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="rounded-xl border border-dark-700 bg-dark-900/60 p-3 space-y-3"
+                >
+                  <div className="text-sm text-dark-100">
+                    {entry.operations.length} proposed change
+                    {entry.operations.length === 1 ? '' : 's'} awaiting approval
+                  </div>
+                  <ul className="space-y-1 text-xs text-dark-300">
+                    {entry.operations.slice(0, MAX_PENDING_FILE_OP_PREVIEW).map((op, idx) => (
+                      <li key={`${entry.id}-${idx}`} className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded-full border border-dark-600 text-[10px] uppercase tracking-wide text-primary-200">
+                          {String(op.type || 'edit_file').replace('_', ' ')}
+                        </span>
+                        <code className="text-dark-100">{op.path || 'workspace'}</code>
+                      </li>
+                    ))}
+                  </ul>
+                  {entry.operations.length > MAX_PENDING_FILE_OP_PREVIEW && (
+                    <div className="text-xs text-dark-500">
+                      +{entry.operations.length - MAX_PENDING_FILE_OP_PREVIEW} more change
+                      {entry.operations.length - MAX_PENDING_FILE_OP_PREVIEW === 1 ? '' : 's'}
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPendingFileOps(entry)}
+                      className="px-3 py-1.5 rounded-lg bg-primary-600 text-white hover:bg-primary-700"
+                    >
+                      Apply changes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeclinePendingFileOps(entry.id)}
+                      className="px-3 py-1.5 rounded-lg border border-dark-600 text-dark-200 hover:bg-dark-800"
+                    >
+                      Decline
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </section>
+          )}
+
           <section className="space-y-4">
             {messages.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-dark-700 bg-dark-900/40 p-6 text-center text-sm text-dark-400">
@@ -743,89 +1010,107 @@ useEffect(() => {
               </div>
             ) : (
               <>
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`rounded-2xl border ${
-                      message.role === 'user'
-                        ? 'border-primary-700 bg-primary-700/10'
-                        : message.isError
-                        ? 'border-red-800 bg-red-900/20'
-                        : 'border-dark-700 bg-dark-900/60'
-                    } p-4 space-y-3`}
-                  >
-                    {/* Debug: log each message as it is rendered in the Copilot Chat page */}
-                    {(() => {
-                      const normalizedContent = normalizeMessageInput(
-                        message.rawContent ?? message.content
-                      );
-                      const formattedHtml = formatMessageContent(normalizedContent);
-                      // eslint-disable-next-line no-console
-                      console.log('Chat page render message bubble', {
-                        id: message.id,
-                        role: message.role,
-                        content: message.content,
-                        rawContent: message.rawContent,
-                        contentType: typeof message.content,
-                        rawContentType: typeof message.rawContent,
-                        normalizedContent,
-                        formattedHtml,
-                        formattedHtmlType: typeof formattedHtml,
-                      });
-                      return (
-                        <div
-                          className="prose prose-invert max-w-none text-[15px]"
-                          dangerouslySetInnerHTML={{
-                            __html: formattedHtml,
-                          }}
-                        />
-                      );
-                    })()}
-                    <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-dark-400">
-                      {message.role === 'user' ? (
-                        <>
-                          <User className="w-4 h-4 text-primary-400" />
-                          <span>User</span>
-                        </>
-                      ) : (
-                        <>
-                          <Bot className="w-4 h-4 text-primary-400" />
-                          <span>AI Assistant</span>
-                        </>
+                {messages.map((message) => {
+                  const pendingOpsForMessage = pendingFileOpsQueue.find(
+                    (entry) => entry.sourceMessageId === message.id
+                  );
+                  return (
+                    <div
+                      key={message.id}
+                      className={`rounded-2xl border ${
+                        message.role === 'user'
+                          ? 'border-primary-700 bg-primary-700/10'
+                          : message.isError
+                          ? 'border-red-800 bg-red-900/20'
+                          : 'border-dark-700 bg-dark-900/60'
+                      } p-4 space-y-3`}
+                    >
+                      {/* Debug: log each message as it is rendered in the Copilot Chat page */}
+                      {(() => {
+                        const normalizedContent = normalizeMessageInput(
+                          message.rawContent ?? message.content
+                        );
+                        const formattedHtml = formatMessageContent(normalizedContent);
+                        // eslint-disable-next-line no-console
+                        console.log('Chat page render message bubble', {
+                          id: message.id,
+                          role: message.role,
+                          content: message.content,
+                          rawContent: message.rawContent,
+                          contentType: typeof message.content,
+                          rawContentType: typeof message.rawContent,
+                          normalizedContent,
+                          formattedHtml,
+                          formattedHtmlType: typeof formattedHtml,
+                        });
+                        return (
+                          <div
+                            className="prose prose-invert max-w-none text-[15px]"
+                            dangerouslySetInnerHTML={{
+                              __html: formattedHtml,
+                            }}
+                          />
+                        );
+                      })()}
+                      <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-dark-400">
+                        {message.role === 'user' ? (
+                          <>
+                            <User className="w-4 h-4 text-primary-400" />
+                            <span>User</span>
+                          </>
+                        ) : (
+                          <>
+                            <Bot className="w-4 h-4 text-primary-400" />
+                            <span>AI Assistant</span>
+                          </>
+                        )}
+                        <span className="text-dark-600">•</span>
+                        <span>{new Date(message.timestamp).toLocaleTimeString()}</span>
+                      </div>
+                      {pendingOpsForMessage && message.role === 'assistant' && (
+                        <div className="text-xs text-primary-200 bg-primary-900/20 border border-primary-800/40 rounded-xl px-3 py-2">
+                          AI prepared {pendingOpsForMessage.operations.length} change
+                          {pendingOpsForMessage.operations.length === 1 ? '' : 's'}.
+                          Review them in the “Pending AI file changes” panel before applying.
+                        </div>
                       )}
-                      <span className="text-dark-600">•</span>
-                      <span>{new Date(message.timestamp).toLocaleTimeString()}</span>
+                      {message.plan && message.role === 'assistant' && (
+                        <PlanCard plan={message.plan} />
+                      )}
+                      {message.activityLog?.length > 0 && message.role === 'assistant' && (
+                        <ActivityTimeline
+                          timeline={message.activityLog}
+                          title="AI workflow (recorded)"
+                          defaultCollapsed
+                        />
+                      )}
                     </div>
-                    {message.plan && message.role === 'assistant' && (
-                      <PlanCard plan={message.plan} />
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
 
                 {isLoading && (
-                  <div className="rounded-2xl border border-dark-700 bg-dark-900/60 p-4 space-y-3">
+                  <div className="rounded-2xl border border-dark-700 bg-dark-900/60 p-4 space-y-4">
                     <div className="flex items-center gap-2 text-sm text-dark-300">
                       <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
-                      <span>AI is thinking...</span>
+                      <span>
+                        AI is thinking… {Math.max(1, Math.round(thinkingElapsed / 1000))}s elapsed
+                      </span>
                     </div>
-                    {agentStatuses.length > 0 && (
-                      <div className="grid gap-1 text-xs text-dark-300">
-                        {agentStatuses.map((status) => (
-                          <div
-                            key={status.key}
-                            className="flex items-center gap-2 rounded-lg bg-dark-800/80 px-3 py-2"
-                          >
-                            <Loader2 className="w-3 h-3 animate-spin text-primary-500" />
-                            <span>{status.label}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
                     {thinkingAiPlan && (
-                      <div className="pt-3 border-t border-dark-800">
+                      <CollapsibleSection
+                        title="TODO plan before execution"
+                        defaultCollapsed={false}
+                        badge={`${thinkingPlanTaskCount} task${thinkingPlanTaskCount === 1 ? '' : 's'}`}
+                      >
                         <PlanCard plan={thinkingAiPlan} />
-                      </div>
+                      </CollapsibleSection>
                     )}
+                    <ActivityTimeline
+                      timeline={agentStatuses}
+                      isLive
+                      defaultCollapsed={false}
+                      title="AI workflow (live)"
+                    />
                   </div>
                 )}
                 <div ref={messagesEndRef} />

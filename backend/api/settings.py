@@ -25,7 +25,7 @@ async def get_ai_service(request: Request):
     return request.app.state.ai_service
 
 
-@router.get("/settings", response_model=SettingsResponse)
+@router.get("", response_model=SettingsResponse)
 async def get_settings(ai_service = Depends(get_ai_service)):
     """Get current application settings"""
     try:
@@ -40,7 +40,7 @@ async def get_settings(ai_service = Depends(get_ai_service)):
         raise HTTPException(status_code=500, detail=f"Error getting settings: {str(e)}")
 
 
-@router.put("/settings", response_model=SettingsResponse)
+@router.put("", response_model=SettingsResponse)
 async def update_settings(
     settings: SettingsRequest,
     ai_service = Depends(get_ai_service)
@@ -84,7 +84,7 @@ async def update_settings(
         ai_service.save_settings()
         
         # Test connection after update
-        is_connected = await ai_service.check_ollama_connection()
+        is_connected = await ai_service.check_ollama_connection(force=True)
         if not is_connected:
             print("⚠️  Warning: Ollama connection failed after URL update")
         
@@ -101,11 +101,11 @@ async def update_settings(
         raise HTTPException(status_code=500, detail=f"Error updating settings: {str(e)}")
 
 
-@router.post("/settings/test-connection")
+@router.post("/test-connection")
 async def test_ollama_connection(ai_service = Depends(get_ai_service)):
     """Test connection to Ollama with current settings"""
     try:
-        is_connected = await ai_service.check_ollama_connection()
+        is_connected = await ai_service.check_ollama_connection(force=True)
         if is_connected:
             models = await ai_service.get_available_models()
             return {

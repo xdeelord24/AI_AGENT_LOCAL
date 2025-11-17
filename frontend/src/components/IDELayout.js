@@ -43,6 +43,37 @@ const normalizeEditorPath = (path = '') => {
   return path.replace(/\\/g, '/');
 };
 
+// Ensure we only keep the final operation per file path so we don't
+// duplicate work or notifications when the agent emits multiple ops
+// for the same file (common with auto-continue/new-script flows).
+const coalesceFileOperationsForEditor = (operations = []) => {
+  if (!Array.isArray(operations) || operations.length === 0) {
+    return [];
+  }
+
+  const seenPaths = new Set();
+  const resultReversed = [];
+
+  for (let i = operations.length - 1; i >= 0; i -= 1) {
+    const op = operations[i];
+    const rawPath = op?.path;
+    const normalizedPath = normalizeEditorPath(rawPath || '');
+    if (!normalizedPath) {
+      continue;
+    }
+    if (seenPaths.has(normalizedPath)) {
+      continue;
+    }
+    seenPaths.add(normalizedPath);
+    resultReversed.push({
+      ...op,
+      path: normalizedPath,
+    });
+  }
+
+  return resultReversed.reverse();
+};
+
 const MAX_TERMINAL_HISTORY = 500;
 const TERMINAL_HISTORY_STORAGE_KEY = 'terminalHistory';
 const COMPLETION_LIST_COLUMNS = 4;
@@ -287,6 +318,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [mentionPosition, setMentionPosition] = useState(null);
   const [suggestionInputType, setSuggestionInputType] = useState(null); // 'composer' or 'chat'
   const [pendingFileOperations, setPendingFileOperations] = useState(null);
+  const [activeFileOperationIndex, setActiveFileOperationIndex] = useState(0);
   const [isApplyingFileOperations, setIsApplyingFileOperations] = useState(false);
   const [chatStatus, setChatStatus] = useState(null);
   const [isLoadingStatus, setIsLoadingStatus] = useState(false);
@@ -2468,110 +2500,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     blocked: 'border-red-700 bg-red-600/10 text-red-300'
   };
 
-  const operationHighlightStyles = {
-    create_file: 'border-green-800 bg-green-500/5',
-    edit_file: 'border-blue-800 bg-blue-500/5',
-    delete_file: 'border-red-800 bg-red-500/5'
-  };
-
-  const renderOperationPreview = (op) => {
-    const hasDiff = Array.isArray(op.diff) && op.diff.length > 0;
-    const className = operationHighlightStyles[op.type] || 'border-dark-700 bg-dark-800/70';
-
-    if (!hasDiff && !op.content) {
-      return null;
-    }
-
-    const diffLines = hasDiff
-      ? op.diff
-      : computeLineDiff(op.beforeContent || '', op.afterContent || op.content || '');
-
-    const legend =
-      op.type === 'create_file'
-        ? 'New file contents'
-        : op.type === 'delete_file'
-        ? 'File to be removed'
-        : 'Proposed changes';
-
-    return (
-      <div className={`mt-2 rounded-lg border ${className}`}>
-        <div className="px-3 py-1 border-b border-dark-700 text-[11px] uppercase tracking-wide text-dark-400 flex items-center justify-between">
-          <span>{legend}</span>
-          <div className="flex gap-2">
-            <span className="flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-green-500/70" />
-              <span>Added</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="w-2 h-2 rounded-full bg-red-500/70" />
-              <span>Removed</span>
-            </span>
-          </div>
-        </div>
-        <div className="max-h-56 overflow-y-auto font-mono text-[11px] text-dark-100">
-          <div className="flex sticky top-0 bg-dark-900/95 border-b border-dark-700 text-[10px] text-dark-400">
-            <div className="w-10 px-2 py-1 text-right border-r border-dark-700">Old</div>
-            <div className="w-10 px-2 py-1 text-right border-r border-dark-700">New</div>
-            <div className="w-6 px-1 py-1 text-center border-r border-dark-700"> </div>
-            <div className="flex-1 px-3 py-1">Code</div>
-          </div>
-          {diffLines.map((line, idx) => {
-            if (line.type === 'skip') {
-              return (
-                <div
-                  key={`${op.path}-skip-${idx}`}
-                  className="flex items-stretch bg-dark-900/80 text-dark-400"
-                >
-                  <div className="w-10 px-2 py-1 text-right border-r border-dark-800 text-dark-700">
-                    …
-                  </div>
-                  <div className="w-10 px-2 py-1 text-right border-r border-dark-800 text-dark-700">
-                    …
-                  </div>
-                  <div className="w-6 px-1 py-1 text-center border-r border-dark-800 text-dark-700">
-                    …
-                  </div>
-                  <div className="flex-1 px-3 py-1 italic whitespace-pre-wrap">
-                    {line.text}
-                  </div>
-                </div>
-              );
-            }
-
-            const isAdded = line.type === 'added';
-            const isRemoved = line.type === 'removed';
-            const bgClass = isAdded
-              ? 'bg-green-500/10'
-              : isRemoved
-              ? 'bg-red-500/10'
-              : 'bg-transparent';
-            const indicator = isAdded ? '+' : isRemoved ? '-' : '';
-
-            return (
-            <div
-              key={`${op.path}-${idx}`}
-                className={`flex items-stretch ${bgClass} even:bg-dark-900/40`}
-            >
-                <div className="w-10 px-2 py-1 text-right text-dark-400 border-r border-dark-800">
-                  {line.oldNumber ?? ''}
-                </div>
-                <div className="w-10 px-2 py-1 text-right text-dark-400 border-r border-dark-800">
-                  {line.newNumber ?? ''}
-                </div>
-                <div className="w-6 px-1 py-1 text-center text-[10px] border-r border-dark-800 text-dark-400">
-                  {indicator}
-              </div>
-              <pre className="flex-1 px-3 py-1 whitespace-pre-wrap">
-                  {line.text || '\u00A0'}
-              </pre>
-            </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
   const renderAiPlan = (plan) => {
     if (!plan) return null;
     const summary = normalizeChatInput(
@@ -2857,17 +2785,33 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setChatMessages(prev => [...prev, assistantMessage]);
 
       if (response.file_operations && response.file_operations.length > 0) {
-        const operationsWithPreviews = await buildFileOperationPreviews(
+        const normalizedOperations = coalesceFileOperationsForEditor(
           response.file_operations.map((op) => ({
             ...op,
             path: normalizeEditorPath(op.path),
           }))
         );
-        setPendingFileOperations({
-          operations: operationsWithPreviews,
-          assistantMessageId: assistantMessage.id,
-          mode: modePayload
-        });
+
+        try {
+          const operationsWithPreviews = await buildFileOperationPreviews(normalizedOperations);
+          setPendingFileOperations({
+            operations: operationsWithPreviews,
+            assistantMessageId: assistantMessage.id,
+            mode: modePayload,
+          });
+          setActiveFileOperationIndex(0);
+          toast.success('Review the AI file changes before deciding to keep them.');
+        } catch (error) {
+          console.error('Failed to build AI file operation previews:', error);
+          // Fall back to showing raw operations without rich previews
+          setPendingFileOperations({
+            operations: normalizedOperations,
+            assistantMessageId: assistantMessage.id,
+            mode: modePayload,
+          });
+          setActiveFileOperationIndex(0);
+          toast.error('AI proposed file changes, but previews failed to load. Review carefully before applying.');
+        }
       }
       setIsLoadingChat(false);
       setThinkingAiPlan(null);
@@ -3132,13 +3076,83 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     } finally {
       setIsApplyingFileOperations(false);
       setPendingFileOperations(null);
+      setActiveFileOperationIndex(0);
     }
   };
 
-  const handleDiscardPendingFileOperations = () => {
-    setPendingFileOperations(null);
-    toast('Dismissed AI changes');
+  const handleDiscardPendingFileOperations = async () => {
+    if (!pendingFileOperations || !pendingFileOperations.operations) {
+      setPendingFileOperations(null);
+      setActiveFileOperationIndex(0);
+      toast('Dismissed AI changes');
+      return;
+    }
+
+    try {
+      setIsApplyingFileOperations(true);
+
+      // If we created any files on disk during preview, clean them up
+      const createdPaths = pendingFileOperations.operations
+        .filter((op) => op.type === 'create_file' && op.previewCreated)
+        .map((op) => normalizeEditorPath(op.path));
+
+      if (createdPaths.length > 0) {
+        for (const filePath of createdPaths) {
+          try {
+            await ApiService.deleteFile(filePath);
+          } catch (error) {
+            // eslint-disable-next-line no-console
+            console.warn('Failed to delete preview file on discard:', filePath, error);
+          }
+        }
+
+        // Remove any preview-created files from open tabs
+        setOpenFiles((prev) => prev.filter((file) => !createdPaths.includes(file.path)));
+
+        // Adjust activeTab/editor if the active file was removed
+        setActiveTab((currentActive) => {
+          if (!currentActive || !createdPaths.includes(currentActive)) {
+            return currentActive;
+          }
+          const remaining = openFiles.filter((f) => !createdPaths.includes(f.path));
+          if (remaining.length > 0) {
+            const lastFile = remaining[remaining.length - 1];
+            setEditorContent(lastFile.content);
+            setEditorLanguage(lastFile.language);
+            return lastFile.path;
+          }
+          setEditorContent('');
+          return null;
+        });
+
+        await refreshFileTree();
+      }
+    } finally {
+      setIsApplyingFileOperations(false);
+      setPendingFileOperations(null);
+      setActiveFileOperationIndex(0);
+      toast('Dismissed AI changes');
+    }
   };
+
+  // When reviewing changes, automatically open the currently selected operation
+  // in the editor so the user can immediately see the proposed code.
+  useEffect(() => {
+    if (!pendingFileOperations || !pendingFileOperations.operations?.length) {
+      return;
+    }
+
+    const operations = pendingFileOperations.operations;
+    const totalOps = operations.length;
+    const index = Math.min(
+      Math.max(activeFileOperationIndex, 0),
+      Math.max(totalOps - 1, 0)
+    );
+    const op = operations[index];
+
+    if (!op) return;
+    openOperationPreview(op);
+  }, [pendingFileOperations, activeFileOperationIndex, openOperationPreview]);
 
   const closeTab = (filePath, e) => {
     e.stopPropagation();
@@ -3453,67 +3467,99 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             </div>
           )}
 
-          {pendingFileOperations && (
-            <div className="border-b border-primary-700/40 bg-primary-900/10 text-sm p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h4 className="text-dark-100 font-semibold">Review AI changes</h4>
-                  <p className="text-xs text-dark-300">
-                    {pendingFileOperations.operations.length} proposed change(s) from {pendingFileOperations.mode?.toUpperCase() || 'AI'}
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={handleApplyPendingFileOperations}
-                    disabled={isApplyingFileOperations}
-                    className="px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs disabled:opacity-60"
-                  >
-                    {isApplyingFileOperations ? 'Applying…' : 'Apply'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDiscardPendingFileOperations}
-                    disabled={isApplyingFileOperations}
-                    className="px-3 py-1.5 rounded-lg border border-dark-600 text-dark-200 text-xs hover:bg-dark-800 disabled:opacity-60"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              </div>
-              <div className="grid gap-3 max-h-60 overflow-y-auto">
-                {pendingFileOperations.operations.map((op, idx) => {
-                  const normalizedPath = normalizeEditorPath(op.path);
-                  const isActive = activeTab === normalizedPath;
-                  return (
-                    <div
-                      key={`${normalizedPath}-${idx}`}
-                      className="rounded-lg border border-dark-700 bg-dark-900/70 p-3 space-y-2"
-                    >
-                      <div className="flex items-center justify-between gap-2 text-xs">
-                        <div className="flex items-center gap-2">
-                          <span className="px-2 py-0.5 rounded bg-dark-800 text-primary-400 uppercase text-[10px]">
-                            {op.type.replace('_', ' ')}
-                          </span>
-                          <span className="text-dark-200 truncate max-w-[240px]">{normalizedPath}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => openOperationPreview(op)}
-                          className={`px-2 py-0.5 rounded text-[11px] border ${
-                            isActive ? 'border-primary-500 text-primary-300 bg-primary-500/10' : 'border-dark-600 text-dark-300 hover:bg-dark-800'
-                          }`}
-                        >
-                          {isActive ? 'Viewing' : 'Open'}
-                        </button>
-                      </div>
-                      {renderOperationPreview(op)}
+          {pendingFileOperations && (() => {
+            const operations = pendingFileOperations.operations || [];
+            const totalOps = operations.length;
+            if (totalOps === 0) return null;
+
+            const clampedIndex = Math.min(
+              Math.max(activeFileOperationIndex, 0),
+              Math.max(totalOps - 1, 0)
+            );
+            const op = operations[clampedIndex];
+            const normalizedPath = normalizeEditorPath(op.path);
+            const isActive = activeTab === normalizedPath;
+
+            const goPrev = () => {
+              setActiveFileOperationIndex((prev) => (prev > 0 ? prev - 1 : prev));
+            };
+
+            const goNext = () => {
+              setActiveFileOperationIndex((prev) =>
+                prev < totalOps - 1 ? prev + 1 : prev
+              );
+            };
+
+            return (
+              <div className="border-b border-primary-700/40 bg-primary-900/10 text-sm p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <h4 className="text-dark-100 font-semibold">Review AI changes</h4>
+                    <p className="text-xs text-dark-300">
+                      Change {clampedIndex + 1} of {totalOps} •{' '}
+                      {pendingFileOperations.mode?.toUpperCase() || 'AI'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1 text-xs text-dark-300">
+                      <button
+                        type="button"
+                        onClick={goPrev}
+                        disabled={clampedIndex === 0}
+                        className="p-1 rounded border border-dark-600 hover:bg-dark-800 disabled:opacity-40"
+                        aria-label="Previous change"
+                      >
+                        <ChevronLeft className="w-3 h-3" />
+                      </button>
+                      <span className="min-w-[42px] text-center">
+                        {clampedIndex + 1} / {totalOps}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={goNext}
+                        disabled={clampedIndex >= totalOps - 1}
+                        className="p-1 rounded border border-dark-600 hover:bg-dark-800 disabled:opacity-40"
+                        aria-label="Next change"
+                      >
+                        <ChevronRight className="w-3 h-3" />
+                      </button>
                     </div>
-                  );
-                })}
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleDiscardPendingFileOperations}
+                        disabled={isApplyingFileOperations}
+                        className="px-3 py-1.5 rounded-lg border border-dark-600 text-dark-200 text-xs hover:bg-dark-800 disabled:opacity-60"
+                      >
+                        Undo All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleApplyPendingFileOperations}
+                        disabled={isApplyingFileOperations}
+                        className="px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs disabled:opacity-60"
+                      >
+                        {isApplyingFileOperations ? 'Applying…' : 'Keep All'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-2 flex items-center justify-between text-xs text-dark-300">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded bg-dark-800 text-primary-400 uppercase text-[10px]">
+                      {op.type.replace('_', ' ')}
+                    </span>
+                    <span className="text-dark-200 truncate max-w-[320px]">
+                      {normalizedPath}
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-dark-500">
+                    File below shows this change with highlighted lines.
+                  </span>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Editor Content */}
           <div className="flex-1 relative">

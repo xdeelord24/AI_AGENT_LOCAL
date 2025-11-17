@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 import os
 import re
+import time
 
 try:
     from duckduckgo_search import DDGS
@@ -70,6 +71,12 @@ class AIService:
         self.available_models = []
         self._config_dir = os.getenv(self.CONFIG_DIR_ENV_VAR) or self.DEFAULT_CONFIG_DIR
         self._settings_path = os.path.join(self._config_dir, self.SETTINGS_FILENAME)
+        self._last_connection_check = 0.0
+        self._last_connection_status = False
+        try:
+            self.connection_cache_seconds = int(os.getenv("OLLAMA_CONNECTION_CACHE_SECONDS", "25"))
+        except ValueError:
+            self.connection_cache_seconds = 25
         # Default to using proxy if OLLAMA_URL is explicitly set, otherwise try direct first
         use_proxy_env = os.getenv("USE_PROXY", "").lower()
         if use_proxy_env in ("true", "1", "yes"):
@@ -88,6 +95,10 @@ class AIService:
             self.web_search_max_results = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
         except ValueError:
             self.web_search_max_results = 5
+
+        self.hardware_threads = os.cpu_count() or 8
+        self.base_generation_options = self._load_generation_options()
+        self.large_model_thread_count = max(8, min(self.hardware_threads, 32))
         
         self._load_persisted_settings()
     
@@ -127,8 +138,70 @@ class AIService:
         except Exception as error:
             print(f"⚠️  Failed to save settings: {error}")
         
-    async def check_ollama_connection(self) -> bool:
+    def _load_generation_options(self) -> Dict[str, Any]:
+        def read_int(env_name: str, default: int) -> int:
+            value = os.getenv(env_name)
+            if value is None:
+                return default
+            try:
+                return int(value)
+            except ValueError:
+                return default
+
+        def read_float(env_name: str, default: float) -> float:
+            value = os.getenv(env_name)
+            if value is None:
+                return default
+            try:
+                return float(value)
+            except ValueError:
+                return default
+
+        default_threads = read_int(
+            "OLLAMA_NUM_THREADS",
+            max(4, min(self.hardware_threads - 1, 16))
+        )
+
+        options = {
+            "temperature": read_float("OLLAMA_TEMPERATURE", 0.7),
+            "top_p": read_float("OLLAMA_TOP_P", 0.9),
+            "num_predict": read_int("OLLAMA_NUM_PREDICT", 1024),
+            "num_ctx": read_int("OLLAMA_NUM_CTX", 2048),
+            "num_batch": read_int("OLLAMA_NUM_BATCH", 256),
+            "num_thread": default_threads,
+        }
+
+        keep_alive = os.getenv("OLLAMA_KEEP_ALIVE", "10m")
+        options["_keep_alive"] = keep_alive
+        return options
+
+    def _build_generation_options_for_model(self) -> Tuple[Dict[str, Any], Optional[str]]:
+        options = dict(self.base_generation_options)
+        keep_alive = options.pop("_keep_alive", None)
+
+        model_name = (self.current_model or "").lower()
+        is_large = any(tag in model_name for tag in ("120b", "110b", "70b", ":70", ":120"))
+
+        if is_large:
+            options["num_ctx"] = max(options.get("num_ctx", 2048), 4096)
+            options["num_batch"] = max(options.get("num_batch", 256), 512)
+            options["num_thread"] = max(
+                options.get("num_thread", 8),
+                self.large_model_thread_count,
+            )
+            options["num_predict"] = min(options.get("num_predict", 1024), 768)
+
+        return options, keep_alive
+
+    async def check_ollama_connection(self, force: bool = False) -> bool:
         """Check if Ollama is running and accessible"""
+        now = time.time()
+        if not force:
+            if (
+                self._last_connection_status
+                and (now - self._last_connection_check) < self.connection_cache_seconds
+            ):
+                return True
         # Try proxy first
         if self.use_proxy:
             try:
@@ -138,6 +211,8 @@ class AIService:
                             data = await response.json()
                             self.available_models = [model["name"] for model in data.get("models", [])]
                             print("✅ Connected to Ollama via proxy")
+                            self._last_connection_status = True
+                            self._last_connection_check = now
                             return True
             except Exception as e:
                 print(f"❌ Proxy connection failed: {e}")
@@ -152,16 +227,20 @@ class AIService:
                         data = await response.json()
                         self.available_models = [model["name"] for model in data.get("models", [])]
                         print("✅ Connected to Ollama directly")
+                        self._last_connection_status = True
+                        self._last_connection_check = now
                         return True
         except Exception as e:
             print(f"❌ Direct connection failed: {e}")
         
+        self._last_connection_status = False
+        self._last_connection_check = now
         return False
     
     async def get_available_models(self) -> List[str]:
         """Get list of available models"""
         if not self.available_models:
-            await self.check_ollama_connection()
+            await self.check_ollama_connection(force=True)
         return self.available_models
     
     async def select_model(self, model_name: str) -> bool:
@@ -175,7 +254,7 @@ class AIService:
     
     async def get_status(self) -> Dict[str, Any]:
         """Get current service status"""
-        is_connected = await self.check_ollama_connection()
+        is_connected = await self.check_ollama_connection(force=True)
         return {
             "ollama_connected": is_connected,
             "current_model": self.current_model,
@@ -195,7 +274,8 @@ class AIService:
         self,
         message: str,
         context: Optional[Dict[str, Any]] = None,
-        file_operations: Optional[List[Dict[str, Any]]] = None
+        file_operations: Optional[List[Dict[str, Any]]] = None,
+        ai_plan: Optional[Dict[str, Any]] = None
     ) -> List[Dict[str, Any]]:
         """Create contextual agent status steps for the frontend"""
         context = context or {}
@@ -539,6 +619,8 @@ class AIService:
                 "- Maintain a TODO list (max 5 items) where every task has an id, title, and status (`pending`, `in_progress`, or `completed`). Update statuses as you make progress so the user can monitor it.",
                 "- Include this plan in the `ai_plan` metadata described below even if no file changes are required.",
                 "- After planning, proactively execute the tasks: gather the requested information, produce concrete file edits (via file_operations), or clearly state which files/commands you ran.",
+                "- Treat agent mode as fully autonomous execution: do NOT ask the user follow-up questions unless the request is self-contradictory or unsafe. Instead, state reasonable assumptions and continue working.",
+                "- When the user responds with short inputs like `1`, `2`, `option A`, or repeats one of your earlier choices, interpret that as their selection instead of asking the same question again.",
                 "- When creating or editing files, emit the necessary file_operations and then immediately move on to the next task—do not stop after the first modification if other tasks remain.",
                 "- Only mark a task as `completed` if you actually performed that step in the current response. Mark the task you are actively doing as `in_progress`; leave future work as `pending`.",
                 "- Do not leave tasks pending unless you hit a hard blocker; otherwise continue working until every task is marked `completed` within this response.",
@@ -700,7 +782,9 @@ class AIService:
         keywords = [
             "fix", "update", "change", "modify", "refactor",
             "implement", "add ", "remove", "rewrite", "improve",
-            "adjust", "patch", "bug", "issue", "error"
+            "adjust", "patch", "bug", "issue", "error",
+            "create", "build", "generate", "design", "scaffold",
+            "bootstrap", "prototype", "develop", "new file", "new app"
         ]
         contains_keyword = any(keyword in combined for keyword in keywords)
         has_code_block = "```" in (assistant_response or "")
@@ -750,6 +834,14 @@ class AIService:
         prompt_lines.append("Recent conversation history:")
         prompt_lines.append(history_text)
         prompt_lines.append("")
+        prompt_lines.extend([
+            "You must now produce concrete file_operations that actually fulfill the developer's request.",
+            "- If the request requires new functionality, include at least one `create_file` or `edit_file` entry with the complete file contents (no placeholders like TODO).",
+            "- Assume reasonable defaults instead of asking the user more questions.",
+            "- Only leave file_operations empty if the user explicitly said that no code changes are needed.",
+            "- Keep the ai_plan consistent with the work you are now completing (mark finished steps as completed).",
+            ""
+        ])
         prompt_lines.append(
             "Provide ONLY the JSON metadata block that includes ai_plan and file_operations as previously specified."
         )
@@ -769,16 +861,15 @@ class AIService:
     
     async def _call_ollama(self, prompt: str) -> str:
         """Make API call to Ollama"""
+        generation_options, keep_alive = self._build_generation_options_for_model()
         payload = {
             "model": self.current_model,
             "prompt": prompt,
             "stream": False,
-            "options": {
-                "temperature": 0.7,
-                "top_p": 0.9,
-                "max_tokens": 2000
-            }
+            "options": generation_options
         }
+        if keep_alive:
+            payload["keep_alive"] = keep_alive
         
         # Choose URL based on connection method
         url = self.ollama_url if self.use_proxy else self.ollama_direct

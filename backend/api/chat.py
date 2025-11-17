@@ -1,7 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import asyncio
+import time
+from datetime import datetime
 
 router = APIRouter()
 
@@ -29,6 +31,7 @@ class ChatResponse(BaseModel):
     file_operations: Optional[List[Dict[str, Any]]] = None
     ai_plan: Optional[Dict[str, Any]] = None
     agent_statuses: Optional[List[Dict[str, Any]]] = None
+    activity_log: Optional[List[Dict[str, Any]]] = None
 
 
 class StatusPreviewRequest(BaseModel):
@@ -80,6 +83,44 @@ def _build_auto_continue_prompt(ai_plan: Dict[str, Any]) -> str:
     )
 
 
+def _summarize_request(message: str, limit: int = 120) -> str:
+    if not message:
+        return "Processing developer request"
+    snippet = " ".join(message.strip().split())
+    if len(snippet) <= limit:
+        return snippet
+    return snippet[: limit - 1].rstrip() + "…"
+
+
+def _record_activity_event(
+    events: List[Dict[str, Any]],
+    key: str,
+    label: str,
+) -> None:
+    events.append({
+        "key": key,
+        "label": label,
+        "ts": time.perf_counter(),
+        "started_at": datetime.utcnow().isoformat() + "Z",
+    })
+
+
+def _finalize_activity_log(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not events:
+        return []
+    finalized: List[Dict[str, Any]] = []
+    for idx, event in enumerate(events):
+        end_ts = events[idx + 1]["ts"] if idx + 1 < len(events) else time.perf_counter()
+        duration_ms = max(1, int((end_ts - event["ts"]) * 1000))
+        finalized.append({
+            "key": event["key"],
+            "label": event["label"],
+            "started_at": event["started_at"],
+            "duration_ms": duration_ms
+        })
+    return finalized
+
+
 async def get_ai_service(request: Request):
     """Dependency to get AI service instance"""
     return request.app.state.ai_service
@@ -111,12 +152,33 @@ async def send_message(
 
         current_message = request.message
         auto_continue_rounds = 0
+        activity_events: List[Dict[str, Any]] = []
+        _record_activity_event(
+            activity_events,
+            "thinking",
+            f"Thinking about: {_summarize_request(request.message or '')}"
+        )
+        _record_activity_event(
+            activity_events,
+            "context_analysis",
+            "Analyzing provided context and recent history"
+        )
 
         while True:
+            _record_activity_event(
+                activity_events,
+                f"model_request_round_{auto_continue_rounds + 1}",
+                f"Sending instructions to AI model (round {auto_continue_rounds + 1})"
+            )
             response = await ai_service.process_message(
                 message=current_message,
                 context=context_payload,
                 conversation_history=working_history
+            )
+            _record_activity_event(
+                activity_events,
+                f"model_response_round_{auto_continue_rounds + 1}",
+                f"AI model responded (round {auto_continue_rounds + 1})"
             )
 
             if not conversation_id:
@@ -155,11 +217,20 @@ async def send_message(
             part.strip() for part in aggregated_messages if part and part.strip()
         ) or ""
 
+        _record_activity_event(
+            activity_events,
+            "finalizing",
+            "Finalizing TODO results and report"
+        )
+
         agent_statuses = ai_service.generate_agent_statuses(
             message=request.message,
             context=last_context_used or request.context or {},
-            file_operations=accumulated_file_ops if accumulated_file_ops else None
+            file_operations=accumulated_file_ops if accumulated_file_ops else None,
+            ai_plan=final_ai_plan
         )
+
+        activity_log = _finalize_activity_log(activity_events)
 
         return ChatResponse(
             response=combined_response,
@@ -168,7 +239,8 @@ async def send_message(
             context_used=last_context_used or context_payload,
             file_operations=accumulated_file_ops or None,
             ai_plan=final_ai_plan,
-            agent_statuses=agent_statuses
+            agent_statuses=agent_statuses,
+            activity_log=activity_log or None
         )
 
     except Exception as e:

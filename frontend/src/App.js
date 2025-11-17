@@ -29,6 +29,20 @@ function App() {
     }
   }, []);
 
+  const loadChatStatus = useCallback(async () => {
+    try {
+      const status = await ApiService.getChatStatus();
+      if (status?.current_model) {
+        setCurrentModel(status.current_model);
+      }
+      if (Array.isArray(status?.available_models) && status.available_models.length > 0) {
+        setAvailableModels(status.available_models);
+      }
+    } catch (error) {
+      console.error('Failed to load chat status:', error);
+    }
+  }, []);
+
   useEffect(() => {
     let intervalId;
 
@@ -49,12 +63,13 @@ function App() {
   useEffect(() => {
     if (isConnected) {
       loadModels();
+      loadChatStatus();
     }
-  }, [isConnected, loadModels]);
+  }, [isConnected, loadChatStatus, loadModels]);
 
   const selectModel = async (modelName) => {
     try {
-      await ApiService.post(`/api/chat/models/${modelName}/select`);
+      await ApiService.selectModel(modelName);
       setCurrentModel(modelName);
     } catch (error) {
       console.error('Failed to select model:', error);
