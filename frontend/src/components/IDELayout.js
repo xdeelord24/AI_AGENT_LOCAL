@@ -5,8 +5,8 @@ import {
   Folder, File, FilePlus, FolderPlus,
   ChevronRight as ChevronRightIcon, ChevronDown,
   Send, User, Loader2, CheckCircle, AlertCircle,
-  Infinity, AtSign, Globe, Image, Mic, Square, Plus, Clock, MoreVertical,
-  RefreshCw, Minimize2, Workflow
+  Infinity, AtSign, Globe, Image, Mic, Square, Plus, Clock, History, MoreVertical,
+  RefreshCw, Minimize2, Workflow, Trash2
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
@@ -40,6 +40,11 @@ const normalizeEditorPath = (path = '') => {
   if (!path) return '';
   return path.replace(/\\/g, '/');
 };
+
+const MAX_TERMINAL_HISTORY = 500;
+const TERMINAL_HISTORY_STORAGE_KEY = 'terminalHistory';
+const COMPLETION_LIST_COLUMNS = 4;
+const QUICK_TERMINAL_COMMANDS = ['ls', 'dir', 'pwd'];
 
 // Simple line-based diff to power inline change previews for file operations
 const computeLineDiff = (beforeContent = '', afterContent = '', options = {}) => {
@@ -287,6 +292,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const searchInputRef = useRef(null);
   const terminalOutputRef = useRef(null);
   const terminalInputRef = useRef(null);
+  const completionRequestIdRef = useRef(0);
+  const historyDraftRef = useRef('');
   const pendingShellIdRef = useRef(null);
   const agentStatusTimersRef = useRef([]);
   const agentModeMenuRef = useRef(null);
@@ -569,9 +576,26 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [terminalInput, setTerminalInput] = useState('');
   const [isTerminalBusy, setIsTerminalBusy] = useState(false);
   const [isStoppingTerminal, setIsStoppingTerminal] = useState(false);
+  const [terminalHistory, setTerminalHistory] = useState([]);
+  const [historyIndex, setHistoryIndex] = useState(null);
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState('');
+  const [isCompletingTerminal, setIsCompletingTerminal] = useState(false);
   const [terminalShells, setTerminalShells] = useState([]);
   const [isLoadingTerminalShells, setIsLoadingTerminalShells] = useState(false);
   const [selectedTerminalShellId, setSelectedTerminalShellId] = useState(null);
+
+  const filteredHistory = useMemo(() => {
+    if (!historyFilter) {
+      return terminalHistory;
+    }
+    const lowered = historyFilter.toLowerCase();
+    return terminalHistory.filter((entry) => entry.toLowerCase().includes(lowered));
+  }, [terminalHistory, historyFilter]);
+
+  const recentHistoryEntries = useMemo(() => {
+    return filteredHistory.slice(-50).reverse();
+  }, [filteredHistory]);
 
   const loadProjectTree = useCallback(async (path = '.', options = {}) => {
     const { setAsRoot = true, showToastMessage = false, maxDepth = 8 } = options;
@@ -702,6 +726,37 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     };
     ensureSession();
   }, [terminalSessionId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      const storedHistory = window.localStorage.getItem(TERMINAL_HISTORY_STORAGE_KEY);
+      if (storedHistory) {
+        const parsed = JSON.parse(storedHistory);
+        if (Array.isArray(parsed)) {
+          setTerminalHistory(parsed.slice(-MAX_TERMINAL_HISTORY));
+        }
+      }
+    } catch (error) {
+      console.error('Error loading terminal history:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        TERMINAL_HISTORY_STORAGE_KEY,
+        JSON.stringify(terminalHistory.slice(-MAX_TERMINAL_HISTORY))
+      );
+    } catch (error) {
+      console.error('Error saving terminal history:', error);
+    }
+  }, [terminalHistory]);
   
   const getLanguageFromPath = (path) => {
     const ext = normalizeEditorPath(path).split('.').pop().toLowerCase();
@@ -844,6 +899,69 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setTerminalOutput(prev => [...prev, { id: createUniqueLineId(), text, type }]);
   }, []);
 
+  const focusTerminalInput = useCallback(() => {
+    if (terminalInputRef.current) {
+      terminalInputRef.current.focus();
+    }
+  }, []);
+
+  const addCommandToHistory = useCallback((command) => {
+    if (!command) {
+      return;
+    }
+    setTerminalHistory((prev) => {
+      const lastEntry = prev[prev.length - 1];
+      if (lastEntry === command) {
+        return prev;
+      }
+      const next = [...prev, command];
+      if (next.length > MAX_TERMINAL_HISTORY) {
+        next.splice(0, next.length - MAX_TERMINAL_HISTORY);
+      }
+      return next;
+    });
+  }, []);
+
+  const showCompletionList = useCallback((completions = []) => {
+    if (!Array.isArray(completions) || completions.length === 0) {
+      appendTerminalLine('No matches', 'info');
+      return;
+    }
+    for (let i = 0; i < completions.length; i += COMPLETION_LIST_COLUMNS) {
+      const chunk = completions.slice(i, i + COMPLETION_LIST_COLUMNS).map((item) => item.value);
+      appendTerminalLine(chunk.join('    '), 'info');
+    }
+  }, [appendTerminalLine]);
+
+  const applyCompletionReplacement = useCallback((replacement) => {
+    if (
+      !replacement ||
+      typeof replacement.start !== 'number' ||
+      typeof replacement.end !== 'number'
+    ) {
+      return false;
+    }
+    const text = typeof replacement.text === 'string' ? replacement.text : '';
+    const existing = terminalInput.slice(replacement.start, replacement.end);
+    if (existing === text) {
+      return false;
+    }
+    setTerminalInput((prev) => {
+      const before = prev.slice(0, replacement.start);
+      const after = prev.slice(replacement.end);
+      const nextValue = `${before}${text}${after}`;
+      requestAnimationFrame(() => {
+        if (terminalInputRef.current) {
+          const nextCursor = replacement.start + text.length;
+          terminalInputRef.current.setSelectionRange(nextCursor, nextCursor);
+          focusTerminalInput();
+        }
+      });
+      return nextValue;
+    });
+    return true;
+  }, [focusTerminalInput, terminalInput]);
+
   const processTerminalResponse = useCallback((response, options = {}) => {
     if (!response) {
       return response;
@@ -897,6 +1015,115 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setBottomPanelTab('terminal');
   }, []);
 
+  const handleTerminalCompletion = useCallback(async () => {
+    if (!terminalSessionId || isCompletingTerminal) {
+      return;
+    }
+    const cursorPosition = terminalInputRef.current?.selectionStart ?? terminalInput.length;
+    const requestId = completionRequestIdRef.current + 1;
+    completionRequestIdRef.current = requestId;
+    setIsCompletingTerminal(true);
+    try {
+      const response = await ApiService.completeTerminalInput(
+        terminalInput,
+        terminalSessionId,
+        cursorPosition
+      );
+      if (completionRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const applied = response?.replacement
+        ? applyCompletionReplacement(response.replacement)
+        : false;
+      const completions = Array.isArray(response?.completions) ? response.completions : [];
+
+      if (completions.length === 0) {
+        showCompletionList([]);
+      } else if (!applied || completions.length > 1) {
+        showCompletionList(completions);
+      }
+    } catch (error) {
+      if (completionRequestIdRef.current === requestId) {
+        console.error('Error completing terminal input:', error);
+        appendTerminalLine(error.response?.data?.detail || error.message, 'error');
+      }
+    } finally {
+      if (completionRequestIdRef.current === requestId) {
+        setIsCompletingTerminal(false);
+      }
+    }
+  }, [
+    appendTerminalLine,
+    applyCompletionReplacement,
+    isCompletingTerminal,
+    showCompletionList,
+    terminalInput,
+    terminalSessionId,
+  ]);
+
+  const handleHistoryNavigation = useCallback((direction) => {
+    if (!terminalHistory.length) {
+      return;
+    }
+    setHistoryIndex((prevIndex) => {
+      if (direction === 'prev') {
+        const nextIndex = prevIndex === null ? terminalHistory.length - 1 : Math.max(prevIndex - 1, 0);
+        if (prevIndex === null) {
+          historyDraftRef.current = terminalInput;
+        }
+        const command = terminalHistory[nextIndex] ?? '';
+        setTerminalInput(command);
+        requestAnimationFrame(() => {
+          if (terminalInputRef.current) {
+            const pos = command.length;
+            terminalInputRef.current.setSelectionRange(pos, pos);
+            focusTerminalInput();
+          }
+        });
+        return nextIndex;
+      }
+
+      if (prevIndex === null) {
+        return null;
+      }
+
+      const nextIndex = prevIndex + 1;
+      if (nextIndex >= terminalHistory.length) {
+        const draft = historyDraftRef.current || '';
+        setTerminalInput(draft);
+        requestAnimationFrame(() => {
+          if (terminalInputRef.current) {
+            const pos = draft.length;
+            terminalInputRef.current.setSelectionRange(pos, pos);
+            focusTerminalInput();
+          }
+        });
+        historyDraftRef.current = '';
+        return null;
+      }
+
+      const command = terminalHistory[nextIndex] ?? '';
+      setTerminalInput(command);
+      requestAnimationFrame(() => {
+        if (terminalInputRef.current) {
+          const pos = command.length;
+          terminalInputRef.current.setSelectionRange(pos, pos);
+          focusTerminalInput();
+        }
+      });
+      return nextIndex;
+    });
+  }, [focusTerminalInput, terminalHistory, terminalInput]);
+
+  const handleTerminalInputChange = useCallback((event) => {
+    if (historyIndex !== null) {
+      setHistoryIndex(null);
+      historyDraftRef.current = '';
+    }
+    setTerminalInput(event.target.value);
+  }, [historyIndex]);
+
   const runTerminalCommand = useCallback(async (command, options = {}) => {
     const { skipEcho = false } = options;
     const trimmed = command?.trim();
@@ -913,9 +1140,20 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
     const lower = trimmed.toLowerCase();
     if (lower === 'clear' || lower === 'cls') {
+      addCommandToHistory(trimmed);
+      setHistoryIndex(null);
+      historyDraftRef.current = '';
+      setShowHistoryPanel(false);
+      setHistoryFilter('');
       setTerminalOutput([]);
       return;
     }
+
+    addCommandToHistory(trimmed);
+    setHistoryIndex(null);
+    historyDraftRef.current = '';
+    setShowHistoryPanel(false);
+    setHistoryFilter('');
 
     setIsTerminalBusy(true);
     try {
@@ -927,7 +1165,65 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     } finally {
       setIsTerminalBusy(false);
     }
-  }, [appendTerminalLine, ensureTerminalVisible, terminalCwd, terminalSessionId, isTerminalBusy, processTerminalResponse]);
+  }, [
+    addCommandToHistory,
+    appendTerminalLine,
+    ensureTerminalVisible,
+    isTerminalBusy,
+    processTerminalResponse,
+    terminalCwd,
+    terminalSessionId,
+  ]);
+
+  const handleQuickCommand = useCallback((command) => {
+    if (!command) {
+      return;
+    }
+    runTerminalCommand(command);
+  }, [runTerminalCommand]);
+
+  const handleClearTerminalOutput = useCallback(() => {
+    setTerminalOutput([]);
+  }, []);
+
+  const handleHistoryEntrySelect = useCallback((command) => {
+    if (typeof command !== 'string' || !command.length) {
+      return;
+    }
+    setTerminalInput(command);
+    setHistoryIndex(null);
+    historyDraftRef.current = '';
+    setShowHistoryPanel(false);
+    requestAnimationFrame(() => {
+      if (terminalInputRef.current) {
+        const pos = command.length;
+        terminalInputRef.current.setSelectionRange(pos, pos);
+        focusTerminalInput();
+      }
+    });
+  }, [focusTerminalInput]);
+
+  const handleClearTerminalHistory = useCallback(() => {
+    setTerminalHistory([]);
+    setHistoryIndex(null);
+    historyDraftRef.current = '';
+    setHistoryFilter('');
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(TERMINAL_HISTORY_STORAGE_KEY);
+    }
+    appendTerminalLine('Cleared terminal history', 'info');
+  }, [appendTerminalLine]);
+
+  const handleHistoryPanelToggle = useCallback(() => {
+    setShowHistoryPanel((prev) => !prev);
+    requestAnimationFrame(() => {
+      focusTerminalInput();
+    });
+  }, [focusTerminalInput]);
+
+  const handleHistoryFilterChange = useCallback((event) => {
+    setHistoryFilter(event.target.value);
+  }, []);
 
   const handleStopTerminalCommand = useCallback(async () => {
     if (!terminalSessionId || !isTerminalBusy || isStoppingTerminal) {
@@ -946,6 +1242,36 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   }, [appendTerminalLine, isStoppingTerminal, isTerminalBusy, processTerminalResponse, terminalSessionId]);
 
   const handleTerminalInputKeyDown = async (e) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      await handleTerminalCompletion();
+      return;
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      handleHistoryNavigation('prev');
+      return;
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      handleHistoryNavigation('next');
+      return;
+    }
+
+    if (e.ctrlKey && e.key.toLowerCase() === 'l') {
+      e.preventDefault();
+      handleClearTerminalOutput();
+      return;
+    }
+
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'h') {
+      e.preventDefault();
+      handleHistoryPanelToggle();
+      return;
+    }
+
     if (e.key === 'Enter' && !isTerminalBusy) {
       e.preventDefault();
       await runTerminalCommand(terminalInput);
@@ -3208,7 +3534,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                     ref={terminalInputRef}
                     type="text"
                     value={terminalInput}
-                    onChange={(e) => setTerminalInput(e.target.value)}
+                    onChange={handleTerminalInputChange}
                     onKeyDown={handleTerminalInputKeyDown}
                     className="flex-1 bg-transparent border-none outline-none text-dark-200 disabled:opacity-50"
                     placeholder="Type command..."
