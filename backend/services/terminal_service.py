@@ -10,12 +10,16 @@ from asyncio.subprocess import PIPE, Process
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 def _utc_now() -> datetime:
     """Return the current UTC time."""
     return datetime.now(timezone.utc)
+
+
+TERMINAL_COMPLETION_LIMIT = 200
+COMPLETION_DELIMITERS = " \t\n\r;&|="
 
 
 @dataclass
@@ -115,6 +119,62 @@ class TerminalService:
             message="Interrupt signal sent",
             was_cd=False,
         )
+
+    async def complete_command(
+        self,
+        session_id: Optional[str],
+        text: Optional[str],
+        cursor_position: Optional[int] = None,
+    ) -> Dict[str, object]:
+        session = await self._get_or_create_session(session_id)
+        buffer = text or ""
+        cursor = self._normalize_cursor(buffer, cursor_position)
+        token_start, token = self._extract_completion_token(buffer, cursor)
+        context = self._analyze_completion_token(token)
+
+        search_dir = self._resolve_completion_directory(session.cwd, context["lookup"])
+        completions: List[Dict[str, object]] = []
+        if search_dir is not None:
+            completions = self._collect_completion_entries(
+                search_dir,
+                context["prefix"],
+                context["separator"],
+            )
+
+        common_suffix = self._longest_common_prefix([entry["append"] for entry in completions])
+        replacement_text = token
+        applied = False
+
+        if completions:
+            if len(completions) == 1:
+                suffix_to_use = completions[0]["append"]
+                if not completions[0]["is_directory"]:
+                    suffix_to_use = f"{suffix_to_use} "
+            else:
+                suffix_to_use = common_suffix or context["prefix"]
+
+            replacement_text = context["quote"] + context["dir_context"] + suffix_to_use
+            applied = replacement_text != token
+
+        return {
+            "session_id": session.session_id,
+            "cwd": str(session.cwd),
+            "replacement": {
+                "start": token_start,
+                "end": cursor,
+                "text": replacement_text,
+            },
+            "applied": applied,
+            "completions": [
+                {
+                    "value": entry["value"],
+                    "is_directory": entry["is_directory"],
+                    "path": entry["path"],
+                }
+                for entry in completions
+            ],
+            "matched_prefix": context["prefix"],
+        }
 
     async def _get_session(self, session_id: Optional[str]) -> Optional[TerminalSession]:
         async with self._lock:
@@ -276,6 +336,157 @@ class TerminalService:
         await asyncio.sleep(0.2)
         if process.returncode is None:
             process.kill()
+
+    def _normalize_cursor(self, text: str, cursor_position: Optional[int]) -> int:
+        if cursor_position is None:
+            return len(text)
+        return max(0, min(cursor_position, len(text)))
+
+    def _extract_completion_token(self, text: str, cursor: int) -> Tuple[int, str]:
+        if not text:
+            return 0, ""
+        start = cursor
+        while start > 0 and text[start - 1] not in COMPLETION_DELIMITERS:
+            start -= 1
+        return start, text[start:cursor]
+
+    def _analyze_completion_token(self, token: str) -> Dict[str, object]:
+        if not token:
+            return {
+                "quote": "",
+                "core": "",
+                "dir_context": "",
+                "prefix": "",
+                "lookup": "",
+                "separator": os.sep,
+                "trailing": False,
+            }
+
+        quote = token[0] if token[:1] in {"'", '"'} else ""
+        core = token[1:] if quote else token
+        trailing_sep = bool(core) and core[-1] in "/\\"
+        stripped_core = core.rstrip("/\\") if trailing_sep else core
+        separator = self._detect_separator(core)
+
+        dir_part = ""
+        prefix = stripped_core
+
+        if trailing_sep:
+            dir_part = stripped_core
+            prefix = ""
+        else:
+            split_index = max(stripped_core.rfind("/"), stripped_core.rfind("\\"))
+            if split_index == -1:
+                dir_part = ""
+                prefix = stripped_core
+            else:
+                dir_part = stripped_core[:split_index]
+                prefix = stripped_core[split_index + 1 :]
+                separator = stripped_core[split_index]
+
+        if not separator:
+            separator = os.sep
+
+        dir_context = ""
+        if trailing_sep and stripped_core:
+            dir_context = stripped_core + separator
+        elif dir_part:
+            dir_context = dir_part + separator
+        elif trailing_sep and not stripped_core and core:
+            dir_context = core
+
+        lookup = ""
+        if trailing_sep:
+            if stripped_core:
+                lookup = stripped_core
+            elif core:
+                lookup = core
+        else:
+            lookup = dir_part
+
+        return {
+            "quote": quote,
+            "core": core,
+            "dir_context": dir_context,
+            "prefix": prefix,
+            "lookup": lookup,
+            "separator": separator,
+            "trailing": trailing_sep,
+        }
+
+    @staticmethod
+    def _detect_separator(token: str) -> str:
+        if "/" in token and "\\" not in token:
+            return "/"
+        if "\\" in token and "/" not in token:
+            return "\\"
+        return os.sep
+
+    def _resolve_completion_directory(self, cwd: Path, target: Optional[str]) -> Optional[Path]:
+        if not target:
+            return cwd
+
+        expanded = os.path.expanduser(target)
+        candidate = Path(expanded)
+        try:
+            if candidate.is_absolute():
+                resolved = candidate.resolve()
+            else:
+                resolved = (cwd / expanded).resolve()
+        except (OSError, RuntimeError):
+            return None
+
+        if resolved.exists() and resolved.is_dir():
+            return resolved
+        return None
+
+    def _collect_completion_entries(
+        self,
+        directory: Path,
+        prefix: str,
+        separator: str,
+    ) -> List[Dict[str, object]]:
+        results: List[Dict[str, object]] = []
+        try:
+            entries = sorted(
+                directory.iterdir(),
+                key=lambda entry: (not entry.is_dir(), entry.name.lower()),
+            )
+        except OSError:
+            return results
+
+        for entry in entries:
+            name = entry.name
+            if prefix and not name.startswith(prefix):
+                continue
+
+            is_directory = entry.is_dir()
+            value = f"{name}{separator if is_directory else ''}"
+            results.append(
+                {
+                    "value": value,
+                    "append": value,
+                    "is_directory": is_directory,
+                    "path": str(entry),
+                }
+            )
+
+            if len(results) >= TERMINAL_COMPLETION_LIMIT:
+                break
+
+        return results
+
+    @staticmethod
+    def _longest_common_prefix(items: Sequence[str]) -> str:
+        if not items:
+            return ""
+        prefix = items[0]
+        for value in items[1:]:
+            while not value.startswith(prefix):
+                prefix = prefix[:-1]
+                if not prefix:
+                    return ""
+        return prefix
 
     def _split_command(self, command: str) -> Sequence[str]:
         posix = os.name != "nt"
