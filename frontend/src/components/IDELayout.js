@@ -6,7 +6,9 @@ import {
   ChevronRight as ChevronRightIcon, ChevronDown,
   Send, User, Loader2, CheckCircle, AlertCircle,
   Infinity, AtSign, Globe, Image, Mic, Square, Plus, Clock, History, MoreVertical,
-  RefreshCw, Minimize2, Workflow, Trash2
+  RefreshCw, Minimize2, Workflow, Trash2, GitCompare, Clipboard, Copy, Scissors,
+  Terminal, Share2, ExternalLink, FileSearch, Link as LinkIcon, Play, Bug, BarChart2,
+  Edit2
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
@@ -230,7 +232,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [selectedFile, setSelectedFile] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [isFileTreeLoading, setIsFileTreeLoading] = useState(false);
-  
+  const [fileContextMenu, setFileContextMenu] = useState({ visible: false, x: 0, y: 0, target: null });
+  const [fileClipboard, setFileClipboard] = useState(null);
+  const [compareSource, setCompareSource] = useState(null);
+  const [comparisonState, setComparisonState] = useState(null);
+  const [folderSearchResults, setFolderSearchResults] = useState(null);
+  const isWindowsPlatform = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent || '');
+
+  const closeFileContextMenu = useCallback(() => {
+    setFileContextMenu({ visible: false, x: 0, y: 0, target: null });
+  }, []);
+
   // Editor states
   const [editorContent, setEditorContent] = useState('');
   const [editorLanguage, setEditorLanguage] = useState('python');
@@ -819,7 +831,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       console.error('Error loading file:', error);
       toast.error(`Failed to load file: ${error.response?.data?.detail || error.message}`);
     }
-  }, [openFiles]);
+  }, [getLanguageFromPath, openFiles]);
 
   useEffect(() => {
     if (selectedFile && !openFiles.find(f => f.path === selectedFile)) {
@@ -1438,13 +1450,62 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     return `${currentPath}/${trimmed}`.replace(/\\/g, '/');
   };
 
-  const handleCreateFile = async () => {
+  const getParentDirectory = useCallback((path) => {
+    if (!path) return '.';
+    const normalized = normalizeEditorPath(path);
+    const segments = normalized.split('/');
+    segments.pop();
+    const parent = segments.join('/');
+    return parent || '.';
+  }, []);
+
+  const joinPaths = useCallback((basePath, childName) => {
+    const normalizedBase = normalizeEditorPath(basePath || '.').replace(/\/$/, '');
+    if (!childName) return normalizedBase || '.';
+    if (!normalizedBase || normalizedBase === '.' || normalizedBase === '') {
+      return normalizeEditorPath(childName);
+    }
+    return `${normalizedBase}/${childName}`.replace(/\/{2,}/g, '/');
+  }, []);
+
+  const getRelativePath = useCallback((targetPath) => {
+    if (!targetPath) return '';
+    const basePath = normalizeEditorPath(projectRoot?.path || '.');
+    const normalizedTarget = normalizeEditorPath(targetPath);
+    if (!basePath || basePath === '.' || !normalizedTarget.startsWith(basePath)) {
+      return normalizedTarget;
+    }
+    const relative = normalizedTarget.slice(basePath.length).replace(/^\/+/, '');
+    return relative || normalizedTarget.split('/').pop() || normalizedTarget;
+  }, [projectRoot?.path]);
+
+  const quotePath = useCallback((path) => `"${path.replace(/"/g, '\\"')}"`, []);
+
+  const loadPickerTree = useCallback(async (path = '.') => {
+    try {
+      setPickerLoading(true);
+      const response = await ApiService.getFileTree(path, 1);
+      if (response?.tree) {
+        const normalizedTree = normalizeTreeNode(response.tree);
+        setPickerTree(normalizedTree.children || []);
+        setPickerPath(normalizedTree.path || '.');
+      }
+    } catch (error) {
+      console.error('Error loading picker tree:', error);
+      toast.error('Failed to load directory');
+    } finally {
+      setPickerLoading(false);
+    }
+  }, []);
+
+  const handleCreateFile = useCallback(async (basePath = null) => {
+    const targetBase = basePath || currentPath || '.';
     setPickerMode('file');
-    setPickerPath(currentPath || '.');
+    setPickerPath(targetBase);
     setPickerSelectedPath('');
     setShowFilePicker(true);
-    await loadPickerTree(currentPath || '.');
-  };
+    await loadPickerTree(targetBase);
+  }, [currentPath, loadPickerTree]);
 
   const handleFilePickerConfirm = async () => {
     const inputPath = pickerSelectedPath || '';
@@ -1477,13 +1538,14 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
   };
 
-  const handleCreateFolder = async () => {
+  const handleCreateFolder = useCallback(async (basePath = null) => {
+    const targetBase = basePath || currentPath || '.';
     setPickerMode('folder');
-    setPickerPath(currentPath || '.');
+    setPickerPath(targetBase);
     setPickerSelectedPath('');
     setShowFilePicker(true);
-    await loadPickerTree(currentPath || '.');
-  };
+    await loadPickerTree(targetBase);
+  }, [currentPath, loadPickerTree]);
 
   const handleFolderPickerConfirm = async () => {
     const inputPath = pickerSelectedPath || '';
@@ -1504,21 +1566,527 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
   };
 
-  const loadPickerTree = useCallback(async (path = '.') => {
-    try {
-      setPickerLoading(true);
-      const response = await ApiService.getFileTree(path, 1);
-      if (response?.tree) {
-        const normalizedTree = normalizeTreeNode(response.tree);
-        setPickerTree(normalizedTree.children || []);
-        setPickerPath(normalizedTree.path || '.');
-      }
-    } catch (error) {
-      console.error('Error loading picker tree:', error);
-      toast.error('Failed to load directory');
-    } finally {
-      setPickerLoading(false);
+  useEffect(() => {
+    if (!fileContextMenu.visible) {
+      return;
     }
+    const handleClick = (event) => {
+      if (!(event.target.closest && event.target.closest('.file-context-menu'))) {
+        closeFileContextMenu();
+      }
+    };
+    const handleScroll = () => closeFileContextMenu();
+    const handleKey = (event) => {
+      if (event.key === 'Escape') {
+        closeFileContextMenu();
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('scroll', handleScroll, true);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('scroll', handleScroll, true);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [closeFileContextMenu, fileContextMenu.visible]);
+
+  const handleCopyPathValue = useCallback(async (path, options = {}) => {
+    if (!path || !navigator?.clipboard?.writeText) {
+      toast.error('Clipboard API unavailable');
+      return;
+    }
+    try {
+      const value = options.relative ? getRelativePath(path) : normalizeEditorPath(path);
+      await navigator.clipboard.writeText(value);
+      toast.success(options.relative ? 'Relative path copied' : 'Path copied');
+    } catch (error) {
+      console.error('Copy path failed:', error);
+      toast.error('Failed to copy path');
+    } finally {
+      closeFileContextMenu();
+    }
+  }, [closeFileContextMenu, getRelativePath]);
+
+  const handleCopyShareLink = useCallback(async (target, variant = 'markdown') => {
+    if (!target || !navigator?.clipboard?.writeText) {
+      toast.error('Clipboard API unavailable');
+      return;
+    }
+    try {
+      const relative = getRelativePath(target.path);
+      const normalized = normalizeEditorPath(target.path).replace(/\\/g, '/');
+      let payload = normalized;
+      if (variant === 'markdown') {
+        payload = `[${target.name}](${relative})`;
+      } else if (variant === 'file') {
+        const prefix = normalized.startsWith('/') ? '' : '/';
+        payload = `file://${prefix}${normalized}`;
+      }
+      await navigator.clipboard.writeText(payload);
+      toast.success('Shareable link copied');
+    } catch (error) {
+      console.error('Copy share link failed:', error);
+      toast.error('Failed to copy share link');
+    } finally {
+      closeFileContextMenu();
+    }
+  }, [closeFileContextMenu, getRelativePath]);
+
+  const handleRevealInExplorer = useCallback((target) => {
+    if (!target?.path) return;
+    const normalized = normalizeEditorPath(target.path).replace(/\\/g, '/');
+    let fileUrl = normalized;
+    if (/^[a-zA-Z]:/.test(normalized)) {
+      fileUrl = `/${normalized}`;
+    }
+    const encoded = fileUrl.replace(/ /g, '%20');
+    window.open(`file://${encoded}`, '_blank', 'noopener,noreferrer');
+  }, []);
+
+  const handleOpenInTerminal = useCallback(async (target) => {
+    if (!target?.path) return;
+    const destination = target.is_directory ? target.path : getParentDirectory(target.path);
+    if (!destination) return;
+    ensureTerminalVisible();
+    setBottomPanelTab('terminal');
+    const command = isWindowsPlatform
+      ? `cd /d "${destination}"`
+      : `cd "${destination}"`;
+    closeFileContextMenu();
+    await runTerminalCommand(command);
+  }, [closeFileContextMenu, ensureTerminalVisible, getParentDirectory, isWindowsPlatform, runTerminalCommand]);
+
+  const handleAddPathToChat = useCallback((target, options = {}) => {
+    if (!target?.path) return;
+    const mention = `@${getRelativePath(target.path) || target.name}`;
+    if (options.newTab) {
+      const newId = Math.max(...chatTabs.map(t => t.id), 0) + 1;
+      setChatTabs(prev => prev.map(tab => ({ ...tab, isActive: false })).concat([{ id: newId, title: 'New Chat', isActive: true }]));
+      setActiveChatTab(newId);
+      setChatMessages([]);
+      setComposerInput(mention);
+    } else {
+      setComposerInput(prev => (prev ? `${prev.trim()} ${mention}` : mention));
+      requestAnimationFrame(() => composerInputRef.current?.focus());
+    }
+    toast.success('Path added to chat input');
+    closeFileContextMenu();
+  }, [chatTabs, closeFileContextMenu, composerInputRef, getRelativePath]);
+
+  const handleFindInFolder = useCallback(async (target) => {
+    if (!target) return;
+    const folderPath = target.is_directory ? target.path : getParentDirectory(target.path);
+    if (!folderPath) return;
+    const query = window.prompt(`Search within ${folderPath}`, '');
+    if (!query) return;
+    try {
+      const response = await ApiService.searchFiles(query, folderPath);
+      setFolderSearchResults({
+        folderPath,
+        query,
+        results: response.results || [],
+      });
+      toast.success(`Found ${response.results?.length || 0} result(s)`);
+    } catch (error) {
+      console.error('Find in folder failed:', error);
+      toast.error('Failed to search within folder');
+    } finally {
+      closeFileContextMenu();
+    }
+  }, [closeFileContextMenu, getParentDirectory]);
+
+  const handleCompareWithTarget = useCallback(async (target) => {
+    if (!target || target.is_directory) {
+      toast.error('Select a file to compare');
+      return;
+    }
+    if (!compareSource) {
+      setCompareSource(target);
+      toast('Select another file to complete the comparison');
+      closeFileContextMenu();
+      return;
+    }
+    if (compareSource.path === target.path) {
+      toast.error('Select a different file to compare');
+      return;
+    }
+    try {
+      const [a, b] = await Promise.all([
+        ApiService.readFile(compareSource.path),
+        ApiService.readFile(target.path),
+      ]);
+      const diff = computeLineDiff(a.content, b.content);
+      setComparisonState({
+        leftLabel: compareSource.name || 'File A',
+        rightLabel: target.name || 'File B',
+        leftPath: compareSource.path,
+        rightPath: target.path,
+        diff,
+      });
+      setCompareSource(null);
+    } catch (error) {
+      console.error('Compare failed:', error);
+      toast.error('Failed to compare files');
+    } finally {
+      closeFileContextMenu();
+    }
+  }, [closeFileContextMenu, compareSource]);
+
+  const handleCompareWithClipboard = useCallback(async (target) => {
+    if (!target || target.is_directory) {
+      toast.error('Select a file to compare');
+      return;
+    }
+    try {
+      const clipboardText = await navigator.clipboard.readText();
+      const fileData = await ApiService.readFile(target.path);
+      const diff = computeLineDiff(clipboardText, fileData.content);
+      setComparisonState({
+        leftLabel: 'Clipboard',
+        rightLabel: target.name || 'File',
+        leftPath: 'Clipboard',
+        rightPath: target.path,
+        diff,
+      });
+      closeFileContextMenu();
+    } catch (error) {
+      console.error('Compare with clipboard failed:', error);
+      toast.error('Failed to compare with clipboard');
+    }
+  }, [closeFileContextMenu]);
+
+  const handleCutOrCopy = useCallback((target, action) => {
+    if (!target) return;
+    setFileClipboard({ action, item: target });
+    toast.success(action === 'cut' ? 'Ready to move item' : 'Item copied');
+    closeFileContextMenu();
+  }, [closeFileContextMenu]);
+
+  const applyPathRename = useCallback((oldPath, newPath, isDirectory) => {
+    if (!oldPath || !newPath) return;
+    const normalizedOld = normalizeEditorPath(oldPath);
+    const normalizedNew = normalizeEditorPath(newPath);
+    setOpenFiles(prev =>
+      prev.map(file => {
+        if (!file.path.startsWith(normalizedOld)) {
+          return file;
+        }
+        const suffix = file.path.slice(normalizedOld.length);
+        const updatedPath = `${normalizedNew}${suffix}`;
+        return {
+          ...file,
+          path: updatedPath,
+          name: updatedPath.split('/').pop() || file.name,
+        };
+      })
+    );
+    if (selectedFile?.startsWith(normalizedOld)) {
+      const suffix = selectedFile.slice(normalizedOld.length);
+      setSelectedFile(`${normalizedNew}${suffix}`);
+    }
+    if (activeTab?.startsWith(normalizedOld)) {
+      const suffix = activeTab.slice(normalizedOld.length);
+      const updated = `${normalizedNew}${suffix}`;
+      setActiveTab(updated);
+    }
+    setExpandedFolders(prev => {
+      const next = new Set();
+      prev.forEach((path) => {
+        if (path.startsWith(normalizedOld)) {
+          next.add(`${normalizedNew}${path.slice(normalizedOld.length)}`);
+        } else {
+          next.add(path);
+        }
+      });
+      if (isDirectory) {
+        next.add(normalizedNew);
+      }
+      return next;
+    });
+  }, [activeTab, selectedFile]);
+
+  const removePathReferences = useCallback((targetPath) => {
+    if (!targetPath) return;
+    const normalized = normalizeEditorPath(targetPath);
+    setOpenFiles(prev => prev.filter(file => !file.path.startsWith(normalized)));
+    if (selectedFile?.startsWith(normalized)) {
+      setSelectedFile(null);
+    }
+    if (activeTab?.startsWith(normalized)) {
+      setActiveTab(null);
+      setEditorContent('');
+    }
+    setExpandedFolders(prev => {
+      const next = new Set();
+      prev.forEach((path) => {
+        if (!path.startsWith(normalized)) {
+          next.add(path);
+        }
+      });
+      return next;
+    });
+  }, [activeTab, selectedFile]);
+
+  const handlePasteInto = useCallback(async (target) => {
+    if (!fileClipboard?.item) {
+      toast.error('Nothing to paste');
+      return;
+    }
+    const destinationDir = target?.is_directory
+      ? target.path
+      : getParentDirectory(target?.path || fileClipboard.item.path);
+    if (!destinationDir) {
+      toast.error('Select a destination folder');
+      return;
+    }
+    const sourcePath = fileClipboard.item.path;
+    const destinationPath = joinPaths(destinationDir, fileClipboard.item.name || sourcePath.split('/').pop());
+    if (normalizeEditorPath(destinationPath) === normalizeEditorPath(sourcePath)) {
+      toast.error('Source and destination are identical');
+      return;
+    }
+    try {
+      if (fileClipboard.action === 'copy') {
+        await ApiService.copyPath(sourcePath, destinationPath);
+        toast.success('Item copied');
+      } else {
+        await ApiService.movePath(sourcePath, destinationPath);
+        applyPathRename(sourcePath, destinationPath, fileClipboard.item.is_directory);
+        setFileClipboard(null);
+        toast.success('Item moved');
+      }
+      await refreshFileTree();
+    } catch (error) {
+      console.error('Paste failed:', error);
+      toast.error(error.response?.data?.detail || 'Failed to paste item');
+    } finally {
+      closeFileContextMenu();
+    }
+  }, [applyPathRename, closeFileContextMenu, fileClipboard, getParentDirectory, joinPaths, refreshFileTree]);
+
+  const handleRenamePath = useCallback(async (target) => {
+    if (!target) return;
+    const newName = window.prompt('Enter a new name', target.name);
+    if (!newName || newName === target.name) return;
+    const destination = joinPaths(getParentDirectory(target.path), newName);
+    try {
+      await ApiService.movePath(target.path, destination);
+      applyPathRename(target.path, destination, target.is_directory);
+      toast.success('Renamed successfully');
+      await refreshFileTree();
+    } catch (error) {
+      console.error('Rename failed:', error);
+      toast.error(error.response?.data?.detail || 'Failed to rename');
+    } finally {
+      closeFileContextMenu();
+    }
+  }, [applyPathRename, closeFileContextMenu, getParentDirectory, joinPaths, refreshFileTree]);
+
+  const handleDeletePath = useCallback(async (target) => {
+    if (!target) return;
+    const confirmed = window.confirm(`Delete ${target.name}? This cannot be undone.`);
+    if (!confirmed) return;
+    try {
+      await ApiService.deleteFile(target.path);
+      removePathReferences(target.path);
+      toast.success('Deleted successfully');
+      await refreshFileTree();
+    } catch (error) {
+      console.error('Delete failed:', error);
+      toast.error(error.response?.data?.detail || 'Failed to delete');
+    } finally {
+      closeFileContextMenu();
+    }
+  }, [closeFileContextMenu, refreshFileTree, removePathReferences]);
+
+  const handleRunTestsForPath = useCallback((target, mode = 'run') => {
+    if (!target?.path) return;
+    const normalized = normalizeEditorPath(target.path);
+    const ext = target.is_directory ? '' : normalized.split('.').pop().toLowerCase();
+    const quoted = quotePath(normalized);
+    let command = null;
+    if (!ext || ['js', 'jsx', 'ts', 'tsx'].includes(ext)) {
+      if (mode === 'coverage') {
+        command = `npm test -- --coverage ${quoted}`;
+      } else if (mode === 'debug') {
+        command = `npm test -- --runInBand ${quoted}`;
+      } else {
+        command = `npm test -- ${quoted}`;
+      }
+    } else if (ext === 'py' || (!ext && normalized.endsWith('/'))) {
+      if (mode === 'coverage') {
+        command = `pytest --maxfail=1 --cov ${quoted}`;
+      } else if (mode === 'debug') {
+        command = `pytest -vv ${quoted}`;
+      } else {
+        command = `pytest ${quoted}`;
+      }
+    }
+    if (!command) {
+      toast.error('Unsupported file type for test command');
+      return;
+    }
+    runTerminalCommand(command);
+    closeFileContextMenu();
+  }, [closeFileContextMenu, quotePath, runTerminalCommand]);
+
+  const contextMenuItems = useMemo(() => {
+    const target = fileContextMenu.target;
+    if (!target) {
+      return [];
+    }
+    const isDirectory = !!target.is_directory;
+    const basePath = isDirectory ? target.path : getParentDirectory(target.path);
+    const fileTypeLabel = isDirectory ? 'Directory' : 'File';
+    return [
+      {
+        label: 'Compare with...',
+        disabled: isDirectory,
+        action: () => handleCompareWithTarget(target),
+      },
+      {
+        label: 'Compare with clipboard',
+        disabled: isDirectory,
+        action: () => handleCompareWithClipboard(target),
+      },
+      { type: 'separator' },
+      {
+        label: 'New File...',
+        action: () => handleCreateFile(basePath),
+      },
+      {
+        label: 'New Folder...',
+        action: () => handleCreateFolder(basePath),
+      },
+      { type: 'separator' },
+      {
+        label: 'Reveal in File Explorer',
+        shortcut: 'Shift+Alt+R',
+        action: () => handleRevealInExplorer(target),
+      },
+      {
+        label: 'Open in Integrated Terminal',
+        action: () => handleOpenInTerminal(target),
+      },
+      { type: 'separator' },
+      {
+        label: 'Share',
+        children: [
+          {
+            label: 'Copy Markdown link',
+            action: () => handleCopyShareLink(target, 'markdown'),
+          },
+          {
+            label: 'Copy file:// link',
+            action: () => handleCopyShareLink(target, 'file'),
+          },
+        ],
+      },
+      {
+        label: `Add ${fileTypeLabel} to Cursor Chat`,
+        action: () => handleAddPathToChat(target),
+      },
+      {
+        label: `Add ${fileTypeLabel} to New Cursor Chat`,
+        action: () => handleAddPathToChat(target, { newTab: true }),
+      },
+      {
+        label: 'Find in Folder...',
+        shortcut: 'Shift+Alt+F',
+        action: () => handleFindInFolder(target),
+      },
+      { type: 'separator' },
+      {
+        label: 'Cut',
+        shortcut: 'Ctrl+X',
+        action: () => handleCutOrCopy(target, 'cut'),
+      },
+      {
+        label: 'Copy',
+        shortcut: 'Ctrl+C',
+        action: () => handleCutOrCopy(target, 'copy'),
+      },
+      {
+        label: 'Paste',
+        shortcut: 'Ctrl+V',
+        disabled: !fileClipboard,
+        action: () => handlePasteInto(target),
+      },
+      { type: 'separator' },
+      {
+        label: 'Copy Path',
+        shortcut: 'Shift+Alt+C',
+        action: () => handleCopyPathValue(target.path),
+      },
+      {
+        label: 'Copy Relative Path',
+        shortcut: 'Ctrl+M Ctrl+Shift+C',
+        action: () => handleCopyPathValue(target.path, { relative: true }),
+      },
+      { type: 'separator' },
+      {
+        label: 'Run Tests',
+        action: () => handleRunTestsForPath(target, 'run'),
+      },
+      {
+        label: 'Debug Tests',
+        action: () => handleRunTestsForPath(target, 'debug'),
+      },
+      {
+        label: 'Run Tests with Coverage',
+        action: () => handleRunTestsForPath(target, 'coverage'),
+      },
+      { type: 'separator' },
+      {
+        label: 'Rename...',
+        shortcut: 'F2',
+        action: () => handleRenamePath(target),
+      },
+      {
+        label: 'Delete',
+        shortcut: 'Delete',
+        action: () => handleDeletePath(target),
+      },
+    ];
+  }, [
+    fileClipboard,
+    fileContextMenu.target,
+    getParentDirectory,
+    handleAddPathToChat,
+    handleCompareWithClipboard,
+    handleCompareWithTarget,
+    handleCopyPathValue,
+    handleCopyShareLink,
+    handleCreateFile,
+    handleCreateFolder,
+    handleCutOrCopy,
+    handleDeletePath,
+    handleFindInFolder,
+    handleOpenInTerminal,
+    handlePasteInto,
+    handleRenamePath,
+    handleRevealInExplorer,
+    handleRunTestsForPath,
+  ]);
+
+  const handleFileContextMenu = useCallback((event, target) => {
+    if (event?.button === 0 && event?.ctrlKey && typeof event?.metaKey === 'boolean') {
+      return;
+    }
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (!target) return;
+    const MENU_WIDTH = 280;
+    const MENU_HEIGHT = 480;
+    const x = Math.min(event?.clientX ?? 0, window.innerWidth - MENU_WIDTH);
+    const y = Math.min(event?.clientY ?? 0, window.innerHeight - MENU_HEIGHT);
+    setFileContextMenu({
+      visible: true,
+      x: Math.max(8, x),
+      y: Math.max(8, y),
+      target,
+    });
   }, []);
 
   const handleOpenFolderPrompt = async () => {
@@ -1543,8 +2111,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     if (!folderPath) return;
     await loadProjectTree(folderPath, { setAsRoot: true, showToastMessage: true });
   };
-
-  const quotePath = (path) => `"${path.replace(/"/g, '\\"')}"`;
 
   const buildRunCommandForActiveFile = () => {
     if (!activeTab) return null;
@@ -2614,6 +3180,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                   className="flex items-center px-2 py-1 hover:bg-dark-700 cursor-pointer text-sm"
                   style={{ paddingLeft: `${8 + depth * 16}px` }}
                   onClick={(e) => handleFileClick(file, e)}
+                  onContextMenu={(e) => handleFileContextMenu(e, file)}
                 >
                   {canExpand ? (
                     isExpanded ? (
@@ -2642,6 +3209,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                   }`}
                   style={{ paddingLeft: `${8 + depth * 16}px` }}
                   onClick={(e) => handleFileClick(file, e)}
+                  onContextMenu={(e) => handleFileContextMenu(e, file)}
                 >
                 <div className="w-4 h-4 mr-1 flex-shrink-0" />
                 <File className="w-4 h-4 mr-1 text-dark-400 flex-shrink-0" />
@@ -2781,6 +3349,49 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                 <div className="text-xs text-dark-400 p-2">No files found</div>
               )}
             </div>
+            {folderSearchResults && (
+              <div className="border-t border-dark-700 p-2 text-xs text-dark-300 space-y-2 bg-dark-900/60">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-dark-100 font-semibold">
+                      Search “{folderSearchResults.query}”
+                    </div>
+                    <div className="text-[10px] text-dark-500">
+                      {formatDisplayPath(folderSearchResults.folderPath)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFolderSearchResults(null)}
+                    className="text-[10px] uppercase tracking-wide text-dark-400 hover:text-dark-100"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="max-h-48 overflow-y-auto space-y-1">
+                  {folderSearchResults.results.length > 0 ? (
+                    folderSearchResults.results.map((result) => (
+                      <button
+                        key={result.path}
+                        type="button"
+                        onClick={() => loadFile(result.path)}
+                        className="w-full text-left px-2 py-1 rounded hover:bg-dark-700 flex items-center gap-2"
+                      >
+                        <File className="w-3 h-3 text-dark-500" />
+                        <div className="flex-1">
+                          <div className="text-dark-100 text-xs">{result.name}</div>
+                          <div className="text-[10px] text-dark-500 truncate">
+                            {formatDisplayPath(result.path)}
+                          </div>
+                        </div>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="text-[11px] text-dark-500">No matches found.</div>
+                  )}
+                </div>
+              </div>
+            )}
             <div className="p-2 border-t border-dark-700 text-xs text-dark-400">
               <div>OUTLINE</div>
               <div className="mt-1">TIMELINE</div>
@@ -4009,6 +4620,128 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
               >
                 {showFolderPicker ? 'Select Folder' : pickerMode === 'folder' ? 'Create' : activeTab ? 'Save' : 'Create'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {fileContextMenu.visible && contextMenuItems.length > 0 && (
+        <div className="fixed inset-0 z-50" onClick={closeFileContextMenu}>
+          <div
+            className="file-context-menu absolute bg-dark-800 border border-dark-600 rounded-lg shadow-2xl min-w-[260px] py-2 text-sm text-dark-50"
+            style={{ top: fileContextMenu.y, left: fileContextMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {contextMenuItems.map((item, index) => {
+              if (item.type === 'separator') {
+                return <div key={`sep-${index}`} className="my-1 border-t border-dark-700" />;
+              }
+              if (item.children) {
+                return (
+                  <div key={item.label} className="relative group">
+                    <button
+                      type="button"
+                      className="w-full flex items-center justify-between px-3 py-2 hover:bg-dark-700 text-left"
+                    >
+                      <span className="flex items-center gap-2">
+                        {item.icon && <item.icon className="w-4 h-4 text-dark-400" />}
+                        {item.label}
+                      </span>
+                      <ChevronRightIcon className="w-3 h-3 text-dark-500" />
+                    </button>
+                    <div className="absolute top-0 left-full ml-1 hidden group-hover:block bg-dark-800 border border-dark-600 rounded-lg min-w-[220px] shadow-2xl py-2">
+                      {item.children.map((child, childIndex) => (
+                        <button
+                          type="button"
+                          key={`${child.label}-${childIndex}`}
+                          onClick={() => child.action?.()}
+                          className="w-full flex items-center justify-between px-3 py-2 text-sm text-dark-100 hover:bg-dark-700"
+                        >
+                          <span>{child.label}</span>
+                          {child.shortcut && (
+                            <span className="text-[11px] text-dark-500">{child.shortcut}</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <button
+                  type="button"
+                  key={`${item.label}-${index}`}
+                  disabled={item.disabled}
+                  onClick={() => {
+                    if (!item.disabled) {
+                      item.action?.();
+                    }
+                  }}
+                  className={`w-full flex items-center px-3 py-2 text-left gap-2 ${
+                    item.disabled
+                      ? 'text-dark-500 cursor-not-allowed'
+                      : 'text-dark-100 hover:bg-dark-700'
+                  }`}
+                >
+                  <span className="flex-1">{item.label}</span>
+                  {item.shortcut && (
+                    <span className="text-[11px] text-dark-500">{item.shortcut}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {comparisonState?.diff && (
+        <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center px-4">
+          <div className="bg-dark-900 border border-dark-600 rounded-xl shadow-2xl max-w-5xl w-full max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-dark-700">
+              <div>
+                <div className="text-dark-100 font-semibold text-sm">
+                  Comparing {comparisonState.leftLabel} ↔ {comparisonState.rightLabel}
+                </div>
+                <div className="text-[11px] text-dark-500">{comparisonState.rightPath}</div>
+              </div>
+              <button
+                type="button"
+                className="p-1 rounded hover:bg-dark-700"
+                onClick={() => setComparisonState(null)}
+              >
+                <X className="w-4 h-4 text-dark-400" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto text-xs font-mono bg-dark-950 px-4 py-3 space-y-1">
+              {comparisonState.diff.map((line, idx) => {
+                const baseClasses = 'px-2 py-0.5 rounded';
+                if (line.type === 'added') {
+                  return (
+                    <div key={idx} className={`${baseClasses} bg-green-900/40 text-green-200`}>
+                      + {line.text}
+                    </div>
+                  );
+                }
+                if (line.type === 'removed') {
+                  return (
+                    <div key={idx} className={`${baseClasses} bg-red-900/40 text-red-200`}>
+                      - {line.text}
+                    </div>
+                  );
+                }
+                if (line.type === 'skip') {
+                  return (
+                    <div key={idx} className="text-dark-500 italic">
+                      {line.text}
+                    </div>
+                  );
+                }
+                return (
+                  <div key={idx} className={`${baseClasses} text-dark-200`}>
+                    {line.text}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

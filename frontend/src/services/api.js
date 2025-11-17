@@ -122,6 +122,22 @@ class ApiService {
     return this.delete(`/api/files/delete/${encodedPath}`);
   }
 
+  static async movePath(sourcePath, destinationPath, overwrite = false) {
+    return this.post('/api/files/move', {
+      source_path: this.normalizePath(sourcePath),
+      destination_path: this.normalizePath(destinationPath),
+      overwrite,
+    });
+  }
+
+  static async copyPath(sourcePath, destinationPath, overwrite = false) {
+    return this.post('/api/files/copy', {
+      source_path: this.normalizePath(sourcePath),
+      destination_path: this.normalizePath(destinationPath),
+      overwrite,
+    });
+  }
+
   static async searchFiles(query, path = '.') {
     const normalizedPath = this.normalizePath(path);
     const encodedQuery = encodeURIComponent(query);

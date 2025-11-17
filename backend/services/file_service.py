@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import mimetypes
+import shutil
 
 
 class FileInfo:
@@ -143,6 +144,65 @@ class FileService:
                 
         except Exception as e:
             raise Exception(f"Error deleting {path}: {str(e)}")
+
+    async def move_path(self, source_path: str, destination_path: str, overwrite: bool = False) -> None:
+        """Move or rename a file/directory to a new location."""
+        async def runner():
+            src = self._resolve_path(source_path)
+            dest = self._resolve_path(destination_path)
+
+            if not os.path.exists(src):
+                raise FileNotFoundError(f"Source path not found: {source_path}")
+
+            # Prevent moving a directory into itself
+            normalized_src = os.path.abspath(src)
+            normalized_dest = os.path.abspath(dest)
+            if normalized_dest.startswith(f"{normalized_src}{os.sep}"):
+                raise ValueError("Destination cannot be inside the source directory")
+
+            dest_dir = os.path.dirname(dest)
+            if dest_dir and not os.path.exists(dest_dir):
+                os.makedirs(dest_dir, exist_ok=True)
+
+            if os.path.exists(dest):
+                if not overwrite:
+                    raise FileExistsError(f"Destination already exists: {destination_path}")
+                if os.path.isdir(dest):
+                    shutil.rmtree(dest)
+                else:
+                    os.remove(dest)
+
+            shutil.move(src, dest)
+
+        await asyncio.to_thread(runner)
+
+    async def copy_path(self, source_path: str, destination_path: str, overwrite: bool = False) -> None:
+        """Copy a file or directory to a destination path."""
+        async def runner():
+            src = self._resolve_path(source_path)
+            dest = self._resolve_path(destination_path)
+
+            if not os.path.exists(src):
+                raise FileNotFoundError(f"Source path not found: {source_path}")
+
+            dest_dir = dest if os.path.isdir(src) else os.path.dirname(dest)
+            if dest_dir and not os.path.exists(dest_dir):
+                os.makedirs(dest_dir, exist_ok=True)
+
+            if os.path.exists(dest):
+                if not overwrite:
+                    raise FileExistsError(f"Destination already exists: {destination_path}")
+                if os.path.isdir(dest):
+                    shutil.rmtree(dest)
+                else:
+                    os.remove(dest)
+
+            if os.path.isdir(src):
+                shutil.copytree(src, dest)
+            else:
+                shutil.copy2(src, dest)
+
+        await asyncio.to_thread(runner)
     
     async def search_files(self, query: str, path: str = ".") -> List[Dict[str, Any]]:
         """Search for files by name"""

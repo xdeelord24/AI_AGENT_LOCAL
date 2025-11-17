@@ -41,6 +41,12 @@ class FileTreeResponse(BaseModel):
     tree: FileTreeNode
 
 
+class FileTransferRequest(BaseModel):
+    source_path: str
+    destination_path: str
+    overwrite: bool = False
+
+
 async def get_file_service(request: Request):
     """Dependency to get file service instance"""
     return request.app.state.file_service
@@ -124,6 +130,44 @@ async def delete_file(
         return {"message": f"File/directory {path} deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting file: {str(e)}")
+
+
+@router.post("/move")
+async def move_path(
+    request_data: FileTransferRequest,
+    file_service = Depends(get_file_service)
+):
+    """Move or rename a file/directory."""
+    try:
+        await file_service.move_path(
+            request_data.source_path,
+            request_data.destination_path,
+            request_data.overwrite
+        )
+        return {"message": f"Moved {request_data.source_path} to {request_data.destination_path}"}
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error moving path: {str(exc)}")
+
+
+@router.post("/copy")
+async def copy_path(
+    request_data: FileTransferRequest,
+    file_service = Depends(get_file_service)
+):
+    """Copy a file or directory."""
+    try:
+        await file_service.copy_path(
+            request_data.source_path,
+            request_data.destination_path,
+            request_data.overwrite
+        )
+        return {"message": f"Copied {request_data.source_path} to {request_data.destination_path}"}
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error copying path: {str(exc)}")
 
 
 @router.get("/search/{query}")
