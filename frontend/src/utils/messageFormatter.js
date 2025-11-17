@@ -38,7 +38,9 @@ const ensureRenderer = () => {
   renderer.code = (code, infoString = '') => {
     const language = (infoString || '').split(/\s+/)[0];
     const lang = normalizeLanguage(language || 'text');
-    const escapedCode = escapeHtml((code || '').trimEnd());
+    const rawCode = (code || '').trimEnd();
+    const escapedCode = escapeHtml(rawCode);
+    const safeRawCode = rawCode.replace(/<\/textarea/gi, '<\\/textarea');
 
     return `<div class="code-block language-${lang}" data-language="${lang}">
       <div class="code-header">
@@ -49,20 +51,24 @@ const ensureRenderer = () => {
         </button>
       </div>
       <pre><code class="language-${lang}">${escapedCode}</code></pre>
+      <textarea class="code-raw" hidden>${safeRawCode}</textarea>
     </div>`;
   };
 
   renderer.list = (body, ordered, start) => {
     const tag = ordered ? 'ol' : 'ul';
+    const classes = ordered
+      ? 'markdown-list markdown-list-ordered'
+      : 'markdown-list markdown-list-unordered';
     const startAttr = ordered && typeof start === 'number' && start !== 1 ? ` start="${start}"` : '';
-    return `<${tag}${startAttr}>${body}</${tag}>`;
+    return `<${tag} class="${classes}"${startAttr}>${body}</${tag}>`;
   };
 
   renderer.listitem = (text, task, checked) => {
     if (task) {
-      return `<li class="task-item" data-checked="${checked ? 'x' : ' '}">${text}</li>`;
+      return `<li class="task-item markdown-list-item" data-checked="${checked ? 'x' : ' '}">${text}</li>`;
     }
-    return `<li>${text}</li>`;
+    return `<li class="markdown-list-item">${text}</li>`;
   };
 
   renderer.link = (href, title, text) => {
