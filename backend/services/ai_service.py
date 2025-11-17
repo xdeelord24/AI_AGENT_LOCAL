@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 import os
+import re
 
 try:
     from duckduckgo_search import DDGS
@@ -224,8 +225,6 @@ class AIService:
             "ai_plan": None
         }
 
-        import re
-
         def extract_from_json(json_str: str) -> bool:
             """
             Try to extract metadata from a JSON string.
@@ -360,6 +359,21 @@ class AIService:
         context = dict(context or {})
         web_search_mode = (context.get("web_search_mode") or "off").lower()
         context["web_search_mode"] = web_search_mode
+        
+        new_script_requested = bool(context.get("requested_new_script"))
+        if not new_script_requested and self._detect_new_script_request(message):
+            new_script_requested = True
+            context["requested_new_script"] = True
+            context.setdefault("intent", "new_script")
+        
+        if new_script_requested:
+            for key in ("active_file", "active_file_content", "default_target_file"):
+                context.pop(key, None)
+            if context.get("open_files"):
+                context["open_files_snapshot"] = context["open_files"]
+                context["open_files"] = []
+            context.setdefault("new_script_prompt", message)
+            context["disable_active_file_context"] = True
 
         if web_search_mode in ("browser_tab", "google_chrome"):
             try:
@@ -472,6 +486,15 @@ class AIService:
         else:
             prompt_parts.append("If you develop a TODO plan, include it via the `ai_plan` metadata described below.")
             prompt_parts.append("")
+        
+        if context.get("requested_new_script"):
+            prompt_parts.extend([
+                "USER INTENT: The developer explicitly requested a brand-new script.",
+                "- Do NOT continue editing previously opened files or tabs unless the user references them explicitly.",
+                "- Propose a sensible new filename (include directories if helpful) and include a `create_file` operation with the full script.",
+                "- Explain briefly why the new file is necessary before presenting the code.",
+                ""
+            ])
 
         prompt_parts.extend(self.METADATA_FORMAT_LINES)
         prompt_parts.extend([
@@ -562,6 +585,33 @@ class AIService:
         prompt_parts.append("ASSISTANT RESPONSE:")
         
         return "\n".join(prompt_parts)
+    
+    def _detect_new_script_request(self, text: Optional[str]) -> bool:
+        if not text:
+            return False
+        normalized = text.lower()
+        keywords = [
+            "new script",
+            "brand new script",
+            "new file",
+            "create a new script",
+            "write a new script",
+            "fresh script",
+            "from scratch",
+            "start a new",
+            "start over",
+            "spin up a new",
+            "new module",
+            "new component",
+            "new service",
+        ]
+        if any(keyword in normalized for keyword in keywords):
+            return True
+        pattern = re.compile(
+            r"(create|build|write|generate)\s+(?:a\s+)?(?:brand\s+new\s+|new\s+)?"
+            r"(?:python|js|javascript|typescript|bash|shell|powershell|go|rust|c#|c\+\+|node|react|vue|script)?\s*script"
+        )
+        return bool(pattern.search(normalized))
     
     def _is_agent_context(self, context: Dict[str, Any]) -> bool:
         if not context:
