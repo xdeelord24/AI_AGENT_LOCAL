@@ -681,25 +681,10 @@ useEffect(() => {
       );
       triggerPhase('monitoring', 'Monitoring TODO progress and updating task statuses');
 
-      // Debug: inspect raw response payload from backend
-      // eslint-disable-next-line no-console
-      console.log('Chat.handleSendMessage: ApiService.sendMessage response', {
-        response,
-        responseType: typeof response,
-        responseResponseType: typeof response?.response,
-      });
-
       const assistantPlan = response.ai_plan || null;
       await previewAiPlanBeforeAnswer(assistantPlan);
 
       const assistantContent = normalizeMessageInput(response.response);
-
-      // Debug: inspect assistant content after normalization
-      // eslint-disable-next-line no-console
-      console.log('Chat.handleSendMessage: assistantContent after normalizeMessageInput', {
-        assistantContent,
-        assistantContentType: typeof assistantContent,
-      });
 
       const assistantMessage = {
         id: Date.now() + 1,
@@ -1025,24 +1010,11 @@ useEffect(() => {
                           : 'border-dark-700 bg-dark-900/60'
                       } p-4 space-y-3`}
                     >
-                      {/* Debug: log each message as it is rendered in the Copilot Chat page */}
                       {(() => {
                         const normalizedContent = normalizeMessageInput(
                           message.rawContent ?? message.content
                         );
                         const formattedHtml = formatMessageContent(normalizedContent);
-                        // eslint-disable-next-line no-console
-                        console.log('Chat page render message bubble', {
-                          id: message.id,
-                          role: message.role,
-                          content: message.content,
-                          rawContent: message.rawContent,
-                          contentType: typeof message.content,
-                          rawContentType: typeof message.rawContent,
-                          normalizedContent,
-                          formattedHtml,
-                          formattedHtmlType: typeof formattedHtml,
-                        });
                         return (
                           <div
                             className="prose prose-invert max-w-none text-[15px]"

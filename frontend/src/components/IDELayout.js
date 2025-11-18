@@ -6,9 +6,7 @@ import {
   ChevronRight as ChevronRightIcon, ChevronDown,
   Send, User, Loader2, CheckCircle, AlertCircle,
   Infinity, AtSign, Globe, Image, Mic, Square, Plus, Clock, History, MoreVertical,
-  RefreshCw, Minimize2, Workflow, Trash2, GitCompare, Clipboard, Copy, Scissors,
-  Terminal, Share2, ExternalLink, FileSearch, Link as LinkIcon, Play, Bug, BarChart2,
-  Edit2
+  RefreshCw, Minimize2, Workflow, Trash2
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
@@ -80,6 +78,14 @@ const COMPLETION_LIST_COLUMNS = 4;
 const QUICK_TERMINAL_COMMANDS = ['ls', 'dir', 'pwd'];
 const PLAN_PREVIEW_DELAY_MS = 350;
 const MAX_FILE_SUGGESTIONS = 10;
+
+const escapeHtml = (text = '') =>
+  String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 
 // Simple line-based diff to power inline change previews for file operations
 const computeLineDiff = (beforeContent = '', afterContent = '', options = {}) => {
@@ -269,6 +275,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [comparisonState, setComparisonState] = useState(null);
   const [folderSearchResults, setFolderSearchResults] = useState(null);
   const isWindowsPlatform = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent || '');
+  const mainLayoutRef = useRef(null);
+  const pendingResizeRef = useRef({ left: null, right: null, bottom: null });
+  const resizeFrameRef = useRef(null);
 
   const closeFileContextMenu = useCallback(() => {
     setFileContextMenu({ visible: false, x: 0, y: 0, target: null });
@@ -346,6 +355,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const webSearchMenuRef = useRef(null);
   const monacoRef = useRef(null);
   const editorDiffDecorationsRef = useRef([]);
+  const editorDiffViewZonesRef = useRef([]);
   const selectedChatMode = chatModeOptions.find(mode => mode.id === agentMode) || chatModeOptions[0];
   const selectedWebSearchMode = webSearchOptions.find(mode => mode.id === webSearchMode) || webSearchOptions[0];
 
@@ -1349,28 +1359,53 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   // Resize handlers
   useEffect(() => {
+    const commitPendingResize = () => {
+      const { left, right, bottom } = pendingResizeRef.current;
+      pendingResizeRef.current = { left: null, right: null, bottom: null };
+      if (typeof left === 'number') {
+        setLeftSidebarWidth(left);
+      }
+      if (typeof right === 'number') {
+        setRightSidebarWidth(right);
+      }
+      if (typeof bottom === 'number') {
+        setBottomPanelHeight(bottom);
+      }
+    };
+
+    const scheduleResizeCommit = () => {
+      if (resizeFrameRef.current) return;
+      resizeFrameRef.current = requestAnimationFrame(() => {
+        resizeFrameRef.current = null;
+        commitPendingResize();
+      });
+    };
+
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
     const handleMouseMove = (e) => {
+      let didUpdate = false;
+
       if (isResizingLeft) {
-        const newWidth = e.clientX;
-        if (newWidth >= 200 && newWidth <= 600) {
-          setLeftSidebarWidth(newWidth);
-        }
+        const newWidth = clamp(e.clientX, 200, 600);
+        pendingResizeRef.current.left = newWidth;
+        didUpdate = true;
       } else if (isResizingRight) {
-        // Calculate from right edge of window
-        const newWidth = window.innerWidth - e.clientX;
-        if (newWidth >= 200 && newWidth <= 600) {
-          setRightSidebarWidth(newWidth);
-        }
+        const newWidth = clamp(window.innerWidth - e.clientX, 200, 600);
+        pendingResizeRef.current.right = newWidth;
+        didUpdate = true;
       } else if (isResizingBottom) {
-        // Get the main content area height and calculate from top
-        const mainContentArea = document.querySelector('.flex-1.flex.overflow-hidden')?.parentElement;
-        if (mainContentArea) {
-          const rect = mainContentArea.getBoundingClientRect();
-          const newHeight = rect.bottom - e.clientY;
-          if (newHeight >= 150 && newHeight <= 600) {
-            setBottomPanelHeight(newHeight);
-          }
+        const container = mainLayoutRef.current;
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          const newHeight = clamp(rect.bottom - e.clientY, 150, 600);
+          pendingResizeRef.current.bottom = newHeight;
+          didUpdate = true;
         }
+      }
+
+      if (didUpdate) {
+        scheduleResizeCommit();
       }
     };
 
@@ -1378,16 +1413,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setIsResizingLeft(false);
       setIsResizingRight(false);
       setIsResizingBottom(false);
+      if (resizeFrameRef.current) {
+        cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+      commitPendingResize();
     };
 
-    if (isResizingLeft || isResizingRight || isResizingBottom) {
+    const isResizing = isResizingLeft || isResizingRight || isResizingBottom;
+
+    if (isResizing) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
-      if (isResizingBottom) {
-        document.body.style.cursor = 'row-resize';
-      } else {
-        document.body.style.cursor = 'col-resize';
-      }
+      document.body.style.cursor = isResizingBottom ? 'row-resize' : 'col-resize';
       document.body.style.userSelect = 'none';
     }
 
@@ -1398,6 +1436,15 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       document.body.style.userSelect = '';
     };
   }, [isResizingLeft, isResizingRight, isResizingBottom]);
+
+  useEffect(
+    () => () => {
+      if (resizeFrameRef.current) {
+        cancelAnimationFrame(resizeFrameRef.current);
+      }
+    },
+    []
+  );
 
   const handleStopChat = useCallback(() => {
     if (chatAbortController) {
@@ -2751,14 +2798,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         { mode: modePayload, signal: abortController.signal }
       );
       
-      // Debug: inspect raw response payload from backend
-      // eslint-disable-next-line no-console
-      console.log('IDELayout.handleSendChat: ApiService.sendMessage response', {
-        response,
-        responseType: typeof response,
-        responseResponseType: typeof response?.response,
-      });
-      
       // Check if request was aborted
       if (abortController.signal.aborted) {
         setIsLoadingChat(false);
@@ -2770,13 +2809,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       await previewAiPlanBeforeAnswer(assistantPlan);
 
       const assistantContent = normalizeChatInput(response.response);
-
-      // Debug: inspect assistant content after normalization
-      // eslint-disable-next-line no-console
-      console.log('IDELayout.handleSendChat: assistantContent after normalizeChatInput', {
-        assistantContent,
-        assistantContentType: typeof assistantContent,
-      });
 
       const assistantMessage = {
         id: Date.now() + 1,
@@ -2845,11 +2877,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   // Clear any inline diff decorations in the editor
   const clearEditorDiffDecorations = useCallback(() => {
-    if (!editorRef.current || !monacoRef.current) return;
+    if (!editorRef.current) return;
+
     editorDiffDecorationsRef.current = editorRef.current.deltaDecorations(
       editorDiffDecorationsRef.current,
       []
     );
+
+    if (editorDiffViewZonesRef.current.length > 0) {
+      editorRef.current.changeViewZones((accessor) => {
+        editorDiffViewZonesRef.current.forEach((zoneId) => accessor.removeZone(zoneId));
+      });
+      editorDiffViewZonesRef.current = [];
+    }
   }, []);
 
   // Process file operations from AI response (writes to disk and updates open files)
@@ -3035,36 +3075,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setEditorContent(afterContent);
       setEditorLanguage(getLanguageFromPath(targetPath));
 
-      if (!editorRef.current || !monacoRef.current || !Array.isArray(op.diff)) {
-        return;
-      }
-
-      const monaco = monacoRef.current;
-      const editor = editorRef.current;
-      const model = editor.getModel();
-      if (!model) return;
-
-      const decorations = [];
-
-      op.diff.forEach((line) => {
-        if (line.type === 'added' && typeof line.newNumber === 'number') {
-          const lineNumber = line.newNumber;
-          decorations.push({
-            range: new monaco.Range(lineNumber, 1, lineNumber, 1),
-            options: {
-              isWholeLine: true,
-              className: 'ai-editor-line-added',
-              glyphMarginClassName: 'ai-editor-glyph-added',
-              glyphMarginHoverMessage: { value: 'AI: added line' },
-            },
-          });
-        }
-      });
-
-      editorDiffDecorationsRef.current = editor.deltaDecorations(
-        editorDiffDecorationsRef.current,
-        decorations
-      );
+      // Diff decorations are applied in a separate effect once the editor is mounted.
     },
     [getLanguageFromPath, setOpenFiles]
   );
@@ -3159,6 +3170,139 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     openOperationPreview(op);
   }, [pendingFileOperations, activeFileOperationIndex, openOperationPreview]);
 
+  useEffect(() => {
+    if (!pendingFileOperations || !pendingFileOperations.operations?.length) {
+      clearEditorDiffDecorations();
+      return;
+    }
+
+    if (!isEditorReady || !editorRef.current || !monacoRef.current) {
+      return;
+    }
+
+    const operations = pendingFileOperations.operations;
+    const totalOps = operations.length;
+    const index = Math.min(
+      Math.max(activeFileOperationIndex, 0),
+      Math.max(totalOps - 1, 0)
+    );
+    const op = operations[index];
+
+    if (!op?.diff || !op.diff.length) {
+      clearEditorDiffDecorations();
+      return;
+    }
+
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    const model = editor.getModel();
+    if (!model) {
+      return;
+    }
+
+    const lineCount = model.getLineCount();
+    const decorations = [];
+    const removedBlocks = [];
+    let pendingRemoved = [];
+
+    const flushRemovedBlock = (nextLineNumber) => {
+      if (!pendingRemoved.length) return;
+      let anchorLine = typeof nextLineNumber === 'number' ? nextLineNumber : lineCount + 1;
+      anchorLine = Math.min(Math.max(anchorLine, 1), lineCount + 1);
+      removedBlocks.push({
+        lines: pendingRemoved,
+        afterLineNumber: Math.max(anchorLine - 1, 0),
+      });
+      pendingRemoved = [];
+    };
+
+    op.diff.forEach((line) => {
+      if (line.type === 'added' && typeof line.newNumber === 'number') {
+        if (line.newNumber >= 1 && line.newNumber <= lineCount) {
+          decorations.push({
+            range: new monaco.Range(
+              line.newNumber,
+              1,
+              line.newNumber,
+              model.getLineMaxColumn(line.newNumber) || 1
+            ),
+            options: {
+              isWholeLine: true,
+              className: 'ai-editor-line-added',
+              glyphMarginClassName: 'ai-editor-glyph-added',
+              glyphMarginHoverMessage: { value: 'AI: added line' },
+            },
+          });
+        }
+        flushRemovedBlock(line.newNumber);
+        return;
+      }
+
+      if (line.type === 'context' && typeof line.newNumber === 'number') {
+        flushRemovedBlock(line.newNumber);
+        return;
+      }
+
+      if (line.type === 'removed' && typeof line.oldNumber === 'number') {
+        pendingRemoved.push(line);
+        return;
+      }
+    });
+
+    flushRemovedBlock(lineCount + 1);
+
+    editorDiffDecorationsRef.current = editor.deltaDecorations(
+      editorDiffDecorationsRef.current,
+      decorations
+    );
+
+    editor.changeViewZones((accessor) => {
+      editorDiffViewZonesRef.current.forEach((zoneId) => accessor.removeZone(zoneId));
+      const newZoneIds = [];
+      const lineHeight =
+        editor.getOption(monaco.editor.EditorOption.lineHeight) || 18;
+
+      removedBlocks.forEach((block) => {
+        const domNode = document.createElement('div');
+        domNode.className = 'ai-editor-removed-zone';
+        domNode.style.height = `${block.lines.length * lineHeight}px`;
+        domNode.innerHTML = block.lines
+          .map(
+            (line) => `
+              <div class="ai-editor-removed-line">
+                <span class="ai-editor-removed-marker">−</span>
+                <span class="ai-editor-removed-text">${
+                  escapeHtml(line.text === '' ? ' ' : line.text)
+                }</span>
+              </div>
+            `
+          )
+          .join('');
+
+        const marginDomNode = document.createElement('div');
+        marginDomNode.className = 'ai-editor-removed-margin';
+        marginDomNode.style.height = `${block.lines.length * lineHeight}px`;
+
+        const zoneId = accessor.addZone({
+          afterLineNumber: Math.min(block.afterLineNumber, lineCount),
+          heightInPx: block.lines.length * lineHeight,
+          domNode,
+          marginDomNode,
+          suppressMouseDown: false,
+        });
+        newZoneIds.push(zoneId);
+      });
+
+      editorDiffViewZonesRef.current = newZoneIds;
+    });
+  }, [
+    pendingFileOperations,
+    activeFileOperationIndex,
+    isEditorReady,
+    editorContent,
+    clearEditorDiffDecorations,
+  ]);
+
   const closeTab = (filePath, e) => {
     e.stopPropagation();
     const newOpenFiles = openFiles.filter(f => f.path !== filePath);
@@ -3242,7 +3386,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   };
 
   return (
-    <div className="flex flex-col h-screen bg-dark-900 text-dark-100 overflow-hidden">
+    <div ref={mainLayoutRef} className="flex flex-col h-screen bg-dark-900 text-dark-100 overflow-hidden">
       {/* Top Menu Bar */}
       <div className="h-10 bg-dark-800 border-b border-dark-700 flex items-center px-4 text-sm">
         <div className="flex items-center space-x-4">
@@ -3483,7 +3627,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             );
             const op = operations[clampedIndex];
             const normalizedPath = normalizeEditorPath(op.path);
-            const isActive = activeTab === normalizedPath;
 
             const goPrev = () => {
               setActiveFileOperationIndex((prev) => (prev > 0 ? prev - 1 : prev));
@@ -3970,19 +4113,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                         message.role === 'user' ? 'justify-end' : 'justify-start'
                       }`}
                     >
-                      {/* Debug: log each message as it is rendered in the IDE chat */}
-                      {(() => {
-                        // eslint-disable-next-line no-console
-                        console.log('IDELayout render chat message bubble', {
-                          id: message.id,
-                          role: message.role,
-                          content: message.content,
-                          rawContent: message.rawContent,
-                          contentType: typeof message.content,
-                          rawContentType: typeof message.rawContent,
-                        });
-                        return null;
-                      })()}
                       {message.role === 'assistant' && (
                         <Bot className="w-5 h-5 text-primary-500 mt-1 flex-shrink-0" />
                       )}
@@ -3991,14 +4121,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                         message.rawContent ?? message.content
                       );
                       const formattedHtml = formatMessageContent(normalizedContent);
-                      // eslint-disable-next-line no-console
-                      console.log('IDELayout render formatted HTML', {
-                        id: message.id,
-                        role: message.role,
-                        normalizedContent,
-                        formattedHtml,
-                        formattedHtmlType: typeof formattedHtml,
-                      });
                       return (
                         <div
                           className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${

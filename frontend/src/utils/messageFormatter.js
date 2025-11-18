@@ -28,6 +28,62 @@ const safeStringifyValue = (value, spacing = 2) => {
   return JSON.stringify(value, serializer, spacing);
 };
 
+/**
+ * Build inline HTML for a pair of removed/added lines so that only the
+ * changed middle segment is highlighted, instead of the entire tail
+ * from the first difference to the end of the line.
+ */
+const buildInlineDiffHtml = (oldText = '', newText = '') => {
+  const oldStr = oldText ?? '';
+  const newStr = newText ?? '';
+
+  let start = 0;
+  const oldLen = oldStr.length;
+  const newLen = newStr.length;
+
+  // Find common prefix
+  while (start < oldLen && start < newLen && oldStr[start] === newStr[start]) {
+    start += 1;
+  }
+
+  let endOld = oldLen - 1;
+  let endNew = newLen - 1;
+
+  // Find common suffix, making sure we don't cross the prefix
+  while (endOld >= start && endNew >= start && oldStr[endOld] === newStr[endNew]) {
+    endOld -= 1;
+    endNew -= 1;
+  }
+
+  const unchangedPrefix = escapeHtml(oldStr.slice(0, start));
+  const unchangedPrefixNew = escapeHtml(newStr.slice(0, start));
+
+  const oldChangedRaw = oldStr.slice(start, endOld + 1);
+  const newChangedRaw = newStr.slice(start, endNew + 1);
+
+  const oldChanged = escapeHtml(oldChangedRaw);
+  const newChanged = escapeHtml(newChangedRaw);
+
+  const oldSuffix = escapeHtml(oldStr.slice(endOld + 1));
+  const newSuffix = escapeHtml(newStr.slice(endNew + 1));
+
+  const oldHtml =
+    unchangedPrefix +
+    (oldChangedRaw
+      ? `<span class="diff-chunk diff-chunk-removed">${oldChanged}</span>`
+      : '') +
+    oldSuffix;
+
+  const newHtml =
+    unchangedPrefixNew +
+    (newChangedRaw
+      ? `<span class="diff-chunk diff-chunk-added">${newChanged}</span>`
+      : '') +
+    newSuffix;
+
+  return { oldHtml, newHtml };
+};
+
 const ensureRenderer = () => {
   if (rendererInstance) {
     return rendererInstance;
@@ -39,10 +95,123 @@ const ensureRenderer = () => {
     const language = (lang || '').split(/\s+/)[0];
     const normalizedLang = normalizeLanguage(language || 'text');
     const rawCode = text.trimEnd();
-    const escapedCode = escapeHtml(rawCode);
     const safeRawCode = rawCode.replace(/<\/textarea/gi, '<\\/textarea');
 
-    return `<div class="code-block language-${normalizedLang}" data-language="${normalizedLang}">
+    // Special handling for unified diff / patch blocks so code changes are clearly highlighted.
+    if (normalizedLang === 'diff' || normalizedLang === 'patch') {
+      const lines = rawCode.split('\n');
+      const highlightedLines = [];
+
+      const isRemovedLine = (line = '') =>
+        line.length > 0 && line[0] === '-' && !line.startsWith('---');
+      const isAddedLine = (line = '') =>
+        line.length > 0 && line[0] === '+' && !line.startsWith('+++');
+      const isFileMetadataLine = (line = '') =>
+        line.startsWith('diff ') ||
+        line.startsWith('index ') ||
+        line.startsWith('+++ ') ||
+        line.startsWith('--- ');
+      const isHunkHeader = (line = '') => line.startsWith('@@');
+
+      const renderBasicLine = (line, overrideClass) => {
+        const escaped = escapeHtml(line);
+        const content = escaped === '' ? '&nbsp;' : escaped;
+        const lineClass =
+          overrideClass ||
+          (() => {
+            if (isFileMetadataLine(line)) return 'diff-line-file';
+            if (isHunkHeader(line)) return 'diff-line-hunk';
+            if (isAddedLine(line)) return 'diff-line-added';
+            if (isRemovedLine(line)) return 'diff-line-removed';
+            return 'diff-line-context';
+          })();
+        highlightedLines.push(`<span class="diff-line ${lineClass}">${content}</span>`);
+      };
+
+      for (let i = 0; i < lines.length; ) {
+        const line = lines[i] ?? '';
+
+        if (isRemovedLine(line)) {
+          const removedBlock = [];
+          while (i < lines.length && isRemovedLine(lines[i] ?? '')) {
+            removedBlock.push((lines[i] ?? '').slice(1));
+            i += 1;
+          }
+
+          const addedBlock = [];
+          let j = i;
+          while (j < lines.length && isAddedLine(lines[j] ?? '')) {
+            addedBlock.push((lines[j] ?? '').slice(1));
+            j += 1;
+          }
+
+          if (addedBlock.length > 0) {
+            const pairCount = Math.min(removedBlock.length, addedBlock.length);
+
+            for (let k = 0; k < pairCount; k += 1) {
+              const oldLineText = removedBlock[k];
+              const newLineText = addedBlock[k];
+              const { oldHtml, newHtml } = buildInlineDiffHtml(oldLineText, newLineText);
+              const removedContent = `<span class="diff-sign">-</span>${
+                oldHtml === '' ? '&nbsp;' : oldHtml
+              }`;
+              const addedContent = `<span class="diff-sign">+</span>${
+                newHtml === '' ? '&nbsp;' : newHtml
+              }`;
+
+              highlightedLines.push(
+                `<span class="diff-line diff-line-removed">${removedContent}</span>`
+              );
+              highlightedLines.push(
+                `<span class="diff-line diff-line-added">${addedContent}</span>`
+              );
+            }
+
+            if (removedBlock.length > pairCount) {
+              for (let k = pairCount; k < removedBlock.length; k += 1) {
+                renderBasicLine(`-${removedBlock[k]}`, 'diff-line-removed');
+              }
+            }
+
+            if (addedBlock.length > pairCount) {
+              for (let k = pairCount; k < addedBlock.length; k += 1) {
+                renderBasicLine(`+${addedBlock[k]}`, 'diff-line-added');
+              }
+            }
+
+            i = j;
+            continue;
+          }
+
+          // No added block follows; render removed lines as-is.
+          removedBlock.forEach((text) => {
+            renderBasicLine(`-${text}`, 'diff-line-removed');
+          });
+          continue;
+        }
+
+        renderBasicLine(line);
+        i += 1;
+      }
+
+      const diffHtml = highlightedLines.join('');
+
+      return `<div class="code-block not-prose language-${normalizedLang}" data-language="${normalizedLang}">
+        <div class="code-header">
+          <span class="code-language">${normalizedLang}</span>
+          <button class="copy-code-btn" type="button" title="Copy code" aria-label="Copy code">
+            <span class="copy-icon" aria-hidden="true">📋</span>
+            <span class="copy-text">Copy</span>
+          </button>
+        </div>
+        <pre><code class="language-${normalizedLang}">${diffHtml}</code></pre>
+        <textarea class="code-raw" hidden>${safeRawCode}</textarea>
+      </div>`;
+    }
+
+    const escapedCode = escapeHtml(rawCode);
+
+    return `<div class="code-block not-prose language-${normalizedLang}" data-language="${normalizedLang}">
       <div class="code-header">
         <span class="code-language">${normalizedLang}</span>
         <button class="copy-code-btn" type="button" title="Copy code" aria-label="Copy code">

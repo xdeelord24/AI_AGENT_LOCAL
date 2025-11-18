@@ -165,8 +165,10 @@ class AIService:
         options = {
             "temperature": read_float("OLLAMA_TEMPERATURE", 0.7),
             "top_p": read_float("OLLAMA_TOP_P", 0.9),
-            "num_predict": read_int("OLLAMA_NUM_PREDICT", 1024),
-            "num_ctx": read_int("OLLAMA_NUM_CTX", 2048),
+            # Use larger defaults so long answers are less likely to be cut off.
+            # These can still be customized via OLLAMA_NUM_PREDICT / OLLAMA_NUM_CTX.
+            "num_predict": read_int("OLLAMA_NUM_PREDICT", 4096),
+            "num_ctx": read_int("OLLAMA_NUM_CTX", 4096),
             "num_batch": read_int("OLLAMA_NUM_BATCH", 256),
             "num_thread": default_threads,
         }
@@ -648,7 +650,8 @@ class AIService:
             "Always provide practical, working code examples. Be concise but thorough.",
             "",
             "ABSOLUTE RULES:",
-            "- If the user mentions files via @filename or provides a path, open those files (content is in context) and edit them via file_operations.",
+            "- If the user mentions files via @filename or provides a path, open those files (content is in CONTEXT) and edit them via file_operations.",
+            "- Do NOT reply with generic statements like 'we need to inspect the file' or 'we need to access the file'—assume the IDE has already provided the relevant file contents in CONTEXT and operate directly on that content.",
             "- On follow-up requests like \"change it\" or \"update that code\", assume the target file is the current active_file or default_target_file from context and still produce concrete file_operations.",
             "- Do not stop after describing a plan; always include the updated file content in file_operations so the IDE can apply the change.",
             "- Keep natural-language responses short; rely on file_operations to convey the actual modifications.",
@@ -688,23 +691,37 @@ class AIService:
             prompt_parts.append("CONTEXT:")
             if context.get("active_file"):
                 prompt_parts.append(f"Active file: {context['active_file']}")
-                if context.get("active_file_content"):
-                    prompt_parts.append(f"Active file content:\n{context['active_file_content'][:1000]}...")
+                active_content = context.get("active_file_content") or ""
+                if active_content:
+                    # Show up to 5000 characters so the model can actually edit the file,
+                    # and only add an ellipsis if we truly truncated the content.
+                    max_active_preview = 5000
+                    preview = active_content[:max_active_preview]
+                    suffix = "..." if len(active_content) > max_active_preview else ""
+                    prompt_parts.append(f"Active file content:\n{preview}{suffix}")
             
             if context.get("open_files"):
                 prompt_parts.append(f"\nOpen files ({len(context['open_files'])}):")
                 for file in context["open_files"]:
                     status = "ACTIVE" if file.get("is_active") else "open"
                     prompt_parts.append(f"  [{status}] {file['path']} ({file.get('language', 'unknown')})")
-                    if file.get("content") and len(file["content"]) < 500:
-                        prompt_parts.append(f"    Content: {file['content'][:200]}...")
+                    file_content = file.get("content") or ""
+                    if file_content and len(file_content) < 2000:
+                        max_open_preview = 800
+                        preview = file_content[:max_open_preview]
+                        suffix = "..." if len(file_content) > max_open_preview else ""
+                        prompt_parts.append(f"    Content: {preview}{suffix}")
             
             if context.get("mentioned_files"):
                 prompt_parts.append(f"\nMentioned files (@mentions):")
                 for file in context["mentioned_files"]:
                     prompt_parts.append(f"  - {file.get('path', file)}")
-                    if file.get("content"):
-                        prompt_parts.append(f"    Content: {file['content'][:200]}...")
+                    file_content = (file.get("content") if isinstance(file, dict) else None) or ""
+                    if file_content:
+                        max_mention_preview = 2000
+                        preview = file_content[:max_mention_preview]
+                        suffix = "..." if len(file_content) > max_mention_preview else ""
+                        prompt_parts.append(f"    Content: {preview}{suffix}")
             
             if context.get("file_tree_structure"):
                 prompt_parts.append(f"\nProject structure available (use @filename to reference files)")
