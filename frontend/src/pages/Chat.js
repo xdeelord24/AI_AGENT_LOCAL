@@ -12,6 +12,65 @@ import toast from 'react-hot-toast';
 const MAX_FILE_SNIPPET = 5000;
 const PLAN_PREVIEW_DELAY_MS = 350;
 const MAX_PENDING_FILE_OP_PREVIEW = 6;
+const MAX_FILE_CONTEXT_FILES = 5;
+const MAX_AUTO_PATH_HINTS = 8;
+const WORKSPACE_TREE_FETCH_DEPTH = 4;
+const WORKSPACE_TREE_MAX_DEPTH = 3;
+const WORKSPACE_TREE_CHILD_LIMIT = 12;
+
+const COMMON_FILE_EXTENSIONS = new Set([
+  'js',
+  'jsx',
+  'ts',
+  'tsx',
+  'py',
+  'java',
+  'json',
+  'md',
+  'mdx',
+  'css',
+  'scss',
+  'sass',
+  'less',
+  'html',
+  'htm',
+  'yaml',
+  'yml',
+  'xml',
+  'ini',
+  'cfg',
+  'conf',
+  'toml',
+  'lock',
+  'txt',
+  'env',
+  'sh',
+  'bash',
+  'zsh',
+  'bat',
+  'ps1',
+  'go',
+  'rs',
+  'rb',
+  'php',
+  'c',
+  'h',
+  'cpp',
+  'hpp',
+  'm',
+  'mm',
+  'swift',
+  'kt',
+  'scala',
+  'cs',
+  'sql',
+  'prisma',
+  'gradle',
+  'dockerfile',
+  'makefile'
+]);
+
+const SPECIAL_FILENAME_HINTS = new Set(['dockerfile', 'makefile', 'license']);
 
 const formatDuration = (ms = 0) => {
   if (ms == null || Number.isNaN(ms)) {
@@ -242,6 +301,97 @@ const loadMentionedFiles = async (mentions = []) => {
   return files;
 };
 
+const normalizePathCandidate = (value = '') => {
+  if (!value) return '';
+  let candidate = value.trim();
+  if (!candidate) return '';
+  candidate = candidate.replace(/^[`"'“”‘’({[]+/, '').replace(/[`"'“”‘’)}\]]+$/, '');
+  candidate = candidate.replace(/[,;:?!.]+$/g, '');
+  candidate = candidate.replace(/\\+/g, '/');
+  if (candidate.startsWith('@')) {
+    candidate = candidate.slice(1);
+  }
+  return candidate;
+};
+
+const extractImplicitFilePaths = (text = '') => {
+  if (!text || !text.trim()) {
+    return [];
+  }
+  const hints = new Set();
+
+  const tryAddCandidate = (raw) => {
+    if (!raw || hints.size >= MAX_AUTO_PATH_HINTS) {
+      return;
+    }
+    const candidate = normalizePathCandidate(raw);
+    if (
+      !candidate ||
+      candidate.length < 3 ||
+      candidate.includes('://') ||
+      candidate.includes('\n') ||
+      /\s/.test(candidate)
+    ) {
+      return;
+    }
+    const lower = candidate.toLowerCase();
+    const hasSlash = candidate.includes('/');
+    const extMatch = candidate.match(/\.([a-z0-9]{1,8})$/i);
+    const looksLikeFile =
+      hasSlash ||
+      (extMatch && COMMON_FILE_EXTENSIONS.has(extMatch[1].toLowerCase())) ||
+      SPECIAL_FILENAME_HINTS.has(lower);
+
+    if (!looksLikeFile) {
+      return;
+    }
+
+    hints.add(candidate);
+  };
+
+  const slashPattern = /(?:\.{0,2}\/)?(?:[\w.-]+[\\/])+[\w.-]+(?:\.[\w.-]+)?/g;
+  let match;
+  while ((match = slashPattern.exec(text)) !== null && hints.size < MAX_AUTO_PATH_HINTS) {
+    tryAddCandidate(match[0]);
+  }
+
+  if (hints.size < MAX_AUTO_PATH_HINTS) {
+    const tokens = text.split(/[\s,;:(){}[\]<>"'`]+/);
+    for (const token of tokens) {
+      if (hints.size >= MAX_AUTO_PATH_HINTS) {
+        break;
+      }
+      tryAddCandidate(token);
+    }
+  }
+
+  return Array.from(hints);
+};
+
+const simplifyWorkspaceTreeNodes = (nodes = [], depth = 0) => {
+  if (!Array.isArray(nodes) || depth >= WORKSPACE_TREE_MAX_DEPTH) {
+    return [];
+  }
+  return nodes.slice(0, WORKSPACE_TREE_CHILD_LIMIT).map((node) => {
+    const isDirectory = Boolean(node?.is_directory);
+    const children =
+      isDirectory && depth + 1 < WORKSPACE_TREE_MAX_DEPTH
+        ? simplifyWorkspaceTreeNodes(node.children || [], depth + 1)
+        : [];
+    const hasMoreChildren =
+      Boolean(node?.has_more_children) ||
+      (!!node?.children && node.children.length > WORKSPACE_TREE_CHILD_LIMIT);
+
+    return {
+      name: node?.name || '',
+      path: node?.path || '',
+      is_directory: isDirectory,
+      has_more_children: hasMoreChildren,
+      children
+    };
+  });
+};
+
 const safeStringifyInput = (value, spacing = 2) => {
   const seen = new WeakSet();
   const serializer = (key, val) => {
@@ -304,6 +454,8 @@ const Chat = () => {
   const [thinkingStart, setThinkingStart] = useState(null);
   const [thinkingElapsed, setThinkingElapsed] = useState(0);
   const messagesEndRef = useRef(null);
+  const [workspaceTree, setWorkspaceTree] = useState(null);
+  const workspaceTreePromiseRef = useRef(null);
 
   const planStatusStyles = {
     completed: 'border-green-700 bg-green-500/10 text-green-300',
@@ -311,6 +463,33 @@ const Chat = () => {
     pending: 'border-dark-600 bg-dark-800/80 text-dark-200',
     blocked: 'border-red-700 bg-red-600/10 text-red-300'
   };
+
+  const ensureWorkspaceTreeSnapshot = useCallback(async () => {
+    if (Array.isArray(workspaceTree) && workspaceTree.length > 0) {
+      return workspaceTree;
+    }
+    if (workspaceTreePromiseRef.current) {
+      return workspaceTreePromiseRef.current;
+    }
+    const fetchPromise = ApiService.getFileTree('.', WORKSPACE_TREE_FETCH_DEPTH)
+      .then((response) => {
+        if (response?.tree) {
+          const simplified = simplifyWorkspaceTreeNodes(response.tree.children || []);
+          setWorkspaceTree(simplified);
+          return simplified;
+        }
+        return [];
+      })
+      .catch((error) => {
+        console.warn('Failed to load workspace tree for chat context', error);
+        return [];
+      })
+      .finally(() => {
+        workspaceTreePromiseRef.current = null;
+      });
+    workspaceTreePromiseRef.current = fetchPromise;
+    return fetchPromise;
+  }, [workspaceTree]);
 
   const [agentStatuses, setAgentStatuses] = useState([]);
   const [thinkingAiPlan, setThinkingAiPlan] = useState(null);
@@ -553,6 +732,10 @@ const Chat = () => {
     initializeCopyCodeListeners();
   }, []);
 
+  useEffect(() => {
+    ensureWorkspaceTreeSnapshot();
+  }, [ensureWorkspaceTreeSnapshot]);
+
 useEffect(() => {
   if (!thinkingStart) {
     setThinkingElapsed(0);
@@ -625,7 +808,14 @@ useEffect(() => {
     try {
       triggerPhase('analysis', 'Analyzing context and recent history');
       const mentionPaths = extractMentionPaths(normalizedMessage);
-      const mentionFiles = mentionPaths.length > 0 ? await loadMentionedFiles(mentionPaths) : [];
+      const implicitPaths =
+        mentionPaths.length === 0 ? extractImplicitFilePaths(normalizedMessage) : [];
+      const combinedPaths = Array.from(new Set([...mentionPaths, ...implicitPaths])).slice(
+        0,
+        MAX_FILE_CONTEXT_FILES
+      );
+      const mentionFiles =
+        combinedPaths.length > 0 ? await loadMentionedFiles(combinedPaths) : [];
       triggerPhase('grepping', 'Grepping workspace for references');
       const isNewScriptRequest = detectNewScriptIntent(trimmedMessage);
 
@@ -666,6 +856,13 @@ useEffect(() => {
           delete context.active_file_content;
           delete context.default_target_file;
           context.open_files = [];
+        }
+      }
+
+      if (mentionFiles.length === 0 || mentionPaths.length === 0) {
+        const workspaceSnapshot = await ensureWorkspaceTreeSnapshot();
+        if (workspaceSnapshot?.length) {
+          context.file_tree_structure = workspaceSnapshot;
         }
       }
       triggerPhase('collecting', 'Collecting workspace structure, open files, and directory info');
