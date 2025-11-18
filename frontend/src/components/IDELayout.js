@@ -741,8 +741,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         useProxy: response.use_proxy ?? true,
         currentModel: response.current_model || response.default_model || 'codellama',
       });
-      // Also fetch available models
-      await loadAvailableModels();
+      // Refresh available models without blocking the settings UI
+      loadAvailableModels();
     } catch (error) {
       console.error('Failed to load connectivity settings:', error);
       toast.error('Could not load connectivity settings');
@@ -750,6 +750,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setIsConnectivityLoading(false);
     }
   }, [loadAvailableModels]);
+
+  useEffect(() => {
+    // Preload connectivity settings so the panel opens faster
+    loadConnectivitySettings();
+  }, [loadConnectivitySettings]);
 
   const refreshFileTree = useCallback(async () => {
     await loadProjectTree(currentPath || '.', { setAsRoot: true, showToastMessage: false });

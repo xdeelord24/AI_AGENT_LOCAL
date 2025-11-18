@@ -195,11 +195,13 @@ class ApiService {
 
   // Settings API
   static async getSettings() {
-    return this.get('/api/settings/settings');
+    // Backend mounts settings router at /api/settings
+    return this.get('/api/settings');
   }
 
   static async updateSettings(settings) {
-    return this.put('/api/settings/settings', settings);
+    // Backend expects PUT /api/settings
+    return this.put('/api/settings', settings);
   }
 
   static async testOllamaConnection() {
