@@ -14,6 +14,8 @@ import { formatMessageContent, initializeCopyCodeListeners } from '../utils/mess
 import { detectNewScriptIntent } from '../utils/intentDetection';
 import toast from 'react-hot-toast';
 
+const HF_DEFAULT_BASE_URL = 'https://api-inference.huggingface.co';
+
 const createUniqueLineId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const normalizeTreeNode = (node) => {
@@ -682,6 +684,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [isConnectivityLoading, setIsConnectivityLoading] = useState(false);
   const [isConnectivitySaving, setIsConnectivitySaving] = useState(false);
   const [isTestingConnectivity, setIsTestingConnectivity] = useState(false);
+  const [hfConnectivityApiKey, setHfConnectivityApiKey] = useState('');
+  const [hfConnectivityApiKeyDirty, setHfConnectivityApiKeyDirty] = useState(false);
   const [ollamaModels, setOllamaModels] = useState([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [showAutoDropdown, setShowAutoDropdown] = useState(false);
@@ -789,11 +793,32 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     return normalized;
   }, [projectRootPath]);
 
+  const normalizeConnectivityBaseUrl = (value) => {
+    if (!value) {
+      return '';
+    }
+    const trimmed = value.trim();
+    return trimmed.toLowerCase() === HF_DEFAULT_BASE_URL.toLowerCase() ? '' : trimmed;
+  };
+
   const handleConnectivityChange = (field, value) => {
-    setConnectivitySettings(prev => ({
-      ...(prev || {}),
-      [field]: value
-    }));
+    setConnectivitySettings((prev) => {
+      const next = { ...(prev || {}) };
+      next[field] = value;
+
+      if (field === 'provider') {
+        next.currentModel =
+          value === 'huggingface'
+            ? next.hfModel || ''
+            : next.defaultModel || next.currentModel || 'codellama';
+      }
+
+      if (field === 'hfModel' && next.provider === 'huggingface') {
+        next.currentModel = value;
+      }
+
+      return next;
+    });
   };
 
   const clearAgentStatuses = useCallback(() => {
@@ -867,12 +892,25 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     if (!connectivitySettings) return;
     setIsConnectivitySaving(true);
     try {
-      await ApiService.updateSettings({
+      const payload = {
+        provider: connectivitySettings.provider,
         ollama_url: connectivitySettings.ollamaUrl,
         ollama_direct_url: connectivitySettings.ollamaDirectUrl,
         use_proxy: connectivitySettings.useProxy,
-        default_model: connectivitySettings.currentModel
-      });
+      };
+
+      if (connectivitySettings.provider === 'ollama') {
+        payload.default_model = connectivitySettings.currentModel;
+      } else {
+        payload.hf_model = connectivitySettings.hfModel;
+        payload.hf_base_url = normalizeConnectivityBaseUrl(connectivitySettings.hfBaseUrl);
+      }
+
+      if (hfConnectivityApiKeyDirty) {
+        payload.hf_api_key = hfConnectivityApiKey;
+      }
+
+      await ApiService.updateSettings(payload);
       // Also select the model if it changed
       if (connectivitySettings.currentModel) {
         try {
@@ -891,6 +929,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       if (onModelSelect && connectivitySettings.currentModel) {
         onModelSelect(connectivitySettings.currentModel);
       }
+      if (hfConnectivityApiKeyDirty) {
+        setHfConnectivityApiKey('');
+        setHfConnectivityApiKeyDirty(false);
+      }
     } catch (error) {
       console.error('Failed to save connectivity settings:', error);
       toast.error(error.response?.data?.detail || 'Failed to save connectivity settings');
@@ -902,18 +944,22 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const handleTestConnectivity = async () => {
     setIsTestingConnectivity(true);
     try {
+      const provider = connectivitySettings?.provider || 'ollama';
+      const providerLabel = provider === 'huggingface' ? 'Hugging Face' : 'Ollama';
       const response = await ApiService.testOllamaConnection();
       const isConnected = !!response?.connected;
       const statusMessage =
         response?.message ||
-        (isConnected ? 'Ollama connection successful' : 'Ollama connection failed');
+        (isConnected ? `${providerLabel} connection successful` : `${providerLabel} connection failed`);
 
       if (isConnected) {
         toast.success(statusMessage);
-        if (Array.isArray(response?.available_models) && response.available_models.length > 0) {
-          setOllamaModels(response.available_models);
-        } else {
-          await loadAvailableModels();
+        if (provider === 'ollama') {
+          if (Array.isArray(response?.available_models) && response.available_models.length > 0) {
+            setOllamaModels(response.available_models);
+          } else {
+            await loadAvailableModels();
+          }
         }
       } else {
         toast.error(statusMessage);
@@ -930,10 +976,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       const detail =
         error?.response?.data?.detail ||
         error?.message ||
-        'Failed to test Ollama connection';
+        'Failed to test provider connection';
       const message = detail.includes('Failed to test')
         ? detail
-        : `Failed to test Ollama connection: ${detail}`;
+        : `Failed to test provider connection: ${detail}`;
       toast.error(message);
     } finally {
       setIsTestingConnectivity(false);
@@ -1100,12 +1146,27 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setIsConnectivityLoading(true);
     try {
       const response = await ApiService.getSettings();
+      const provider = response.provider || 'ollama';
+      const defaultModel = response.default_model || 'codellama';
+      const hfModel = response.hf_model || 'meta-llama/Llama-3.1-8B-Instruct';
+      const normalizedHfBaseUrl = normalizeConnectivityBaseUrl(response.hf_base_url);
+
       setConnectivitySettings({
+        provider,
         ollamaUrl: response.ollama_url || 'http://localhost:5000',
         ollamaDirectUrl: response.ollama_direct_url || 'http://localhost:11434',
         useProxy: response.use_proxy ?? true,
-        currentModel: response.current_model || response.default_model || 'codellama',
+        currentModel:
+          provider === 'huggingface'
+            ? hfModel
+            : response.current_model || defaultModel,
+        defaultModel,
+        hfModel,
+        hfBaseUrl: normalizedHfBaseUrl,
+        hfApiKeySet: !!response.hf_api_key_set,
       });
+      setHfConnectivityApiKey('');
+      setHfConnectivityApiKeyDirty(false);
       // Refresh available models without blocking the settings UI
       loadAvailableModels();
     } catch (error) {
@@ -5373,7 +5434,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700">
               <div>
                 <h3 className="text-lg font-semibold text-white">Connectivity Settings</h3>
-                <p className="text-xs text-dark-400">Configure Ollama endpoints and proxy preferences</p>
+                <p className="text-xs text-dark-400">Configure AI provider endpoints, models, and tokens</p>
               </div>
               <button
                 onClick={() => setShowConnectivityPanel(false)}
@@ -5391,69 +5452,133 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
               ) : (
                 <>
                   <div>
-                    <label className="text-xs uppercase tracking-wide text-dark-400">Ollama Proxy URL</label>
-                    <input
-                      type="text"
-                      value={connectivitySettings.ollamaUrl}
-                      onChange={(e) => handleConnectivityChange('ollamaUrl', e.target.value)}
+                    <label className="text-xs uppercase tracking-wide text-dark-400">Model Provider</label>
+                    <select
+                      value={connectivitySettings.provider || 'ollama'}
+                      onChange={(e) => handleConnectivityChange('provider', e.target.value)}
                       className="mt-1 w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                    />
+                    >
+                      <option value="ollama">Ollama (local)</option>
+                      <option value="huggingface">Hugging Face Inference API</option>
+                    </select>
                   </div>
-                  <div>
-                    <label className="text-xs uppercase tracking-wide text-dark-400">Ollama Direct URL</label>
-                    <input
-                      type="text"
-                      value={connectivitySettings.ollamaDirectUrl}
-                      onChange={(e) => handleConnectivityChange('ollamaDirectUrl', e.target.value)}
-                      className="mt-1 w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                    />
-                  </div>
-                  <label className="flex items-center gap-2 text-sm text-dark-200">
-                    <input
-                      type="checkbox"
-                      checked={!!connectivitySettings.useProxy}
-                      onChange={(e) => handleConnectivityChange('useProxy', e.target.checked)}
-                      className="form-checkbox text-primary-500 rounded"
-                    />
-                    Use proxy before direct connection
-                  </label>
-                  <div>
-                    <label className="text-xs uppercase tracking-wide text-dark-400">AI Model</label>
-                    <div className="mt-1 relative">
-                      {isLoadingModels ? (
-                        <div className="flex items-center gap-2 px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-400">
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Loading models...
-                        </div>
-                      ) : (
-                        <select
-                          value={connectivitySettings.currentModel || ''}
-                          onChange={(e) => handleConnectivityChange('currentModel', e.target.value)}
-                          className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500 appearance-none cursor-pointer"
-                        >
-                          {ollamaModels.length === 0 ? (
-                            <option value="">No models available</option>
-                          ) : (
-                            ollamaModels.map((model) => (
-                              <option key={model} value={model} className="bg-dark-800">
-                                {model}
-                              </option>
-                            ))
-                          )}
-                        </select>
-                      )}
-                      {!isLoadingModels && ollamaModels.length > 0 && (
-                        <div className="absolute right-2 top-1/2 transform -translate-y-1/2 pointer-events-none">
-                          <ChevronDown className="w-4 h-4 text-dark-400" />
-                        </div>
+
+                  {connectivitySettings.provider === 'ollama' ? (
+                    <>
+                      <div>
+                        <label className="text-xs uppercase tracking-wide text-dark-400">Ollama Proxy URL</label>
+                        <input
+                          type="text"
+                          value={connectivitySettings.ollamaUrl}
+                          onChange={(e) => handleConnectivityChange('ollamaUrl', e.target.value)}
+                          className="mt-1 w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs uppercase tracking-wide text-dark-400">Ollama Direct URL</label>
+                        <input
+                          type="text"
+                          value={connectivitySettings.ollamaDirectUrl}
+                          onChange={(e) => handleConnectivityChange('ollamaDirectUrl', e.target.value)}
+                          className="mt-1 w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                        />
+                      </div>
+                      <label className="flex items-center gap-2 text-sm text-dark-200">
+                        <input
+                          type="checkbox"
+                          checked={!!connectivitySettings.useProxy}
+                          onChange={(e) => handleConnectivityChange('useProxy', e.target.checked)}
+                          className="form-checkbox text-primary-500 rounded"
+                        />
+                        Use proxy before direct connection
+                      </label>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="text-xs uppercase tracking-wide text-dark-400">Hugging Face API Base URL</label>
+                        <input
+                          type="text"
+                          value={connectivitySettings.hfBaseUrl || ''}
+                          onChange={(e) => handleConnectivityChange('hfBaseUrl', e.target.value)}
+                          placeholder="https://api-inference.huggingface.co"
+                          className="mt-1 w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                        />
+                        <p className="text-xs text-dark-500 mt-1">
+                          Leave blank to use the default Hugging Face endpoint ({HF_DEFAULT_BASE_URL}).
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-xs uppercase tracking-wide text-dark-400">Model ID</label>
+                        <input
+                          type="text"
+                          value={connectivitySettings.hfModel || ''}
+                          onChange={(e) => handleConnectivityChange('hfModel', e.target.value)}
+                          className="mt-1 w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                          placeholder="meta-llama/Llama-3.1-8B-Instruct"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs uppercase tracking-wide text-dark-400">API Key</label>
+                        <input
+                          type="password"
+                          value={hfConnectivityApiKey}
+                          onChange={(e) => {
+                            setHfConnectivityApiKey(e.target.value);
+                            setHfConnectivityApiKeyDirty(true);
+                          }}
+                          placeholder="hf_xxx..."
+                          className="mt-1 w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                        />
+                        <p className="text-xs text-dark-500 mt-1">
+                          {connectivitySettings.hfApiKeySet
+                            ? 'A Hugging Face token is already stored. Enter a new one to replace it.'
+                            : 'No token stored yet. Add one to enable Hugging Face access.'}
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  {connectivitySettings.provider === 'ollama' && (
+                    <div>
+                      <label className="text-xs uppercase tracking-wide text-dark-400">AI Model</label>
+                      <div className="mt-1 relative">
+                        {isLoadingModels ? (
+                          <div className="flex items-center gap-2 px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-400">
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Loading models...
+                          </div>
+                        ) : (
+                          <select
+                            value={connectivitySettings.currentModel || ''}
+                            onChange={(e) => handleConnectivityChange('currentModel', e.target.value)}
+                            className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500 appearance-none cursor-pointer"
+                          >
+                            {ollamaModels.length === 0 ? (
+                              <option value="">No models available</option>
+                            ) : (
+                              ollamaModels.map((model) => (
+                                <option key={model} value={model} className="bg-dark-800">
+                                  {model}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                        )}
+                        {!isLoadingModels && ollamaModels.length > 0 && (
+                          <div className="absolute right-2 top-1/2 transform -translate-y-1/2 pointer-events-none">
+                            <ChevronDown className="w-4 h-4 text-dark-400" />
+                          </div>
+                        )}
+                      </div>
+                      {ollamaModels.length > 0 && (
+                        <p className="text-xs text-dark-500 mt-1">
+                          {ollamaModels.length} model{ollamaModels.length !== 1 ? 's' : ''} available from Ollama
+                        </p>
                       )}
                     </div>
-                    {ollamaModels.length > 0 && (
-                      <p className="text-xs text-dark-500 mt-1">
-                        {ollamaModels.length} model{ollamaModels.length !== 1 ? 's' : ''} available from Ollama
-                      </p>
-                    )}
-                  </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div className="bg-dark-800 border border-dark-700 rounded-xl p-3">
                       <div className="text-dark-400 text-xs uppercase">Backend</div>
@@ -5469,15 +5594,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                       </div>
                     </div>
                     <div className="bg-dark-800 border border-dark-700 rounded-xl p-3">
-                      <div className="text-dark-400 text-xs uppercase">Ollama</div>
+                      <div className="text-dark-400 text-xs uppercase">
+                        {connectivitySettings.provider === 'huggingface' ? 'Hugging Face' : 'Ollama'}
+                      </div>
                       <div className="flex items-center gap-2 mt-2">
-                        {chatStatus?.ollama_connected ? (
+                        {(chatStatus?.provider_connected ?? chatStatus?.ollama_connected) ? (
                           <CheckCircle className="w-4 h-4 text-green-500" />
                         ) : (
                           <AlertCircle className="w-4 h-4 text-red-500" />
                         )}
                         <span className="text-dark-100">
-                          {chatStatus?.ollama_connected ? 'Connected' : 'Disconnected'}
+                          {(chatStatus?.provider_connected ?? chatStatus?.ollama_connected) ? 'Connected' : 'Disconnected'}
                         </span>
                       </div>
                     </div>
@@ -5487,7 +5614,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             </div>
             <div className="px-6 py-4 border-t border-dark-700 flex items-center justify-between">
               <div className="text-xs text-dark-500">
-                Changes apply immediately after saving. Use test to verify Ollama reachability.
+                Changes apply immediately after saving. Use test to verify provider connectivity.
               </div>
               <div className="flex items-center gap-2">
                 <button

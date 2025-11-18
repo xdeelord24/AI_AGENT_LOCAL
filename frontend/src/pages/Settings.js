@@ -13,6 +13,8 @@ import {
 import { ApiService } from '../services/api';
 import toast from 'react-hot-toast';
 
+const HF_DEFAULT_BASE_URL = 'https://api-inference.huggingface.co';
+
 const Settings = () => {
   const [settings, setSettings] = useState({
     currentModel: 'codellama',
@@ -20,6 +22,10 @@ const Settings = () => {
     ollamaUrl: 'http://localhost:5000',
     ollamaDirectUrl: 'http://localhost:11434',
     useProxy: true,
+    provider: 'ollama',
+    hfModel: 'meta-llama/Llama-3.1-8B-Instruct',
+    hfBaseUrl: '',
+    hfApiKeySet: false,
     autoSave: true,
     theme: 'dark',
     fontSize: 14,
@@ -29,11 +35,21 @@ const Settings = () => {
     lineNumbers: true,
   });
   
+  const [hfApiKeyInput, setHfApiKeyInput] = useState('');
+  const [hfApiKeyDirty, setHfApiKeyDirty] = useState(false);
+  const normalizeHfBaseUrlValue = (value) => {
+    if (!value) {
+      return '';
+    }
+    const trimmed = value.trim();
+    return trimmed.toLowerCase() === HF_DEFAULT_BASE_URL.toLowerCase() ? '' : trimmed;
+  };
   const [isSaving, setIsSaving] = useState(false);
   
   const [connectionStatus, setConnectionStatus] = useState({
-    ollama: false,
     backend: false,
+    providerConnected: false,
+    providerLabel: 'Ollama',
   });
   
   const [isLoading, setIsLoading] = useState(false);
@@ -51,6 +67,7 @@ const Settings = () => {
         ApiService.getChatStatus(),
         ApiService.getSettings().catch(() => null)
       ]);
+      const normalizedHfBaseUrl = backendSettings ? normalizeHfBaseUrlValue(backendSettings.hf_base_url) : '';
       
       setSettings(prev => ({
         ...prev,
@@ -59,9 +76,15 @@ const Settings = () => {
         ...(backendSettings && {
           ollamaUrl: backendSettings.ollama_url || prev.ollamaUrl,
           ollamaDirectUrl: backendSettings.ollama_direct_url || prev.ollamaDirectUrl,
-          useProxy: backendSettings.use_proxy !== undefined ? backendSettings.use_proxy : prev.useProxy
+          useProxy: backendSettings.use_proxy !== undefined ? backendSettings.use_proxy : prev.useProxy,
+          provider: backendSettings.provider || prev.provider,
+          hfModel: backendSettings.hf_model || prev.hfModel,
+          hfBaseUrl: normalizedHfBaseUrl ?? prev.hfBaseUrl,
+          hfApiKeySet: backendSettings.hf_api_key_set ?? prev.hfApiKeySet,
         })
       }));
+      setHfApiKeyInput('');
+      setHfApiKeyDirty(false);
     } catch (error) {
       console.error('Error loading settings:', error);
     }
@@ -81,26 +104,34 @@ const Settings = () => {
       const ollamaResponse = await ApiService.getChatStatus();
       setConnectionStatus(prev => ({
         ...prev,
-        ollama: ollamaResponse.ollama_connected
+        providerConnected: typeof ollamaResponse.provider_connected === 'boolean'
+          ? ollamaResponse.provider_connected
+          : !!ollamaResponse.ollama_connected,
+        providerLabel: (ollamaResponse.provider === 'huggingface') ? 'Hugging Face' : 'Ollama'
       }));
     } catch (error) {
       console.error('Error checking connections:', error);
       setConnectionStatus({
         backend: false,
-        ollama: false
+        providerConnected: false,
+        providerLabel: 'Ollama'
       });
     } finally {
       setIsLoading(false);
     }
   };
 
-  const testOllamaConnection = async () => {
+  const testProviderConnection = async () => {
     setIsTestingConnection(true);
     try {
       const response = await ApiService.testOllamaConnection();
       if (response.connected) {
-        toast.success('Ollama connection successful!');
-        setConnectionStatus(prev => ({ ...prev, ollama: true }));
+        toast.success(response.message || 'Provider connection successful!');
+        setConnectionStatus(prev => ({
+          ...prev,
+          providerConnected: true,
+          providerLabel: settings.provider === 'huggingface' ? 'Hugging Face' : 'Ollama'
+        }));
         // Reload models if connection successful
         if (response.available_models) {
           setSettings(prev => ({
@@ -109,32 +140,62 @@ const Settings = () => {
           }));
         }
       } else {
-        toast.error(response.message || 'Ollama is not running or not accessible');
-        setConnectionStatus(prev => ({ ...prev, ollama: false }));
+        toast.error(response.message || 'Provider is not accessible');
+        setConnectionStatus(prev => ({
+          ...prev,
+          providerConnected: false,
+          providerLabel: settings.provider === 'huggingface' ? 'Hugging Face' : 'Ollama'
+        }));
       }
     } catch (error) {
-      console.error('Error testing Ollama connection:', error);
-      toast.error('Failed to connect to Ollama');
-      setConnectionStatus(prev => ({ ...prev, ollama: false }));
+      console.error('Error testing provider connection:', error);
+      toast.error('Failed to connect to provider');
+      setConnectionStatus(prev => ({
+        ...prev,
+        providerConnected: false,
+        providerLabel: settings.provider === 'huggingface' ? 'Hugging Face' : 'Ollama'
+      }));
     } finally {
       setIsTestingConnection(false);
     }
   };
   
-  const saveOllamaSettings = async () => {
+  const saveProviderSettings = async () => {
     setIsSaving(true);
     try {
-      await ApiService.updateSettings({
+      const payload = {
+        provider: settings.provider,
         ollama_url: settings.ollamaUrl,
         ollama_direct_url: settings.ollamaDirectUrl,
-        use_proxy: settings.useProxy
-      });
-      toast.success('Ollama settings saved successfully!');
+        use_proxy: settings.useProxy,
+      };
+
+      if (settings.provider === 'huggingface') {
+        payload.hf_model = settings.hfModel;
+        payload.hf_base_url = normalizeHfBaseUrlValue(settings.hfBaseUrl);
+      }
+
+      if (hfApiKeyDirty) {
+        payload.hf_api_key = hfApiKeyInput;
+      }
+
+      await ApiService.updateSettings(payload);
+
+      if (hfApiKeyDirty) {
+        setSettings(prev => ({
+          ...prev,
+          hfApiKeySet: !!hfApiKeyInput
+        }));
+        setHfApiKeyDirty(false);
+        setHfApiKeyInput('');
+      }
+
+      toast.success('Provider settings saved successfully!');
       // Test connection after saving
-      await testOllamaConnection();
+      await testProviderConnection();
     } catch (error) {
-      console.error('Error saving Ollama settings:', error);
-      toast.error(error.response?.data?.detail || 'Failed to save Ollama settings');
+      console.error('Error saving provider settings:', error);
+      toast.error(error.response?.data?.detail || 'Failed to save provider settings');
     } finally {
       setIsSaving(false);
     }
@@ -152,12 +213,23 @@ const Settings = () => {
   };
 
   const handleSettingChange = (key, value) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
-    // Save to localStorage
-    localStorage.setItem('offline-ai-settings', JSON.stringify({
-      ...settings,
-      [key]: value
-    }));
+    setSettings(prev => {
+      const next = { ...prev, [key]: value };
+      if (key === 'hfModel' && prev.provider === 'huggingface') {
+        next.currentModel = value;
+      }
+      if (key === 'provider') {
+        next.currentModel = value === 'huggingface' ? next.hfModel : prev.currentModel;
+      }
+      localStorage.setItem('offline-ai-settings', JSON.stringify(next));
+      return next;
+    });
+    if (key === 'provider') {
+      setConnectionStatus(prev => ({
+        ...prev,
+        providerLabel: value === 'huggingface' ? 'Hugging Face' : 'Ollama'
+      }));
+    }
   };
 
   const resetSettings = async () => {
@@ -167,6 +239,10 @@ const Settings = () => {
       ollamaUrl: 'http://localhost:5000',
       ollamaDirectUrl: 'http://localhost:11434',
       useProxy: true,
+      provider: 'ollama',
+      hfModel: 'meta-llama/Llama-3.1-8B-Instruct',
+      hfBaseUrl: 'https://api-inference.huggingface.co',
+      hfApiKeySet: false,
       autoSave: true,
       theme: 'dark',
       fontSize: 14,
@@ -176,11 +252,14 @@ const Settings = () => {
       lineNumbers: true,
     };
     setSettings(defaultSettings);
+    setHfApiKeyInput('');
+    setHfApiKeyDirty(false);
     localStorage.setItem('offline-ai-settings', JSON.stringify(defaultSettings));
     
     // Also reset backend settings
     try {
       await ApiService.updateSettings({
+        provider: defaultSettings.provider,
         ollama_url: defaultSettings.ollamaUrl,
         ollama_direct_url: defaultSettings.ollamaDirectUrl,
         use_proxy: defaultSettings.useProxy
@@ -244,16 +323,16 @@ const Settings = () => {
                 <div className="flex items-center space-x-3">
                   <Database className="w-6 h-6 text-blue-500" />
                   <div>
-                    <div className="font-medium text-dark-100">Ollama</div>
-                    <div className={`text-sm ${getStatusColor(connectionStatus.ollama)}`}>
-                      {getStatusText(connectionStatus.ollama)}
+                    <div className="font-medium text-dark-100">{connectionStatus.providerLabel}</div>
+                    <div className={`text-sm ${getStatusColor(connectionStatus.providerConnected)}`}>
+                      {getStatusText(connectionStatus.providerConnected)}
                     </div>
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
-                  {getStatusIcon(connectionStatus.ollama)}
+                  {getStatusIcon(connectionStatus.providerConnected)}
                   <button
-                    onClick={testOllamaConnection}
+                    onClick={testProviderConnection}
                     disabled={isTestingConnection}
                     className="p-1 hover:bg-dark-600 rounded transition-colors disabled:opacity-50"
                   >
@@ -283,58 +362,134 @@ const Settings = () => {
             </div>
           </div>
 
-          {/* Ollama Configuration */}
+          {/* Model Provider Configuration */}
           <div className="bg-dark-800 border border-dark-700 rounded-lg p-6">
             <h2 className="text-xl font-semibold text-dark-50 mb-4 flex items-center space-x-2">
               <Database className="w-5 h-5" />
-              <span>Ollama Configuration</span>
+              <span>Model Provider</span>
             </h2>
             
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-dark-300 mb-2">
-                  Ollama URL (Proxy)
+                  Provider
                 </label>
-                <input
-                  type="text"
-                  value={settings.ollamaUrl}
-                  onChange={(e) => handleSettingChange('ollamaUrl', e.target.value)}
-                  placeholder="http://localhost:5000"
+                <select
+                  value={settings.provider}
+                  onChange={(e) => handleSettingChange('provider', e.target.value)}
                   className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
-                />
-                <p className="text-xs text-dark-400 mt-1">URL for Ollama proxy server (if using proxy)</p>
+                >
+                  <option value="ollama">Ollama (local)</option>
+                  <option value="huggingface">Hugging Face Inference API</option>
+                </select>
+                <p className="text-xs text-dark-400 mt-1">
+                  Choose between your local Ollama runtime or Hugging Face Inference API.
+                </p>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-dark-300 mb-2">
-                  Ollama Direct URL
-                </label>
-                <input
-                  type="text"
-                  value={settings.ollamaDirectUrl}
-                  onChange={(e) => handleSettingChange('ollamaDirectUrl', e.target.value)}
-                  placeholder="http://localhost:11434"
-                  className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
-                />
-                <p className="text-xs text-dark-400 mt-1">Direct URL to Ollama server (default: http://localhost:11434)</p>
-              </div>
+              {settings.provider === 'ollama' ? (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-dark-300 mb-2">
+                      Ollama URL (Proxy)
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.ollamaUrl}
+                      onChange={(e) => handleSettingChange('ollamaUrl', e.target.value)}
+                      placeholder="http://localhost:5000"
+                      className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                    <p className="text-xs text-dark-400 mt-1">URL for Ollama proxy server (if using proxy)</p>
+                  </div>
 
-              <div>
-                <label className="flex items-center space-x-3">
-                  <input
-                    type="checkbox"
-                    checked={settings.useProxy}
-                    onChange={(e) => handleSettingChange('useProxy', e.target.checked)}
-                    className="w-4 h-4 text-primary-600 bg-dark-700 border-dark-600 rounded focus:ring-primary-500"
-                  />
-                  <span className="text-dark-300">Use Proxy Server</span>
-                </label>
-                <p className="text-xs text-dark-400 mt-1 ml-7">If enabled, uses the proxy URL. Otherwise, uses the direct URL.</p>
-              </div>
+                  <div>
+                    <label className="block text-sm font-medium text-dark-300 mb-2">
+                      Ollama Direct URL
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.ollamaDirectUrl}
+                      onChange={(e) => handleSettingChange('ollamaDirectUrl', e.target.value)}
+                      placeholder="http://localhost:11434"
+                      className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                    <p className="text-xs text-dark-400 mt-1">Direct URL to Ollama server (default: http://localhost:11434)</p>
+                  </div>
+
+                  <div>
+                    <label className="flex items-center space-x-3">
+                      <input
+                        type="checkbox"
+                        checked={settings.useProxy}
+                        onChange={(e) => handleSettingChange('useProxy', e.target.checked)}
+                        className="w-4 h-4 text-primary-600 bg-dark-700 border-dark-600 rounded focus:ring-primary-500"
+                      />
+                      <span className="text-dark-300">Use Proxy Server</span>
+                    </label>
+                    <p className="text-xs text-dark-400 mt-1 ml-7">If enabled, uses the proxy URL. Otherwise, uses the direct URL.</p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-dark-300 mb-2">
+                      Hugging Face API Base URL
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.hfBaseUrl}
+                      onChange={(e) => handleSettingChange('hfBaseUrl', e.target.value)}
+                      placeholder="https://api-inference.huggingface.co"
+                      className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                    <p className="text-xs text-dark-400 mt-1">
+              Leave blank to use the default Hugging Face endpoint ({HF_DEFAULT_BASE_URL}).
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-dark-300 mb-2">
+                      Model ID
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.hfModel}
+                      onChange={(e) => handleSettingChange('hfModel', e.target.value)}
+                      placeholder="meta-llama/Llama-3.1-8B-Instruct"
+                      className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                    <p className="text-xs text-dark-400 mt-1">
+                      Any chat-completion compatible model hosted on Hugging Face.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-dark-300 mb-2">
+                      API Key
+                    </label>
+                    <input
+                      type="password"
+                      value={hfApiKeyInput}
+                      onChange={(e) => {
+                        setHfApiKeyInput(e.target.value);
+                        setHfApiKeyDirty(true);
+                      }}
+                      placeholder="hf_xxx..."
+                      className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                    <p className="text-xs text-dark-400 mt-1">
+                      {settings.hfApiKeySet
+                        ? 'An API key is stored securely on the backend. Leave blank to keep it.'
+                        : 'No API key stored yet. Add one to enable Hugging Face access.'}
+                    </p>
+                  </div>
+                </>
+              )}
 
               <div className="flex space-x-3">
                 <button
-                  onClick={saveOllamaSettings}
+                  onClick={saveProviderSettings}
                   disabled={isSaving}
                   className="px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded transition-colors disabled:opacity-50 flex items-center space-x-2"
                 >
@@ -344,11 +499,11 @@ const Settings = () => {
                       <span>Saving...</span>
                     </>
                   ) : (
-                    <span>Save Ollama Settings</span>
+                    <span>Save Provider Settings</span>
                   )}
                 </button>
                 <button
-                  onClick={testOllamaConnection}
+                  onClick={testProviderConnection}
                   disabled={isTestingConnection}
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50 flex items-center space-x-2"
                 >
@@ -384,6 +539,7 @@ const Settings = () => {
                   <select
                     value={settings.currentModel}
                     onChange={(e) => selectModel(e.target.value)}
+                    disabled={settings.provider === 'huggingface'}
                     className="flex-1 px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   >
                     {settings.availableModels.map((model) => (
@@ -392,6 +548,11 @@ const Settings = () => {
                       </option>
                     ))}
                   </select>
+                  {settings.provider === 'huggingface' && (
+                    <p className="text-xs text-dark-400 mt-2">
+                      Set the Hugging Face model ID in the provider section above.
+                    </p>
+                  )}
                 </div>
               </div>
 

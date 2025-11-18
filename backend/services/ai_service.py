@@ -18,6 +18,11 @@ try:
 except ImportError:
     DDGS = None
 
+try:
+    from huggingface_hub import InferenceClient
+except ImportError:
+    InferenceClient = None
+
 
 def truncate_text(text: Optional[str], limit: int = 220) -> str:
     if not text:
@@ -29,11 +34,12 @@ def truncate_text(text: Optional[str], limit: int = 220) -> str:
 
 
 class AIService:
-    """Service for interacting with local AI models via Ollama"""
+    """Service for interacting with AI models via Ollama or Hugging Face"""
     
     CONFIG_DIR_ENV_VAR = "AI_AGENT_CONFIG_DIR"
     DEFAULT_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".offline_ai_agent")
     SETTINGS_FILENAME = "settings.json"
+    HF_DEFAULT_API_BASE = "https://api-inference.huggingface.co"
     
     METADATA_FORMAT_LINES = [
         "Metadata format (always include this JSON block when sharing an ai_plan or file operations):",
@@ -63,10 +69,16 @@ class AIService:
     
     def __init__(self):
         # Load from environment variables or use defaults
+        self.provider = (os.getenv("LLM_PROVIDER", "ollama") or "ollama").lower()
+        if self.provider not in ("ollama", "huggingface"):
+            self.provider = "ollama"
         self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:5000")  # Proxy server
         self.ollama_direct = os.getenv("OLLAMA_DIRECT_URL", "http://localhost:11434")  # Direct connection
         self.default_model = os.getenv("DEFAULT_MODEL", "codellama")
         self.current_model = self.default_model
+        self.hf_api_key = os.getenv("HF_API_KEY", "")
+        self.hf_model = os.getenv("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
+        self.hf_base_url = os.getenv("HF_BASE_URL", "").strip()
         self.conversation_history = {}
         self.available_models = []
         self._config_dir = os.getenv(self.CONFIG_DIR_ENV_VAR) or self.DEFAULT_CONFIG_DIR
@@ -92,6 +104,14 @@ class AIService:
         except ValueError:
             self.request_timeout = 120
         try:
+            self.hf_request_timeout = int(os.getenv("HF_REQUEST_TIMEOUT", "120"))
+        except ValueError:
+            self.hf_request_timeout = 120
+        try:
+            self.hf_max_tokens = int(os.getenv("HF_MAX_TOKENS", "2048"))
+        except ValueError:
+            self.hf_max_tokens = 2048
+        try:
             self.web_search_max_results = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
         except ValueError:
             self.web_search_max_results = 5
@@ -99,8 +119,13 @@ class AIService:
         self.hardware_threads = os.cpu_count() or 8
         self.base_generation_options = self._load_generation_options()
         self.large_model_thread_count = max(8, min(self.hardware_threads, 32))
+        self._hf_client = None
+        self._hf_client_cache_key: Optional[Tuple[str, str, str]] = None
         
         self._load_persisted_settings()
+
+        if self.provider == "huggingface":
+            self.current_model = self.hf_model
     
     def _load_persisted_settings(self) -> None:
         """Load saved connectivity settings from disk if they exist."""
@@ -111,6 +136,10 @@ class AIService:
                 data = json.load(settings_file)
             self.ollama_url = data.get("ollama_url", self.ollama_url)
             self.ollama_direct = data.get("ollama_direct_url", self.ollama_direct)
+            provider_value = (data.get("provider") or self.provider or "ollama").lower()
+            if provider_value not in ("ollama", "huggingface"):
+                provider_value = "ollama"
+            self.provider = provider_value
             if "use_proxy" in data:
                 self.use_proxy = bool(data["use_proxy"])
             if data.get("default_model"):
@@ -119,6 +148,12 @@ class AIService:
                 self.current_model = data["current_model"]
             elif data.get("default_model"):
                 self.current_model = data["default_model"]
+            if data.get("hf_model"):
+                self.hf_model = data["hf_model"]
+            if "hf_base_url" in data:
+                self.hf_base_url = (data.get("hf_base_url") or "").strip()
+            if "hf_api_key" in data:
+                self.hf_api_key = data.get("hf_api_key") or ""
         except Exception as error:
             print(f"⚠️  Failed to load saved settings: {error}")
     
@@ -130,6 +165,10 @@ class AIService:
             "use_proxy": self.use_proxy,
             "default_model": self.default_model,
             "current_model": self.current_model,
+            "provider": self.provider,
+            "hf_model": self.hf_model,
+            "hf_base_url": self.hf_base_url,
+            "hf_api_key": self.hf_api_key or "",
         }
         try:
             os.makedirs(self._config_dir, exist_ok=True)
@@ -137,6 +176,11 @@ class AIService:
                 json.dump(settings_payload, settings_file, indent=2)
         except Exception as error:
             print(f"⚠️  Failed to save settings: {error}")
+
+    def reset_hf_client(self) -> None:
+        """Drop cached Hugging Face inference client so new settings take effect."""
+        self._hf_client = None
+        self._hf_client_cache_key = None
         
     def _load_generation_options(self) -> Dict[str, Any]:
         def read_int(env_name: str, default: int) -> int:
@@ -238,15 +282,34 @@ class AIService:
         self._last_connection_status = False
         self._last_connection_check = now
         return False
+
+    async def check_provider_connection(self, force: bool = False) -> bool:
+        """Check connectivity for the currently selected provider."""
+        if self.provider == "huggingface":
+            if InferenceClient is None:
+                return False
+            return bool(self.hf_api_key and self.hf_model)
+        return await self.check_ollama_connection(force=force)
     
     async def get_available_models(self) -> List[str]:
         """Get list of available models"""
+        if self.provider == "huggingface":
+            return [self.hf_model] if self.hf_model else []
         if not self.available_models:
             await self.check_ollama_connection(force=True)
         return self.available_models
     
     async def select_model(self, model_name: str) -> bool:
         """Select a specific model"""
+        if self.provider == "huggingface":
+            if not model_name:
+                return False
+            self.hf_model = model_name
+            self.current_model = model_name
+            self.reset_hf_client()
+            self.save_settings()
+            return True
+
         if model_name in self.available_models:
             self.current_model = model_name
             self.default_model = model_name
@@ -256,8 +319,22 @@ class AIService:
     
     async def get_status(self) -> Dict[str, Any]:
         """Get current service status"""
+        if self.provider == "huggingface":
+            provider_connected = await self.check_provider_connection()
+            available = [self.hf_model] if self.hf_model else []
+            return {
+                "provider": "huggingface",
+                "provider_connected": provider_connected,
+                "ollama_connected": provider_connected,
+                "current_model": self.hf_model or self.current_model,
+                "available_models": available,
+                "conversation_count": len(self.conversation_history)
+            }
+
         is_connected = await self.check_ollama_connection(force=True)
         return {
+            "provider": "ollama",
+            "provider_connected": is_connected,
             "ollama_connected": is_connected,
             "current_model": self.current_model,
             "available_models": self.available_models,
@@ -489,8 +566,18 @@ class AIService:
     ) -> Dict[str, Any]:
         """Process a message and get AI response"""
         
-        if not await self.check_ollama_connection():
-            raise Exception("Ollama is not running. Please start Ollama and install a model.")
+        if self.provider == "ollama":
+            if not await self.check_ollama_connection():
+                raise Exception("Ollama is not running. Please start Ollama and install a model.")
+        elif self.provider == "huggingface":
+            if InferenceClient is None:
+                raise Exception("huggingface-hub is not installed. Please install it to use Hugging Face models.")
+            if not self.hf_api_key:
+                raise Exception("Hugging Face API key (HF_API_KEY) is not configured.")
+            if not self.hf_model:
+                raise Exception("Hugging Face model name (HF_MODEL) is not configured.")
+        else:
+            raise Exception(f"Unsupported LLM provider: {self.provider}")
         
         # Create conversation ID if not provided
         conversation_id = str(uuid.uuid4())
@@ -526,8 +613,8 @@ class AIService:
         # Prepare the prompt with context
         prompt = self._build_prompt(message, context, conversation_history or [])
         
-        # Get response from Ollama
-        response = await self._call_ollama(prompt)
+        # Get response from configured provider
+        response = await self._call_model(prompt)
         
         # Parse metadata from response
         cleaned_response, metadata = self._parse_response_metadata(response)
@@ -624,6 +711,7 @@ class AIService:
                 "- Treat agent mode as fully autonomous execution: do NOT ask the user follow-up questions unless the request is self-contradictory or unsafe. Instead, state reasonable assumptions and continue working.",
                 "- When the user responds with short inputs like `1`, `2`, `option A`, or repeats one of your earlier choices, interpret that as their selection instead of asking the same question again.",
                 "- When creating or editing files, emit the necessary file_operations and then immediately move on to the next task—do not stop after the first modification if other tasks remain.",
+                "- Keep edits surgical: update only the portions of each file that the user asked to change and preserve the rest of the file exactly as-is.",
                 "- Only mark a task as `completed` if you actually performed that step in the current response. Mark the task you are actively doing as `in_progress`; leave future work as `pending`.",
                 "- Do not leave tasks pending unless you hit a hard blocker; otherwise continue working until every task is marked `completed` within this response.",
                 "- Add a verification task (linting, reasoning, or test strategy) before reporting back, and end with a reporting task that summarizes outcomes and remaining risks.",
@@ -777,6 +865,62 @@ class AIService:
         )
         return bool(pattern.search(normalized))
     
+    def _has_change_intent(self, text: Optional[str]) -> bool:
+        """Heuristic to determine if the user is asking for code changes."""
+        if not text:
+            return False
+        normalized = text.lower()
+        change_keywords = [
+            "fix",
+            "update",
+            "change",
+            "modify",
+            "refactor",
+            "implement",
+            "add ",
+            "add\n",
+            "remove",
+            "rewrite",
+            "improve",
+            "adjust",
+            "patch",
+            "create",
+            "build",
+            "generate",
+            "design",
+            "scaffold",
+            "bootstrap",
+            "prototype",
+            "develop",
+            "new file",
+            "new app",
+            "upgrade",
+            "enhance",
+            "rename",
+            "delete",
+        ]
+        return any(keyword in normalized for keyword in change_keywords)
+    
+    def _is_analysis_request(self, text: Optional[str]) -> bool:
+        """Detect requests that are explicitly analysis/explanation focused."""
+        if not text:
+            return False
+        normalized = text.lower()
+        analysis_keywords = [
+            "explain",
+            "describe",
+            "walk me through",
+            "what does",
+            "how does",
+            "summarize",
+            "document",
+            "comment on",
+            "review this",
+            "analyze",
+            "understand",
+        ]
+        return any(keyword in normalized for keyword in analysis_keywords)
+    
     def _is_agent_context(self, context: Dict[str, Any]) -> bool:
         if not context:
             return False
@@ -796,19 +940,18 @@ class AIService:
             return False
         
         combined = f"{message or ''}\n{assistant_response or ''}".lower()
-        keywords = [
-            "fix", "update", "change", "modify", "refactor",
-            "implement", "add ", "remove", "rewrite", "improve",
-            "adjust", "patch", "bug", "issue", "error",
-            "create", "build", "generate", "design", "scaffold",
-            "bootstrap", "prototype", "develop", "new file", "new app"
-        ]
-        contains_keyword = any(keyword in combined for keyword in keywords)
+        change_intent = self._has_change_intent(combined)
+        analysis_only = not change_intent and self._is_analysis_request(message)
         has_code_block = "```" in (assistant_response or "")
         mentions_file_section = "file operation" in combined
-        has_context_files = bool(context.get("active_file") or context.get("mentioned_files"))
         
-        return contains_keyword or has_code_block or mentions_file_section or has_context_files
+        if has_code_block or mentions_file_section:
+            return True
+        
+        if analysis_only:
+            return False
+        
+        return change_intent
     
     async def _generate_file_operations_metadata(
         self,
@@ -869,13 +1012,70 @@ class AIService:
         fallback_prompt = "\n".join(prompt_lines)
         
         try:
-            fallback_response = await self._call_ollama(fallback_prompt)
+            fallback_response = await self._call_model(fallback_prompt)
         except Exception as error:
             print(f"Failed to regenerate file operations metadata: {error}")
             return "", {"file_operations": [], "ai_plan": None}
         
         return self._parse_response_metadata(fallback_response)
     
+    async def _call_model(self, prompt: str) -> str:
+        if self.provider == "huggingface":
+            return await self._call_huggingface(prompt)
+        return await self._call_ollama(prompt)
+
+    async def _call_huggingface(self, prompt: str) -> str:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._huggingface_completion, prompt)
+
+    def _huggingface_completion(self, prompt: str) -> str:
+        if InferenceClient is None:
+            raise Exception("huggingface-hub is not installed. Please install it to use Hugging Face models.")
+        client_kwargs = {
+            "timeout": self.hf_request_timeout,
+        }
+
+        if self.hf_api_key:
+            client_kwargs["token"] = self.hf_api_key
+        base_url = (self.hf_base_url or "").strip()
+        if base_url and base_url.lower() == self.HF_DEFAULT_API_BASE.lower():
+            base_url = ""
+
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        elif self.hf_model:
+            client_kwargs["model"] = self.hf_model
+
+        cache_key = (self.hf_model or "", base_url or "", self.hf_api_key or "")
+        try:
+            if not self._hf_client or self._hf_client_cache_key != cache_key:
+                self._hf_client = InferenceClient(**client_kwargs)
+                self._hf_client_cache_key = cache_key
+            client = self._hf_client
+        except Exception as error:
+            raise Exception(f"Failed to initialize Hugging Face client: {error}") from error
+
+        try:
+            completion = client.chat.completions.create(
+                model=self.hf_model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=self.hf_max_tokens,
+                stream=True,
+            )
+            parts: List[str] = []
+            for chunk in completion:
+                choices = getattr(chunk, "choices", None)
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                content = getattr(delta, "content", None) if delta else None
+                if content:
+                    parts.append(content)
+            response_text = "".join(parts).strip()
+            return response_text or "No response generated"
+        except Exception as error:
+            raise Exception(f"Hugging Face API error: {error}") from error
+
     async def _call_ollama(self, prompt: str) -> str:
         """Make API call to Ollama"""
         generation_options, keep_alive = self._build_generation_options_for_model()
@@ -924,17 +1124,17 @@ class AIService:
         if context:
             code_prompt += f"\n\nContext: {json.dumps(context, indent=2)}"
         
-        response = await self._call_ollama(code_prompt)
+        response = await self._call_model(code_prompt)
         return response
     
     async def explain_code(self, code: str, language: str = "python") -> str:
         """Explain what a piece of code does"""
         explain_prompt = f"Explain this {language} code:\n\n```{language}\n{code}\n```"
-        response = await self._call_ollama(explain_prompt)
+        response = await self._call_model(explain_prompt)
         return response
     
     async def debug_code(self, code: str, error_message: str, language: str = "python") -> str:
         """Help debug code with an error message"""
         debug_prompt = f"Debug this {language} code. Error: {error_message}\n\n```{language}\n{code}\n```"
-        response = await self._call_ollama(debug_prompt)
+        response = await self._call_model(debug_prompt)
         return response
