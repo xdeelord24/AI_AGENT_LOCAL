@@ -277,7 +277,35 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const isWindowsPlatform = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent || '');
   const mainLayoutRef = useRef(null);
   const pendingResizeRef = useRef({ left: null, right: null, bottom: null });
-  const resizeFrameRef = useRef(null);
+
+  const updatePanelCssVar = useCallback((panel, value) => {
+    const layoutNode = mainLayoutRef.current;
+    if (!layoutNode || typeof value !== 'number') return;
+
+    const varName =
+      panel === 'left'
+        ? '--left-sidebar-width'
+        : panel === 'right'
+          ? '--right-sidebar-width'
+          : panel === 'bottom'
+            ? '--bottom-panel-height'
+            : null;
+
+    if (!varName) return;
+    layoutNode.style.setProperty(varName, `${value}px`);
+  }, []);
+
+  useEffect(() => {
+    updatePanelCssVar('left', leftSidebarWidth);
+  }, [leftSidebarWidth, updatePanelCssVar]);
+
+  useEffect(() => {
+    updatePanelCssVar('right', rightSidebarWidth);
+  }, [rightSidebarWidth, updatePanelCssVar]);
+
+  useEffect(() => {
+    updatePanelCssVar('bottom', bottomPanelHeight);
+  }, [bottomPanelHeight, updatePanelCssVar]);
 
   const closeFileContextMenu = useCallback(() => {
     setFileContextMenu({ visible: false, x: 0, y: 0, target: null });
@@ -1359,6 +1387,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   // Resize handlers
   useEffect(() => {
+    if (!isResizingLeft && !isResizingRight && !isResizingBottom) {
+      return undefined;
+    }
+
     const commitPendingResize = () => {
       const { left, right, bottom } = pendingResizeRef.current;
       pendingResizeRef.current = { left: null, right: null, bottom: null };
@@ -1373,26 +1405,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       }
     };
 
-    const scheduleResizeCommit = () => {
-      if (resizeFrameRef.current) return;
-      resizeFrameRef.current = requestAnimationFrame(() => {
-        resizeFrameRef.current = null;
-        commitPendingResize();
-      });
-    };
-
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
     const handleMouseMove = (e) => {
       let didUpdate = false;
-
       if (isResizingLeft) {
         const newWidth = clamp(e.clientX, 200, 600);
         pendingResizeRef.current.left = newWidth;
+        updatePanelCssVar('left', newWidth);
         didUpdate = true;
       } else if (isResizingRight) {
         const newWidth = clamp(window.innerWidth - e.clientX, 200, 600);
         pendingResizeRef.current.right = newWidth;
+        updatePanelCssVar('right', newWidth);
         didUpdate = true;
       } else if (isResizingBottom) {
         const container = mainLayoutRef.current;
@@ -1400,12 +1425,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           const rect = container.getBoundingClientRect();
           const newHeight = clamp(rect.bottom - e.clientY, 150, 600);
           pendingResizeRef.current.bottom = newHeight;
+          updatePanelCssVar('bottom', newHeight);
           didUpdate = true;
         }
       }
 
       if (didUpdate) {
-        scheduleResizeCommit();
+        e.preventDefault();
       }
     };
 
@@ -1413,10 +1439,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setIsResizingLeft(false);
       setIsResizingRight(false);
       setIsResizingBottom(false);
-      if (resizeFrameRef.current) {
-        cancelAnimationFrame(resizeFrameRef.current);
-        resizeFrameRef.current = null;
-      }
       commitPendingResize();
     };
 
@@ -1435,16 +1457,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [isResizingLeft, isResizingRight, isResizingBottom]);
-
-  useEffect(
-    () => () => {
-      if (resizeFrameRef.current) {
-        cancelAnimationFrame(resizeFrameRef.current);
-      }
-    },
-    []
-  );
+  }, [isResizingLeft, isResizingRight, isResizingBottom, updatePanelCssVar]);
 
   const handleStopChat = useCallback(() => {
     if (chatAbortController) {
@@ -3442,7 +3455,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           <>
             <div 
               className="bg-dark-800 border-r border-dark-700 flex flex-col"
-              style={{ width: `${leftSidebarWidth}px`, minWidth: '200px', maxWidth: '600px' }}
+              style={{
+                width: `var(--left-sidebar-width, ${leftSidebarWidth}px)`,
+                minWidth: '200px',
+                maxWidth: '600px',
+              }}
             >
             <div className="p-3 border-b border-dark-700">
               <div className="flex flex-col gap-2">
@@ -3638,6 +3655,16 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
               );
             };
 
+            const isOperationFileOpen = openFiles.some(
+              (file) => file.path === normalizedPath
+            );
+
+            const handleReviewClick = () => {
+              if (op) {
+                openOperationPreview(op);
+              }
+            };
+
             return (
               <div className="border-b border-primary-700/40 bg-primary-900/10 text-sm p-4 space-y-3">
                 <div className="flex items-center justify-between">
@@ -3672,24 +3699,35 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                         <ChevronRight className="w-3 h-3" />
                       </button>
                     </div>
-                    <div className="flex gap-2">
+                    {isOperationFileOpen ? (
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={handleDiscardPendingFileOperations}
+                          disabled={isApplyingFileOperations}
+                          className="px-3 py-1.5 rounded-lg border border-dark-600 text-dark-200 text-xs hover:bg-dark-800 disabled:opacity-60"
+                        >
+                          Undo All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleApplyPendingFileOperations}
+                          disabled={isApplyingFileOperations}
+                          className="px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs disabled:opacity-60"
+                        >
+                          {isApplyingFileOperations ? 'Applying…' : 'Keep All'}
+                        </button>
+                      </div>
+                    ) : (
                       <button
                         type="button"
-                        onClick={handleDiscardPendingFileOperations}
-                        disabled={isApplyingFileOperations}
-                        className="px-3 py-1.5 rounded-lg border border-dark-600 text-dark-200 text-xs hover:bg-dark-800 disabled:opacity-60"
-                      >
-                        Undo All
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleApplyPendingFileOperations}
-                        disabled={isApplyingFileOperations}
+                        onClick={handleReviewClick}
                         className="px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs disabled:opacity-60"
+                        disabled={isApplyingFileOperations}
                       >
-                        {isApplyingFileOperations ? 'Applying…' : 'Keep All'}
+                        Review the file
                       </button>
-                    </div>
+                    )}
                   </div>
                 </div>
                 <div className="mt-2 flex items-center justify-between text-xs text-dark-300">
@@ -3783,7 +3821,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             />
             <div 
               className="bg-dark-800 border-l border-dark-700 flex flex-col h-full"
-              style={{ width: `${rightSidebarWidth}px`, minWidth: '200px', maxWidth: '600px' }}
+              style={{
+                width: `var(--right-sidebar-width, ${rightSidebarWidth}px)`,
+                minWidth: '200px',
+                maxWidth: '600px',
+              }}
             >
             {/* Chat Tabs */}
             <div className="flex items-center border-b border-dark-700 bg-dark-800">
@@ -4254,7 +4296,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         <>
           <div 
             className="bg-dark-800 border-t border-dark-700 flex flex-col"
-            style={{ height: `${bottomPanelHeight}px`, minHeight: '150px', maxHeight: '600px' }}
+            style={{
+              height: `var(--bottom-panel-height, ${bottomPanelHeight}px)`,
+              minHeight: '150px',
+              maxHeight: '600px',
+            }}
           >
           <div className="flex items-center border-b border-dark-700">
             {['problems', 'output', 'debug console', 'terminal', 'ports'].map((tab) => (
