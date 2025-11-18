@@ -270,6 +270,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [isFileTreeLoading, setIsFileTreeLoading] = useState(false);
   const [fileContextMenu, setFileContextMenu] = useState({ visible: false, x: 0, y: 0, target: null });
+  const [tabContextMenu, setTabContextMenu] = useState({ visible: false, x: 0, y: 0, target: null });
   const [fileClipboard, setFileClipboard] = useState(null);
   const [compareSource, setCompareSource] = useState(null);
   const [comparisonState, setComparisonState] = useState(null);
@@ -311,11 +312,128 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setFileContextMenu({ visible: false, x: 0, y: 0, target: null });
   }, []);
 
+  const closeTabContextMenu = useCallback(() => {
+    setTabContextMenu({ visible: false, x: 0, y: 0, target: null });
+  }, []);
+
   // Editor states
   const [editorContent, setEditorContent] = useState('');
   const [editorLanguage, setEditorLanguage] = useState('python');
   const [openFiles, setOpenFiles] = useState([]);
+  const upsertOpenFile = useCallback((fileInfo = {}) => {
+    const normalizedPath = normalizeEditorPath(fileInfo.path || '');
+    if (!normalizedPath) {
+      return;
+    }
+
+    setOpenFiles((prevFiles) => {
+      let replaced = false;
+      const nextFiles = [];
+
+      prevFiles.forEach((file) => {
+        if (file.path === normalizedPath) {
+          if (!replaced) {
+            const resolvedName =
+              fileInfo.name ||
+              file.name ||
+              normalizedPath.split('/').pop() ||
+              'untitled';
+
+            nextFiles.push({
+              ...file,
+              ...fileInfo,
+              path: normalizedPath,
+              name: resolvedName,
+            });
+            replaced = true;
+          }
+          return;
+        }
+        nextFiles.push(file);
+      });
+
+      if (!replaced) {
+        const resolvedName =
+          fileInfo.name ||
+          normalizedPath.split('/').pop() ||
+          'untitled';
+
+        nextFiles.push({
+          ...fileInfo,
+          path: normalizedPath,
+          name: resolvedName,
+        });
+      }
+
+      return nextFiles;
+    });
+  }, [setOpenFiles]);
   const [activeTab, setActiveTab] = useState(null);
+  const applyOpenFilesAfterChange = useCallback(
+    (nextFiles, options = {}) => {
+      if (!Array.isArray(nextFiles)) {
+        return;
+      }
+
+      setOpenFiles(nextFiles);
+
+      const hasPath = (path) =>
+        !!(path && nextFiles.some((file) => file.path === path));
+      const getFallbackPath = () => {
+        if (options.preferredActive && hasPath(options.preferredActive)) {
+          return options.preferredActive;
+        }
+        return nextFiles.length > 0
+          ? nextFiles[nextFiles.length - 1].path
+          : null;
+      };
+
+      if (selectedFile && !hasPath(selectedFile)) {
+        const fallbackSelection = getFallbackPath();
+        if (selectedFile !== fallbackSelection) {
+          setSelectedFile(fallbackSelection);
+        }
+      }
+
+      let nextActive = activeTab;
+
+      if (options.forceActive && hasPath(options.forceActive)) {
+        nextActive = options.forceActive;
+        if (activeTab !== nextActive) {
+          setActiveTab(nextActive);
+        }
+      } else if (!hasPath(activeTab)) {
+        nextActive = getFallbackPath();
+        if (activeTab !== nextActive) {
+          setActiveTab(nextActive);
+        }
+      }
+
+      if (!nextActive) {
+        setEditorContent('');
+        return;
+      }
+
+      const activeFileData = nextFiles.find(
+        (file) => file.path === nextActive
+      );
+      if (!activeFileData) {
+        setEditorContent('');
+        return;
+      }
+      setEditorContent(activeFileData.content);
+      setEditorLanguage(activeFileData.language);
+    },
+    [
+      activeTab,
+      selectedFile,
+      setActiveTab,
+      setEditorContent,
+      setEditorLanguage,
+      setOpenFiles,
+      setSelectedFile,
+    ]
+  );
   const [editorOptions, setEditorOptions] = useState({
     fontSize: 14,
     fontFamily: 'JetBrains Mono, Fira Code, Monaco, Consolas, monospace',
@@ -897,7 +1015,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         modified: false
       };
 
-      setOpenFiles(prev => [...prev, fileInfo]);
+      upsertOpenFile(fileInfo);
       setActiveTab(normalizedPath);
       setEditorContent(response.content);
       setEditorLanguage(fileInfo.language);
@@ -906,7 +1024,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       console.error('Error loading file:', error);
       toast.error(`Failed to load file: ${error.response?.data?.detail || error.message}`);
     }
-  }, [getLanguageFromPath, openFiles]);
+  }, [getLanguageFromPath, openFiles, upsertOpenFile]);
 
   useEffect(() => {
     if (selectedFile && !openFiles.find(f => f.path === selectedFile)) {
@@ -1622,7 +1740,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         language,
         modified: false
       };
-      setOpenFiles(prev => [...prev, fileInfo]);
+      upsertOpenFile(fileInfo);
       setActiveTab(resolvedPath);
       setEditorContent('');
       setEditorLanguage(language);
@@ -1687,6 +1805,31 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       document.removeEventListener('keydown', handleKey);
     };
   }, [closeFileContextMenu, fileContextMenu.visible]);
+
+  useEffect(() => {
+    if (!tabContextMenu.visible) {
+      return;
+    }
+    const handleClick = (event) => {
+      if (!(event.target.closest && event.target.closest('.tab-context-menu'))) {
+        closeTabContextMenu();
+      }
+    };
+    const handleScroll = () => closeTabContextMenu();
+    const handleKey = (event) => {
+      if (event.key === 'Escape') {
+        closeTabContextMenu();
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('scroll', handleScroll, true);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('scroll', handleScroll, true);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [closeTabContextMenu, tabContextMenu.visible]);
 
   const handleCopyPathValue = useCallback(async (path, options = {}) => {
     if (!path || !navigator?.clipboard?.writeText) {
@@ -1924,6 +2067,132 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       return next;
     });
   }, [activeTab, selectedFile]);
+
+  const expandPathAncestors = useCallback((targetPath) => {
+    if (!targetPath) return;
+    const normalized = normalizeEditorPath(targetPath);
+    const segments = normalized
+      .split('/')
+      .filter((segment) => segment && segment !== '.');
+    if (segments.length <= 1) {
+      return;
+    }
+    const ancestorPaths = [];
+    segments.slice(0, -1).reduce((current, segment) => {
+      const nextPath = current ? `${current}/${segment}` : segment;
+      ancestorPaths.push(nextPath);
+      return nextPath;
+    }, '');
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      ancestorPaths.forEach((path) => next.add(path));
+      return next;
+    });
+  }, [setExpandedFolders]);
+
+  const handleRevealInExplorerView = useCallback(
+    (path) => {
+      if (!path) return;
+      const normalized = normalizeEditorPath(path);
+      setLeftSidebarVisible(true);
+      expandPathAncestors(normalized);
+      setSelectedFile(normalized);
+    },
+    [expandPathAncestors, setLeftSidebarVisible, setSelectedFile]
+  );
+
+  const closeTabByPath = useCallback(
+    (filePath) => {
+      if (!filePath) return;
+      const normalized = normalizeEditorPath(filePath);
+      const nextOpenFiles = openFiles.filter((file) => file.path !== normalized);
+      if (nextOpenFiles.length === openFiles.length) {
+        return;
+      }
+      applyOpenFilesAfterChange(nextOpenFiles);
+    },
+    [applyOpenFilesAfterChange, openFiles]
+  );
+
+  const closeOtherTabs = useCallback(
+    (filePath) => {
+      if (openFiles.length <= 1 || !filePath) return;
+      const normalized = normalizeEditorPath(filePath);
+      if (!openFiles.some((file) => file.path === normalized)) {
+        return;
+      }
+      const nextOpenFiles = openFiles.filter(
+        (file) => file.path === normalized
+      );
+      applyOpenFilesAfterChange(nextOpenFiles, {
+        forceActive: normalized,
+        preferredActive: normalized,
+      });
+    },
+    [applyOpenFilesAfterChange, openFiles]
+  );
+
+  const closeTabsToRight = useCallback(
+    (filePath) => {
+      if (!filePath) return;
+      const normalized = normalizeEditorPath(filePath);
+      const targetIndex = openFiles.findIndex((file) => file.path === normalized);
+      if (targetIndex === -1 || targetIndex === openFiles.length - 1) {
+        return;
+      }
+      const nextOpenFiles = openFiles.slice(0, targetIndex + 1);
+      applyOpenFilesAfterChange(nextOpenFiles, { preferredActive: normalized });
+    },
+    [applyOpenFilesAfterChange, openFiles]
+  );
+
+  const closeSavedTabs = useCallback(() => {
+    if (openFiles.length === 0) return;
+    const unsavedFiles = openFiles.filter((file) => file.modified);
+    if (unsavedFiles.length === openFiles.length) {
+      return;
+    }
+    applyOpenFilesAfterChange(unsavedFiles);
+  }, [applyOpenFilesAfterChange, openFiles]);
+
+  const closeAllTabs = useCallback(() => {
+    if (openFiles.length === 0) return;
+    applyOpenFilesAfterChange([]);
+  }, [applyOpenFilesAfterChange, openFiles]);
+
+  const closeTab = (filePath, e) => {
+    if (e) {
+      e.stopPropagation();
+    }
+    closeTabByPath(filePath);
+  };
+
+  const handleTabContextMenu = useCallback(
+    (event, file) => {
+      if (!file) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (activeTab !== file.path) {
+        setActiveTab(file.path);
+        setEditorContent(file.content);
+        setEditorLanguage(file.language);
+      }
+
+      const MENU_WIDTH = 260;
+      const MENU_HEIGHT = 520;
+      const x = Math.min(event.clientX, window.innerWidth - MENU_WIDTH);
+      const y = Math.min(event.clientY, window.innerHeight - MENU_HEIGHT);
+
+      setTabContextMenu({
+        visible: true,
+        x: Math.max(8, x),
+        y: Math.max(8, y),
+        target: file,
+      });
+    },
+    [activeTab, setActiveTab, setEditorContent, setEditorLanguage, setTabContextMenu]
+  );
 
   const handlePasteInto = useCallback(async (target) => {
     if (!fileClipboard?.item) {
@@ -2165,6 +2434,148 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     handleRenamePath,
     handleRevealInExplorer,
     handleRunTestsForPath,
+  ]);
+
+  const tabContextMenuItems = useMemo(() => {
+    const target = tabContextMenu.target;
+    if (!target) {
+      return [];
+    }
+    const normalized = normalizeEditorPath(target.path);
+    const tabCount = openFiles.length;
+    const targetIndex = openFiles.findIndex((file) => file.path === normalized);
+    const tabsToRight = targetIndex >= 0 ? tabCount - targetIndex - 1 : 0;
+    const hasSavedTabs = openFiles.some((file) => !file.modified);
+
+    const shareChildren = [
+      {
+        label: 'Copy Markdown link',
+        action: () => {
+          closeTabContextMenu();
+          handleCopyShareLink(target, 'markdown');
+        },
+      },
+      {
+        label: 'Copy file:// link',
+        action: () => {
+          closeTabContextMenu();
+          handleCopyShareLink(target, 'file');
+        },
+      },
+    ];
+
+    return [
+      {
+        label: 'Close',
+        shortcut: 'Ctrl+F4',
+        action: () => {
+          closeTabContextMenu();
+          closeTabByPath(normalized);
+        },
+      },
+      {
+        label: 'Close Others',
+        disabled: tabCount <= 1,
+        action: () => {
+          closeTabContextMenu();
+          closeOtherTabs(normalized);
+        },
+      },
+      {
+        label: 'Close to the Right',
+        disabled: tabsToRight === 0,
+        action: () => {
+          closeTabContextMenu();
+          closeTabsToRight(normalized);
+        },
+      },
+      {
+        label: 'Close Saved',
+        shortcut: 'Ctrl+M U',
+        disabled: !hasSavedTabs,
+        action: () => {
+          closeTabContextMenu();
+          closeSavedTabs();
+        },
+      },
+      {
+        label: 'Close All',
+        shortcut: 'Ctrl+M W',
+        disabled: tabCount === 0,
+        action: () => {
+          closeTabContextMenu();
+          closeAllTabs();
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Copy Path',
+        shortcut: 'Shift+Alt+C',
+        action: () => {
+          closeTabContextMenu();
+          handleCopyPathValue(normalized);
+        },
+      },
+      {
+        label: 'Copy Relative Path',
+        shortcut: 'Ctrl+M Ctrl+Shift+C',
+        action: () => {
+          closeTabContextMenu();
+          handleCopyPathValue(normalized, { relative: true });
+        },
+      },
+      { type: 'separator' },
+      {
+        label: 'Reopen Editor With...',
+        disabled: true,
+      },
+      {
+        label: 'Share',
+        children: shareChildren,
+      },
+      {
+        label: 'Reveal in File Explorer',
+        shortcut: 'Shift+Alt+R',
+        action: () => {
+          closeTabContextMenu();
+          handleRevealInExplorer(target);
+        },
+      },
+      {
+        label: 'Reveal in Explorer View',
+        action: () => {
+          closeTabContextMenu();
+          handleRevealInExplorerView(normalized);
+        },
+      },
+      { type: 'separator' },
+      { label: 'Keep Open', disabled: true },
+      { label: 'Pin', disabled: true },
+      { type: 'separator' },
+      { label: 'Split Up', disabled: true },
+      { label: 'Split Down', disabled: true },
+      { label: 'Split Left', disabled: true },
+      { label: 'Split Right', disabled: true },
+      { label: 'Split in Group', disabled: true },
+      { type: 'separator' },
+      { label: 'Move into New Window', disabled: true },
+      { label: 'Copy into New Window', disabled: true },
+      { type: 'separator' },
+      { label: 'Find File References', disabled: true },
+    ];
+  }, [
+    closeAllTabs,
+    closeOtherTabs,
+    closeSavedTabs,
+    closeTabByPath,
+    closeTabContextMenu,
+    closeTabsToRight,
+    handleCopyPathValue,
+    handleCopyShareLink,
+    handleRevealInExplorer,
+    handleRevealInExplorerView,
+    openFiles,
+    tabContextMenu.target,
   ]);
 
   const handleFileContextMenu = useCallback((event, target) => {
@@ -2927,7 +3338,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
               language: getLanguageFromPath(filePath),
               modified: false
             };
-            setOpenFiles(prev => [...prev, fileInfo]);
+            upsertOpenFile(fileInfo);
             setActiveTab(filePath);
             setEditorContent(content);
             setEditorLanguage(fileInfo.language);
@@ -2960,7 +3371,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
               language: getLanguageFromPath(filePath),
               modified: false
             };
-            setOpenFiles(prev => [...prev, fileInfo]);
+            upsertOpenFile(fileInfo);
             setActiveTab(filePath);
             setEditorContent(content);
             setEditorLanguage(fileInfo.language);
@@ -3206,6 +3617,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       return;
     }
 
+    const normalizedPath = normalizeEditorPath(op.path);
+
+    if (!normalizedPath || activeTab !== normalizedPath) {
+      clearEditorDiffDecorations();
+      return;
+    }
+
     const editor = editorRef.current;
     const monaco = monacoRef.current;
     const model = editor.getModel();
@@ -3306,38 +3724,16 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         newZoneIds.push(zoneId);
       });
 
-      editorDiffViewZonesRef.current = newZoneIds;
-    });
+    editorDiffViewZonesRef.current = newZoneIds;
+  });
   }, [
     pendingFileOperations,
     activeFileOperationIndex,
     isEditorReady,
     editorContent,
     clearEditorDiffDecorations,
+    activeTab,
   ]);
-
-  const closeTab = (filePath, e) => {
-    e.stopPropagation();
-    const newOpenFiles = openFiles.filter(f => f.path !== filePath);
-    setOpenFiles(newOpenFiles);
-
-    if (selectedFile === filePath) {
-      const fallback = newOpenFiles.length > 0 ? newOpenFiles[newOpenFiles.length - 1].path : null;
-      setSelectedFile(fallback);
-    }
-    
-    if (activeTab === filePath) {
-      if (newOpenFiles.length > 0) {
-        const lastFile = newOpenFiles[newOpenFiles.length - 1];
-        setActiveTab(lastFile.path);
-        setEditorContent(lastFile.content);
-        setEditorLanguage(lastFile.language);
-      } else {
-        setActiveTab(null);
-        setEditorContent('');
-      }
-    }
-  };
 
   const renderFileTree = (fileList, depth = 0) => {
     if (!fileList || fileList.length === 0) return null;
@@ -3607,6 +4003,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                     setEditorContent(file.content);
                     setEditorLanguage(file.language);
                   }}
+                  onContextMenu={(e) => handleTabContextMenu(e, file)}
                 >
                   <File className="w-3 h-3 mr-2 text-dark-400" />
                   <span className="text-dark-200">{file.name}</span>
@@ -4840,6 +5237,74 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                 {showFolderPicker ? 'Select Folder' : pickerMode === 'folder' ? 'Create' : activeTab ? 'Save' : 'Create'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {tabContextMenu.visible && tabContextMenuItems.length > 0 && (
+        <div className="fixed inset-0 z-50" onClick={closeTabContextMenu}>
+          <div
+            className="tab-context-menu absolute bg-dark-800 border border-dark-600 rounded-lg shadow-2xl min-w-[240px] py-2 text-sm text-dark-50"
+            style={{ top: tabContextMenu.y, left: tabContextMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {tabContextMenuItems.map((item, index) => {
+              if (item.type === 'separator') {
+                return <div key={`tab-sep-${index}`} className="my-1 border-t border-dark-700" />;
+              }
+              if (item.children) {
+                return (
+                  <div key={`tab-submenu-${item.label}-${index}`} className="relative group">
+                    <button
+                      type="button"
+                      className="w-full flex items-center justify-between px-3 py-2 hover:bg-dark-700 text-left"
+                    >
+                      <span className="flex items-center gap-2">
+                        {item.label}
+                      </span>
+                      <ChevronRightIcon className="w-3 h-3 text-dark-500" />
+                    </button>
+                    <div className="absolute top-0 left-full ml-1 hidden group-hover:block bg-dark-800 border border-dark-600 rounded-lg min-w-[220px] shadow-2xl py-2">
+                      {item.children.map((child, childIndex) => (
+                        <button
+                          type="button"
+                          key={`tab-sub-${child.label}-${childIndex}`}
+                          onClick={() => child.action?.()}
+                          className="w-full flex items-center justify-between px-3 py-2 text-sm text-dark-100 hover:bg-dark-700"
+                        >
+                          <span>{child.label}</span>
+                          {child.shortcut && (
+                            <span className="text-[11px] text-dark-500">{child.shortcut}</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <button
+                  type="button"
+                  key={`tab-item-${item.label}-${index}`}
+                  disabled={item.disabled}
+                  onClick={() => {
+                    if (!item.disabled) {
+                      item.action?.();
+                    }
+                  }}
+                  className={`w-full flex items-center px-3 py-2 text-left gap-2 ${
+                    item.disabled
+                      ? 'text-dark-500 cursor-not-allowed'
+                      : 'text-dark-100 hover:bg-dark-700'
+                  }`}
+                >
+                  <span className="flex-1">{item.label}</span>
+                  {item.shortcut && (
+                    <span className="text-[11px] text-dark-500">{item.shortcut}</span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
