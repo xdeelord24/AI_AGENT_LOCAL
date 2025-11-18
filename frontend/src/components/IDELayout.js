@@ -36,6 +36,44 @@ const flattenTreeNodes = (nodes = [], accumulator = []) => {
   return accumulator;
 };
 
+const compareTreeNodes = (a = {}, b = {}) => {
+  const aIsDirectory = !!a.is_directory;
+  const bIsDirectory = !!b.is_directory;
+  if (aIsDirectory !== bIsDirectory) {
+    return aIsDirectory ? -1 : 1;
+  }
+  const aName = (a?.name || a?.path || '').toString();
+  const bName = (b?.name || b?.path || '').toString();
+  const nameComparison = aName.localeCompare(bName, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+  if (nameComparison !== 0) {
+    return nameComparison;
+  }
+  return (a?.path || '').localeCompare(b?.path || '', undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+};
+
+const sortTreeNodes = (nodes = []) => {
+  if (!Array.isArray(nodes)) {
+    return [];
+  }
+  return [...nodes]
+    .map((node) => {
+      if (Array.isArray(node.children) && node.children.length > 0) {
+        return {
+          ...node,
+          children: sortTreeNodes(node.children),
+        };
+      }
+      return { ...node };
+    })
+    .sort(compareTreeNodes);
+};
+
 const normalizeEditorPath = (path = '') => {
   if (!path) return '';
   return path.replace(/\\/g, '/');
@@ -829,11 +867,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       if (!normalizedTree) {
         throw new Error('Unable to normalize tree');
       }
+      const sortedChildren = sortTreeNodes(normalizedTree.children || []);
       setProjectRoot({
         name: normalizedTree.name || 'Workspace',
         path: normalizedTree.path || '.'
       });
-      setFileTree(normalizedTree.children || []);
+      setFileTree(sortedChildren);
       if (setAsRoot) {
         setCurrentPath(normalizedTree.path || '.');
       }
@@ -1702,7 +1741,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       const response = await ApiService.getFileTree(path, 1);
       if (response?.tree) {
         const normalizedTree = normalizeTreeNode(response.tree);
-        setPickerTree(normalizedTree.children || []);
+        const sortedChildren = sortTreeNodes(normalizedTree.children || []);
+        setPickerTree(sortedChildren);
         setPickerPath(normalizedTree.path || '.');
       }
     } catch (error) {
@@ -2615,11 +2655,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setShowFolderPicker(false);
   };
 
-  const handleOpenFolderFromTree = async (folderPath) => {
-    if (!folderPath) return;
-    await loadProjectTree(folderPath, { setAsRoot: true, showToastMessage: true });
-  };
-
   const buildRunCommandForActiveFile = () => {
     if (!activeTab) return null;
     const quotedPath = quotePath(activeTab);
@@ -2809,14 +2844,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   const handleFileClick = (file, e) => {
     if (file.is_directory) {
-      // For folders, single click toggles expand/collapse
-      if (e && e.detail === 2) {
-        // Double click opens folder as root
+      // Only act on the first click to avoid accidental navigation or double-toggle
+      if (e?.detail && e.detail > 1) {
+        e.preventDefault();
         e.stopPropagation();
-        handleOpenFolderFromTree(file.path);
-      } else {
-        toggleFolder(file.path);
+        return;
       }
+      toggleFolder(file.path);
     } else {
       // For files, single click selects, double click opens
       const normalizedPath = file.path.replace(/\\/g, '/');
@@ -2856,6 +2890,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           
           if (response?.tree) {
             const normalizedTree = normalizeTreeNode(response.tree);
+            const sortedChildren = sortTreeNodes(normalizedTree.children || []);
             
             // Update the file tree to include the loaded children
             const updateTreeWithChildren = (nodes) => {
@@ -2863,7 +2898,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                 if (node.path === path) {
                   return {
                     ...node,
-                    children: normalizedTree.children || [],
+                    children: sortedChildren,
                     has_more_children: false
                   };
                 }
