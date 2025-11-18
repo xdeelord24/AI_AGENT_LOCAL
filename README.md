@@ -28,13 +28,10 @@ A fully offline AI coding assistant that provides intelligent code completion, a
 
 ### Example UI
 
-You can include a screenshot of the application in the README:
 
-```markdown
-![Offline AI Agent UI](docs/screenshots/example-ui.png)
-```
+<img width="1837" height="1029" alt="image" src="https://github.com/user-attachments/assets/b71a66a3-35a4-4478-9d04-cb16c1d5ecdb" />
 
-Place your screenshot at `docs/screenshots/example-ui.png` (or adjust the path above to match your actual file location).
+
 
 ## Quick Start
 
