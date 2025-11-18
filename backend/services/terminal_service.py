@@ -73,9 +73,9 @@ class TerminalService:
         self._sessions: Dict[str, TerminalSession] = {}
         self._lock = asyncio.Lock()
 
-    async def get_session_info(self, session_id: Optional[str]) -> Dict[str, str]:
+    async def get_session_info(self, session_id: Optional[str], base_path: Optional[str] = None) -> Dict[str, str]:
         """Return session metadata, creating the session when needed."""
-        session = await self._get_or_create_session(session_id)
+        session = await self._get_or_create_session(session_id, base_path=base_path)
         return session.to_dict()
 
     async def run_command(
@@ -226,14 +226,30 @@ class TerminalService:
                 session.touch()
             return session
 
-    async def _get_or_create_session(self, session_id: Optional[str]) -> TerminalSession:
+    def _resolve_base_directory(self, override_path: Optional[str]) -> Optional[Path]:
+        if not override_path:
+            return None
+        candidate = Path(override_path).expanduser()
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+        if resolved.exists() and resolved.is_dir():
+            return resolved
+        return None
+
+    async def _get_or_create_session(self, session_id: Optional[str], base_path: Optional[str] = None) -> TerminalSession:
         async with self._lock:
             if session_id and session_id in self._sessions:
                 session = self._sessions[session_id]
+                resolved_override = self._resolve_base_directory(base_path)
+                if resolved_override:
+                    session.cwd = resolved_override
             else:
+                initial_cwd = self._resolve_base_directory(base_path) or self.base_path
                 session = TerminalSession(
                     session_id=self._generate_session_id(),
-                    cwd=self.base_path,
+                    cwd=initial_cwd,
                 )
                 self._sessions[session.session_id] = session
             session.touch()

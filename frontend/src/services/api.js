@@ -209,8 +209,12 @@ class ApiService {
   }
 
   // Terminal API
-  static async ensureTerminalSession(sessionId = null) {
-    return this.post('/api/terminal/session', { session_id: sessionId });
+  static async ensureTerminalSession(sessionId = null, basePath = null) {
+    const payload = { session_id: sessionId };
+    if (basePath) {
+      payload.base_path = basePath;
+    }
+    return this.post('/api/terminal/session', payload);
   }
 
   static async runTerminalCommand(command, sessionId, timeout = 120, env = null) {

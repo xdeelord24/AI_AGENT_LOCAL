@@ -30,6 +30,7 @@ def build_error_response(session_info: Dict[str, str], timeout: int, message: st
 
 class TerminalSessionPayload(BaseModel):
     session_id: Optional[str] = None
+    base_path: Optional[str] = Field(default=None, description="Initial working directory for the terminal session")
 
 
 class TerminalCommandPayload(BaseModel):
@@ -61,7 +62,7 @@ async def create_or_get_session(
     Create a new terminal session or fetch the existing one if a session_id
     is provided.
     """
-    return await terminal_service.get_session_info(payload.session_id)
+    return await terminal_service.get_session_info(payload.session_id, base_path=payload.base_path)
 
 
 @router.get("/session/{session_id}")

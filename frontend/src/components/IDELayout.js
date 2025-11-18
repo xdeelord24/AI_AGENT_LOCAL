@@ -74,9 +74,98 @@ const sortTreeNodes = (nodes = []) => {
     .sort(compareTreeNodes);
 };
 
+const ABSOLUTE_PATH_PATTERN = /^(?:[a-zA-Z]:\/|[a-zA-Z]:$|\/|\/\/)/;
+let workspaceRootPath = '.';
+
+const setWorkspaceRootPath = (path) => {
+  if (!path) {
+    return;
+  }
+  workspaceRootPath = path.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+};
+
+const getWorkspaceRootPath = () => workspaceRootPath;
+
+const collapsePathSegments = (inputPath) => {
+  if (!inputPath) {
+    return '';
+  }
+  const normalized = inputPath.replace(/\\/g, '/');
+  const parts = normalized.split('/');
+  const result = [];
+  let prefix = '';
+  let startIndex = 0;
+
+  if (parts[0] === '' && parts[1] === '') {
+    prefix = '//';
+    startIndex = 2;
+  } else if (parts[0] === '') {
+    prefix = '/';
+    startIndex = 1;
+  } else if (/^[a-zA-Z]:$/.test(parts[0])) {
+    prefix = parts[0];
+    startIndex = 1;
+  }
+
+  for (let i = startIndex; i < parts.length; i += 1) {
+    const segment = parts[i];
+    if (!segment || segment === '.') {
+      continue;
+    }
+    if (segment === '..') {
+      if (result.length > 0) {
+        result.pop();
+      }
+      continue;
+    }
+    result.push(segment);
+  }
+
+  if (prefix === '//') {
+    return `//${result.join('/')}`;
+  }
+
+  if (prefix === '/') {
+    return `/${result.join('/')}`;
+  }
+
+  if (prefix) {
+    return result.length > 0 ? `${prefix}/${result.join('/')}` : `${prefix}/`;
+  }
+
+  return result.join('/') || '.';
+};
+
+const resolveWorkspacePath = (rawPath = '') => {
+  if (!rawPath) {
+    return '';
+  }
+
+  let normalized = rawPath.replace(/\\/g, '/');
+  if (!normalized || normalized === '.' || normalized === './') {
+    return getWorkspaceRootPath();
+  }
+
+  if (ABSOLUTE_PATH_PATTERN.test(normalized)) {
+    return collapsePathSegments(normalized);
+  }
+
+  normalized = normalized.replace(/^\.\//, '');
+  const root = getWorkspaceRootPath();
+  if (!root || root === '.' || root === './') {
+    return collapsePathSegments(normalized);
+  }
+
+  const trimmedRoot = root.endsWith('/') ? root.slice(0, -1) : root;
+  if (!normalized) {
+    return collapsePathSegments(trimmedRoot);
+  }
+  return collapsePathSegments(`${trimmedRoot}/${normalized}`);
+};
+
 const normalizeEditorPath = (path = '') => {
   if (!path) return '';
-  return path.replace(/\\/g, '/');
+  return resolveWorkspacePath(path);
 };
 
 // Ensure we only keep the final operation per file path so we don't
@@ -197,6 +286,49 @@ const computeLineDiff = (beforeContent = '', afterContent = '', options = {}) =>
   return result;
 };
 
+const RECENT_WORKSPACES_STORAGE_KEY = 'ai_agent_recent_workspaces';
+const MAX_RECENT_WORKSPACES = 5;
+
+const readRecentWorkspacesFromStorage = () => {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+  try {
+    const raw = window.localStorage.getItem(RECENT_WORKSPACES_STORAGE_KEY);
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed
+      .filter((entry) => entry && entry.path)
+      .map((entry) => ({
+        path: entry.path,
+        name: entry.name,
+        openedAt: entry.openedAt,
+      }));
+  } catch (error) {
+    console.warn('Failed to parse recent workspaces from storage', error);
+    return [];
+  }
+};
+
+const deriveWorkspaceName = (name, path) => {
+  if (name && name.trim()) {
+    return name.trim();
+  }
+  if (!path) {
+    return 'Workspace';
+  }
+  const normalized = path.replace(/\\/g, '/').replace(/\/$/, '');
+  const segments = normalized.split('/').filter(Boolean);
+  return segments.length > 0 ? segments[segments.length - 1] : normalized || 'Workspace';
+};
+
+const DEFAULT_WORKSPACE_STATE = { name: 'No workspace', path: null };
+
 const generateTerminalSessionId = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -302,8 +434,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   
   // File explorer states
   const [fileTree, setFileTree] = useState([]);
-  const [projectRoot, setProjectRoot] = useState({ name: 'Workspace', path: '.' });
-  const [currentPath, setCurrentPath] = useState('.');
+  const [projectRoot, setProjectRoot] = useState(DEFAULT_WORKSPACE_STATE);
+  const [currentPath, setCurrentPath] = useState(null);
+  const [recentWorkspaces, setRecentWorkspaces] = useState(() => readRecentWorkspacesFromStorage());
   const [selectedFile, setSelectedFile] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [isFileTreeLoading, setIsFileTreeLoading] = useState(false);
@@ -316,6 +449,34 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const isWindowsPlatform = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent || '');
   const mainLayoutRef = useRef(null);
   const pendingResizeRef = useRef({ left: null, right: null, bottom: null });
+  const resizeRafRef = useRef(null);
+  const projectRootPath = projectRoot?.path || null;
+  const workspaceReady = Boolean(projectRootPath);
+
+  const recordWorkspaceOpen = useCallback((path, name) => {
+    if (!path) {
+      return;
+    }
+    const normalizedPath = path.replace(/\\/g, '/');
+    const workspaceName = deriveWorkspaceName(name, normalizedPath);
+    setRecentWorkspaces((prev = []) => {
+      const withoutDupes = prev.filter((entry) => entry.path !== normalizedPath);
+      const nextEntry = {
+        path: normalizedPath,
+        name: workspaceName,
+        openedAt: new Date().toISOString(),
+      };
+      const next = [nextEntry, ...withoutDupes].slice(0, MAX_RECENT_WORKSPACES);
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(RECENT_WORKSPACES_STORAGE_KEY, JSON.stringify(next));
+        } catch (error) {
+          console.warn('Failed to persist recent workspaces', error);
+        }
+      }
+      return next;
+    });
+  }, []);
 
   const updatePanelCssVar = useCallback((panel, value) => {
     const layoutNode = mainLayoutRef.current;
@@ -622,11 +783,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     if (normalized.startsWith('./')) {
       return normalized.slice(2);
     }
-    if (projectRoot.path && projectRoot.path !== '.' && normalized.startsWith(`${projectRoot.path}/`)) {
-      return normalized.slice(projectRoot.path.length + 1);
+    if (projectRootPath && projectRootPath !== '.' && normalized.startsWith(`${projectRootPath}/`)) {
+      return normalized.slice(projectRootPath.length + 1);
     }
     return normalized;
-  }, [projectRoot.path]);
+  }, [projectRootPath]);
 
   const handleConnectivityChange = (field, value) => {
     setConnectivitySettings(prev => ({
@@ -867,18 +1028,24 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       if (!normalizedTree) {
         throw new Error('Unable to normalize tree');
       }
+      const workspacePath = normalizedTree.path || '.';
+      const workspaceName = deriveWorkspaceName(normalizedTree.name, workspacePath);
+      setWorkspaceRootPath(workspacePath);
       const sortedChildren = sortTreeNodes(normalizedTree.children || []);
       setProjectRoot({
-        name: normalizedTree.name || 'Workspace',
-        path: normalizedTree.path || '.'
+        name: workspaceName,
+        path: workspacePath
       });
       setFileTree(sortedChildren);
       if (setAsRoot) {
-        setCurrentPath(normalizedTree.path || '.');
+        setCurrentPath(workspacePath);
+      }
+      if (workspacePath) {
+        recordWorkspaceOpen(workspacePath, workspaceName);
       }
       setExpandedFolders(new Set());
       if (showToastMessage) {
-        toast.success(`Opened ${normalizedTree.name}`);
+        toast.success(`Opened ${workspaceName}`);
       }
     } catch (error) {
       console.error('Error loading directory:', error);
@@ -887,11 +1054,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     } finally {
       setIsFileTreeLoading(false);
     }
-  }, []);
-
-  useEffect(() => {
-    loadProjectTree('.', { setAsRoot: true, showToastMessage: false });
-  }, [loadProjectTree]);
+  }, [recordWorkspaceOpen]);
 
   useEffect(() => {
     const fetchStatus = async () => {
@@ -925,6 +1088,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     // Load available models on mount
     loadAvailableModels();
   }, [loadAvailableModels]);
+
+  const handleSelectRecentWorkspace = useCallback(async (path) => {
+    if (!path) {
+      return;
+    }
+    await loadProjectTree(path, { setAsRoot: true, showToastMessage: true });
+  }, [loadProjectTree]);
 
   const loadConnectivitySettings = useCallback(async () => {
     setIsConnectivityLoading(true);
@@ -966,16 +1136,24 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   }, []);
 
   const refreshFileTree = useCallback(async () => {
-    await loadProjectTree(currentPath || '.', { setAsRoot: true, showToastMessage: false });
-  }, [currentPath, loadProjectTree]);
+    if (!projectRootPath) {
+      return;
+    }
+    const targetPath = currentPath || projectRootPath;
+    await loadProjectTree(targetPath, { setAsRoot: true, showToastMessage: false });
+  }, [currentPath, loadProjectTree, projectRootPath]);
 
   const handleCollapseExplorer = useCallback(() => {
     setExpandedFolders(new Set());
   }, []);
 
   const handleRefreshExplorer = useCallback(async () => {
+    if (!workspaceReady) {
+      toast.error('Open a workspace first');
+      return;
+    }
     await refreshFileTree();
-  }, [refreshFileTree]);
+  }, [refreshFileTree, workspaceReady]);
 
   useEffect(() => {
     if (!activeTab) {
@@ -987,7 +1165,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   useEffect(() => {
     const ensureSession = async () => {
       try {
-        const response = await ApiService.ensureTerminalSession(terminalSessionId);
+        const response = await ApiService.ensureTerminalSession(
+          terminalSessionId,
+          workspaceReady ? projectRootPath : null
+        );
         if (response?.session_id) {
           persistTerminalSessionId(response.session_id);
         }
@@ -1000,7 +1181,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       }
     };
     ensureSession();
-  }, [persistTerminalSessionId, terminalSessionId]);
+  }, [persistTerminalSessionId, terminalSessionId, workspaceReady, projectRootPath]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1628,6 +1809,31 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   };
 
   // Resize handlers
+  const flushPendingResizeCssVars = useCallback(() => {
+    resizeRafRef.current = null;
+    const { left, right, bottom } = pendingResizeRef.current;
+    if (typeof left === 'number') {
+      updatePanelCssVar('left', left);
+    }
+    if (typeof right === 'number') {
+      updatePanelCssVar('right', right);
+    }
+    if (typeof bottom === 'number') {
+      updatePanelCssVar('bottom', bottom);
+    }
+  }, [updatePanelCssVar]);
+
+  const scheduleResizeFlush = useCallback(() => {
+    if (typeof window === 'undefined') {
+      flushPendingResizeCssVars();
+      return;
+    }
+    if (resizeRafRef.current !== null) {
+      return;
+    }
+    resizeRafRef.current = window.requestAnimationFrame(flushPendingResizeCssVars);
+  }, [flushPendingResizeCssVars]);
+
   useEffect(() => {
     if (!isResizingLeft && !isResizingRight && !isResizingBottom) {
       return undefined;
@@ -1654,12 +1860,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       if (isResizingLeft) {
         const newWidth = clamp(e.clientX, 200, 600);
         pendingResizeRef.current.left = newWidth;
-        updatePanelCssVar('left', newWidth);
+        scheduleResizeFlush();
         didUpdate = true;
       } else if (isResizingRight) {
         const newWidth = clamp(window.innerWidth - e.clientX, 200, 600);
         pendingResizeRef.current.right = newWidth;
-        updatePanelCssVar('right', newWidth);
+        scheduleResizeFlush();
         didUpdate = true;
       } else if (isResizingBottom) {
         const container = mainLayoutRef.current;
@@ -1667,7 +1873,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           const rect = container.getBoundingClientRect();
           const newHeight = clamp(rect.bottom - e.clientY, 150, 600);
           pendingResizeRef.current.bottom = newHeight;
-          updatePanelCssVar('bottom', newHeight);
+          scheduleResizeFlush();
           didUpdate = true;
         }
       }
@@ -1699,7 +1905,16 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [isResizingLeft, isResizingRight, isResizingBottom, updatePanelCssVar]);
+  }, [isResizingLeft, isResizingRight, isResizingBottom, scheduleResizeFlush]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && resizeRafRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafRef.current);
+      }
+      resizeRafRef.current = null;
+    };
+  }, []);
 
   const handleStopChat = useCallback(() => {
     if (chatAbortController) {
@@ -1809,14 +2024,14 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   const getRelativePath = useCallback((targetPath) => {
     if (!targetPath) return '';
-    const basePath = normalizeEditorPath(projectRoot?.path || '.');
+    const basePath = normalizeEditorPath(projectRootPath || '.');
     const normalizedTarget = normalizeEditorPath(targetPath);
     if (!basePath || basePath === '.' || !normalizedTarget.startsWith(basePath)) {
       return normalizedTarget;
     }
     const relative = normalizedTarget.slice(basePath.length).replace(/^\/+/, '');
     return relative || normalizedTarget.split('/').pop() || normalizedTarget;
-  }, [projectRoot?.path]);
+  }, [projectRootPath]);
 
   const quotePath = useCallback((path) => `"${path.replace(/"/g, '\\"')}"`, []);
 
@@ -1839,13 +2054,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   }, []);
 
   const handleCreateFile = useCallback(async (basePath = null) => {
-    const targetBase = basePath || currentPath || '.';
+    if (!projectRootPath && !basePath && !currentPath) {
+      toast.error('Open a workspace first');
+      return;
+    }
+    const targetBase = basePath || currentPath || projectRootPath || '.';
     setPickerMode('file');
     setPickerPath(targetBase);
     setPickerSelectedPath('');
     setShowFilePicker(true);
     await loadPickerTree(targetBase);
-  }, [currentPath, loadPickerTree]);
+  }, [currentPath, loadPickerTree, projectRootPath]);
 
   const handleFilePickerConfirm = async () => {
     const inputPath = pickerSelectedPath || '';
@@ -1879,13 +2098,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   };
 
   const handleCreateFolder = useCallback(async (basePath = null) => {
-    const targetBase = basePath || currentPath || '.';
+    if (!projectRootPath && !basePath && !currentPath) {
+      toast.error('Open a workspace first');
+      return;
+    }
+    const targetBase = basePath || currentPath || projectRootPath || '.';
     setPickerMode('folder');
     setPickerPath(targetBase);
     setPickerSelectedPath('');
     setShowFilePicker(true);
     await loadPickerTree(targetBase);
-  }, [currentPath, loadPickerTree]);
+  }, [currentPath, loadPickerTree, projectRootPath]);
 
   const handleFolderPickerConfirm = async () => {
     const inputPath = pickerSelectedPath || '';
@@ -2723,11 +2946,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   }, []);
 
   const handleOpenFolderPrompt = async () => {
+    const fallbackRecentPath = recentWorkspaces[0]?.path;
+    const defaultBase = currentPath || projectRootPath || fallbackRecentPath || '.';
     setPickerMode('folder');
-    setPickerPath(currentPath || '.');
+    setPickerPath(defaultBase || '.');
     setPickerSelectedPath('');
     setShowFolderPicker(true);
-    await loadPickerTree(currentPath || '.');
+    await loadPickerTree(defaultBase || '.');
   };
 
   const handleFolderPickerSelect = async () => {
@@ -3932,7 +4157,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           <input
             ref={searchInputRef}
             type="text"
-            placeholder={`Search ${projectRoot.name}`}
+            placeholder={`Search ${projectRoot?.name || 'workspace'}`}
             className="bg-dark-700 border border-dark-600 rounded px-3 py-1 text-sm w-64 focus:outline-none focus:ring-1 focus:ring-primary-500"
           />
         </div>
@@ -3981,12 +4206,15 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-sm font-semibold text-dark-200 truncate">{projectRoot.name}</h3>
+                    <h3 className="text-sm font-semibold text-dark-200 truncate">
+                      {projectRoot?.name || 'No workspace'}
+                    </h3>
                     <div className="flex items-center gap-1 text-dark-400">
                       <button
                         type="button"
-                        onClick={handleCreateFile}
-                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors"
+                        onClick={() => handleCreateFile()}
+                        disabled={!workspaceReady}
+                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         title="New File"
                         aria-label="New File"
                       >
@@ -3994,8 +4222,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                       </button>
                       <button
                         type="button"
-                        onClick={handleCreateFolder}
-                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors"
+                        onClick={() => handleCreateFolder()}
+                        disabled={!workspaceReady}
+                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         title="New Folder"
                         aria-label="New Folder"
                       >
@@ -4007,7 +4236,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                         className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         title="Refresh Explorer"
                         aria-label="Refresh Explorer"
-                        disabled={isFileTreeLoading}
+                        disabled={isFileTreeLoading || !workspaceReady}
                       >
                         {isFileTreeLoading ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
@@ -4039,10 +4268,47 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             <div className="flex-1 overflow-y-auto p-2">
               {isFileTreeLoading ? (
                 <div className="text-xs text-dark-400 p-2">Loading files...</div>
-              ) : fileTree.length > 0 ? (
-                renderFileTree(fileTree)
+              ) : workspaceReady ? (
+                fileTree.length > 0 ? (
+                  renderFileTree(fileTree)
+                ) : (
+                  <div className="text-xs text-dark-400 p-2">Folder is empty</div>
+                )
               ) : (
-                <div className="text-xs text-dark-400 p-2">No files found</div>
+                <div className="text-xs text-dark-400 p-2 space-y-3">
+                  <p className="text-dark-300">No workspace selected.</p>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenFolderPrompt()}
+                    className="w-full px-3 py-2 text-left rounded-lg border border-dashed border-dark-600 text-dark-200 hover:bg-dark-800"
+                  >
+                    Open workspace…
+                  </button>
+                  {recentWorkspaces.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="text-[10px] uppercase tracking-wide text-dark-500">
+                        Recent workspaces
+                      </div>
+                      <div className="space-y-1">
+                        {recentWorkspaces.map((workspace) => (
+                          <button
+                            key={workspace.path}
+                            type="button"
+                            onClick={() => handleSelectRecentWorkspace(workspace.path)}
+                            className="w-full text-left px-2 py-1.5 rounded border border-dark-700 bg-dark-900/60 hover:bg-dark-800 transition-colors"
+                          >
+                            <div className="text-dark-100 text-[11px] font-semibold">
+                              {workspace.name}
+                            </div>
+                            <div className="text-[10px] text-dark-500 truncate">
+                              {workspace.path}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
             {folderSearchResults && (
@@ -4318,6 +4584,39 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                     <div className="flex items-center justify-center p-3 bg-dark-800 border border-dark-700 rounded-lg">
                       <span className="text-dark-300 mr-3">Open Browser</span>
                       <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded text-xs font-mono">Ctrl + Shift + B</kbd>
+                    </div>
+                    <div className="mt-8 space-y-3">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenFolderPrompt()}
+                        className="w-full px-4 py-3 rounded-xl bg-primary-600 hover:bg-primary-700 text-white text-sm font-semibold transition-colors"
+                      >
+                        Open workspace…
+                      </button>
+                      {recentWorkspaces.length > 0 && (
+                        <div className="text-left space-y-2">
+                          <div className="text-xs uppercase tracking-wide text-dark-400">
+                            Recent workspaces
+                          </div>
+                          <div className="space-y-2">
+                            {recentWorkspaces.map((workspace) => (
+                              <button
+                                key={workspace.path}
+                                type="button"
+                                onClick={() => handleSelectRecentWorkspace(workspace.path)}
+                                className="w-full text-left px-4 py-3 rounded-xl border border-dark-700 bg-dark-800/70 hover:bg-dark-800 transition-colors"
+                              >
+                                <div className="text-sm text-dark-100 font-semibold">
+                                  {workspace.name}
+                                </div>
+                                <div className="text-xs text-dark-500 truncate">
+                                  {workspace.path}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -4811,6 +5110,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       {/* Bottom Panel - Terminal */}
       {bottomPanelVisible && (
         <>
+          {/* Bottom Resize Handle (between editor and terminal) */}
+          <div
+            onMouseDown={() => setIsResizingBottom(true)}
+            className="h-1 bg-dark-700 hover:bg-primary-500 cursor-row-resize transition-colors w-full"
+            style={{ minHeight: '4px' }}
+            title="Drag to resize terminal panel"
+          />
           <div 
             className="bg-dark-800 border-t border-dark-700 flex flex-col"
             style={{
@@ -5033,13 +5339,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             )}
           </div>
           </div>
-          {/* Bottom Resize Handle */}
-          <div
-            onMouseDown={() => setIsResizingBottom(true)}
-            className="h-1 bg-dark-700 hover:bg-primary-500 cursor-row-resize transition-colors w-full"
-            style={{ minHeight: '4px' }}
-            title="Drag to resize"
-          />
         </>
       )}
 
