@@ -40,6 +40,35 @@ class FileService:
             '.sql', '.dockerfile', '.dockerignore', '.gitignore'
         }
         self.max_tree_children = 400
+        self.max_tree_nodes = 4000
+        self.tree_ignore_names = {
+            '.git',
+            '.github',
+            '.gitlab',
+            '.hg',
+            '.svn',
+            '.vscode',
+            '.idea',
+            '.venv',
+            'venv',
+            'env',
+            '__pycache__',
+            '.pytest_cache',
+            '.mypy_cache',
+            '.cache',
+            'node_modules',
+            'dist',
+            'build',
+            '.next',
+            '.nuxt',
+            '.turbo',
+            '.vercel',
+            'coverage',
+            'logs',
+            'tmp',
+            'temp'
+        }
+        self.tree_ignore_names = {name.lower() for name in self.tree_ignore_names}
     
     async def list_directory(self, path: str) -> List[Dict[str, Any]]:
         """List files and directories in the specified path"""
@@ -290,12 +319,19 @@ class FileService:
                 raise FileNotFoundError(f"Path not found: {path}")
 
             depth = max(1, min(max_depth, 20))
-            return self._build_tree(target_path, depth)
+            counter = {"count": 0, "limit": self.max_tree_nodes}
+            return self._build_tree(target_path, depth, counter=counter)
 
         except Exception as e:
             raise Exception(f"Error getting project structure: {str(e)}")
 
-    def _build_tree(self, current_path: str, max_depth: int, current_depth: int = 0) -> Dict[str, Any]:
+    def _build_tree(
+        self,
+        current_path: str,
+        max_depth: int,
+        current_depth: int = 0,
+        counter: Optional[Dict[str, int]] = None
+    ) -> Dict[str, Any]:
         is_directory = os.path.isdir(current_path)
         node = {
             "name": os.path.basename(current_path) or current_path,
@@ -304,6 +340,12 @@ class FileService:
             "children": [],
             "has_more_children": False
         }
+
+        if counter is not None:
+            counter["count"] += 1
+            if counter["count"] >= counter["limit"]:
+                node["has_more_children"] = True
+                return node
 
         if is_directory:
             if current_depth >= max_depth:
@@ -319,7 +361,19 @@ class FileService:
                     if entry.startswith('.'):
                         continue
                     entry_path = os.path.join(current_path, entry)
-                    children.append(self._build_tree(entry_path, max_depth, current_depth + 1))
+                    if self._should_skip_tree_entry(entry):
+                        continue
+                    if counter and counter["count"] >= counter["limit"]:
+                        node["has_more_children"] = True
+                        break
+                    children.append(
+                        self._build_tree(
+                            entry_path,
+                            max_depth,
+                            current_depth + 1,
+                            counter
+                        )
+                    )
                     if len(children) >= self.max_tree_children:
                         node["has_more_children"] = True
                         break
@@ -338,3 +392,9 @@ class FileService:
     @staticmethod
     def _normalize_path(path: str) -> str:
         return path.replace("\\", "/")
+
+    def _should_skip_tree_entry(self, entry_name: str) -> bool:
+        if not entry_name:
+            return False
+        normalized = entry_name.lower()
+        return normalized in self.tree_ignore_names

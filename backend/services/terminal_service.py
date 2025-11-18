@@ -10,7 +10,9 @@ from asyncio.subprocess import PIPE, Process
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Sequence, Tuple
+from contextlib import suppress
+import json
 import logging
 
 if os.name == "nt":
@@ -283,6 +285,54 @@ class TerminalService:
             was_cd=True,
         )
 
+    async def stream_command_events(
+        self,
+        command: str,
+        *,
+        session_id: Optional[str],
+        timeout: int = 120,
+        env: Optional[Dict[str, str]] = None,
+    ) -> AsyncIterator[bytes]:
+        session = await self._get_or_create_session(session_id)
+        normalized = (command or "").strip()
+
+        if not normalized:
+            raise RuntimeError("Command cannot be empty")
+
+        if session.is_busy():
+            raise RuntimeError("Terminal session is already running a command")
+
+        if self._is_cd_command(normalized):
+            response = await self._handle_cd_command(session, normalized, timeout)
+
+            async def cd_generator() -> AsyncIterator[bytes]:
+                yield self._encode_stream_event(
+                    {
+                        "type": "session",
+                        "session_id": response["session_id"],
+                        "cwd": response["cwd"],
+                        "command": normalized,
+                        "was_cd": True,
+                    }
+                )
+                yield self._encode_stream_event(
+                    {
+                        "type": "exit",
+                        "session_id": response["session_id"],
+                        "cwd": response["cwd"],
+                        "exit_code": response.get("exit_code"),
+                        "success": response.get("success"),
+                        "timed_out": response.get("timed_out", False),
+                        "timeout_seconds": response.get("timeout_seconds", timeout),
+                        "message": response.get("message"),
+                        "was_cd": True,
+                    }
+                )
+
+            return cd_generator()
+
+        return await self._stream_process_events(session, normalized, timeout, env)
+
     async def _execute_process(
         self,
         session: TerminalSession,
@@ -431,18 +481,309 @@ class TerminalService:
             timed_out=timed_out,
         )
 
+    async def _stream_process_events(
+        self,
+        session: TerminalSession,
+        command: str,
+        timeout: int,
+        env: Optional[Dict[str, str]],
+    ) -> AsyncIterator[bytes]:
+        env_vars = os.environ.copy()
+        if env:
+            env_vars.update({str(key): str(value) for key, value in env.items() if value is not None})
+
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+        try:
+            process = await asyncio.create_subprocess_shell(
+                command,
+                cwd=str(session.cwd),
+                env=env_vars,
+                stdout=PIPE,
+                stderr=PIPE,
+                start_new_session=os.name != "nt",
+                creationflags=creationflags,
+            )
+        except NotImplementedError:
+            logger.warning("Async subprocess unsupported for streaming; falling back to blocking mode")
+            return await self._stream_process_events_blocking(
+                session,
+                command,
+                timeout,
+                env_vars,
+                creationflags,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Unable to start process: {exc}") from exc
+
+        return self._consume_async_stream_process(session, process, command, timeout)
+
+    def _consume_async_stream_process(
+        self,
+        session: TerminalSession,
+        process: Process,
+        command: str,
+        timeout: int,
+    ) -> AsyncIterator[bytes]:
+        queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+
+        session.current_process = process
+        session.current_command = command
+
+        async def pump_stream(stream, stream_name: str) -> None:
+            if stream is None:
+                await queue.put({"type": "stream_closed", "stream": stream_name})
+                return
+            try:
+                while True:
+                    data = await stream.readline()
+                    if not data:
+                        break
+                    text = self._sanitize_stream_line(self._decode_output(data))
+                    await queue.put(
+                        {
+                            "type": "stream",
+                            "stream": stream_name,
+                            "text": text,
+                        }
+                    )
+            finally:
+                await queue.put({"type": "stream_closed", "stream": stream_name})
+
+        stdout_task = asyncio.create_task(pump_stream(process.stdout, "stdout"))
+        stderr_task = asyncio.create_task(pump_stream(process.stderr, "stderr"))
+
+        timed_out = False
+
+        async def guard() -> None:
+            nonlocal timed_out
+            try:
+                await asyncio.wait_for(process.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                timed_out = True
+                await self._terminate_process(process)
+                await process.wait()
+
+        guard_task = asyncio.create_task(guard())
+
+        async def event_generator() -> AsyncIterator[bytes]:
+            nonlocal timed_out
+            active_streams = sum(stream is not None for stream in (process.stdout, process.stderr))
+            if active_streams == 0:
+                active_streams = 1
+            try:
+                yield self._encode_stream_event(
+                    {
+                        "type": "session",
+                        "session_id": session.session_id,
+                        "cwd": str(session.cwd),
+                        "command": command,
+                    }
+                )
+                while True:
+                    if active_streams == 0 and queue.empty():
+                        break
+                    item = await queue.get()
+                    if item["type"] == "stream_closed":
+                        active_streams = max(0, active_streams - 1)
+                        continue
+                    if item["type"] == "stream":
+                        yield self._encode_stream_event(
+                            {
+                                "type": item["stream"],
+                                "text": item["text"],
+                            }
+                        )
+                await guard_task
+                exit_code = process.returncode if process.returncode is not None else -1
+                interrupted = session.interrupted
+                session.interrupted = False
+                message = None
+                if timed_out:
+                    message = f"Command timed out after {timeout} seconds"
+                elif interrupted:
+                    message = "Command interrupted by user"
+                success = exit_code == 0 and not timed_out and not interrupted
+                yield self._encode_stream_event(
+                    {
+                        "type": "exit",
+                        "session_id": session.session_id,
+                        "cwd": str(session.cwd),
+                        "exit_code": exit_code,
+                        "success": success,
+                        "timed_out": timed_out,
+                        "timeout_seconds": timeout,
+                        "message": message,
+                        "was_cd": False,
+                    }
+                )
+            except asyncio.CancelledError:
+                await self._terminate_process(process)
+                raise
+            finally:
+                stdout_task.cancel()
+                stderr_task.cancel()
+                await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+                if not guard_task.done():
+                    guard_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await guard_task
+                session.current_process = None
+                session.current_command = None
+                session.touch()
+
+        return event_generator()
+
+    async def _stream_process_events_blocking(
+        self,
+        session: TerminalSession,
+        command: str,
+        timeout: int,
+        env_vars: Dict[str, str],
+        creationflags: int,
+    ) -> AsyncIterator[bytes]:
+        queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+
+        process = subprocess.Popen(
+            command,
+            cwd=str(session.cwd),
+            env=env_vars,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            creationflags=creationflags,
+        )
+
+        session.current_process = process
+        session.current_command = command
+
+        async def pump_stream(stream, stream_name: str) -> None:
+            if stream is None:
+                await queue.put({"type": "stream_closed", "stream": stream_name})
+                return
+            try:
+                while True:
+                    line = await asyncio.to_thread(stream.readline)
+                    if not line:
+                        break
+                    text = self._sanitize_stream_line(line)
+                    await queue.put(
+                        {
+                            "type": "stream",
+                            "stream": stream_name,
+                            "text": text,
+                        }
+                    )
+            finally:
+                await queue.put({"type": "stream_closed", "stream": stream_name})
+
+        stdout_task = asyncio.create_task(pump_stream(process.stdout, "stdout"))
+        stderr_task = asyncio.create_task(pump_stream(process.stderr, "stderr"))
+
+        timed_out = False
+
+        async def guard() -> None:
+            nonlocal timed_out
+            try:
+                await asyncio.to_thread(process.wait, timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                await self._terminate_process(process)
+                await asyncio.to_thread(process.wait)
+
+        guard_task = asyncio.create_task(guard())
+
+        async def event_generator() -> AsyncIterator[bytes]:
+            nonlocal timed_out
+            active_streams = sum(stream is not None for stream in (process.stdout, process.stderr))
+            if active_streams == 0:
+                active_streams = 1
+            try:
+                yield self._encode_stream_event(
+                    {
+                        "type": "session",
+                        "session_id": session.session_id,
+                        "cwd": str(session.cwd),
+                        "command": command,
+                    }
+                )
+                while True:
+                    if active_streams == 0 and queue.empty():
+                        break
+                    item = await queue.get()
+                    if item["type"] == "stream_closed":
+                        active_streams = max(0, active_streams - 1)
+                        continue
+                    if item["type"] == "stream":
+                        yield self._encode_stream_event(
+                            {
+                                "type": item["stream"],
+                                "text": item["text"],
+                            }
+                        )
+                await guard_task
+                exit_code = process.returncode if process.returncode is not None else -1
+                interrupted = session.interrupted
+                session.interrupted = False
+                message = None
+                if timed_out:
+                    message = f"Command timed out after {timeout} seconds"
+                elif interrupted:
+                    message = "Command interrupted by user"
+                success = exit_code == 0 and not timed_out and not interrupted
+                yield self._encode_stream_event(
+                    {
+                        "type": "exit",
+                        "session_id": session.session_id,
+                        "cwd": str(session.cwd),
+                        "exit_code": exit_code,
+                        "success": success,
+                        "timed_out": timed_out,
+                        "timeout_seconds": timeout,
+                        "message": message,
+                        "was_cd": False,
+                    }
+                )
+            except asyncio.CancelledError:
+                await self._terminate_process(process)
+                raise
+            finally:
+                stdout_task.cancel()
+                stderr_task.cancel()
+                await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+                if not guard_task.done():
+                    guard_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await guard_task
+                session.current_process = None
+                session.current_command = None
+                session.touch()
+
+        return event_generator()
+
+
     async def _interrupt_process(self, process) -> None:
         if process.returncode is not None:
             return
 
         if os.name == "nt":
-            # Attempt Ctrl+Break first (requires CREATE_NEW_PROCESS_GROUP)
-            if hasattr(signal, "CTRL_BREAK_EVENT"):
+            sent_ctrl_event = False
+            # Preferred: Ctrl+C to terminate interactive commands like ping -t
+            if hasattr(signal, "CTRL_C_EVENT"):
+                try:
+                    process.send_signal(signal.CTRL_C_EVENT)
+                    sent_ctrl_event = True
+                except ValueError:
+                    pass
+            # Fallback: Ctrl+Break to flush stats if Ctrl+C failed
+            if not sent_ctrl_event and hasattr(signal, "CTRL_BREAK_EVENT"):
                 try:
                     process.send_signal(signal.CTRL_BREAK_EVENT)
+                    sent_ctrl_event = True
                 except ValueError:
-                    process.terminate()
-            else:
+                    pass
+            if not sent_ctrl_event:
                 process.terminate()
         else:
             process.send_signal(signal.SIGINT)
@@ -452,7 +793,7 @@ class TerminalService:
             process.terminate()
             await asyncio.sleep(0.2)
         if process.returncode is None:
-            process.kill()
+            await self._force_kill_process_tree(process)
 
     async def _terminate_process(self, process) -> None:
         if process.returncode is not None:
@@ -461,6 +802,24 @@ class TerminalService:
         process.terminate()
         await asyncio.sleep(0.2)
         if process.returncode is None:
+            await self._force_kill_process_tree(process)
+
+    async def _force_kill_process_tree(self, process) -> None:
+        if process.returncode is not None:
+            return
+
+        if os.name == "nt":
+            try:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                    capture_output=True,
+                    check=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            except Exception:  # noqa: BLE001
+                process.kill()
+        else:
             process.kill()
 
     def _normalize_cursor(self, text: str, cursor_position: Optional[int]) -> int:
@@ -679,6 +1038,16 @@ class TerminalService:
             "message": message,
             "was_cd": was_cd,
         }
+
+    @staticmethod
+    def _sanitize_stream_line(text: str) -> str:
+        if not text:
+            return ""
+        return text.rstrip("\r\n")
+
+    @staticmethod
+    def _encode_stream_event(payload: Dict[str, Any]) -> bytes:
+        return (json.dumps(payload, ensure_ascii=False) + "\n").encode()
 
     @staticmethod
     def _generate_session_id() -> str:

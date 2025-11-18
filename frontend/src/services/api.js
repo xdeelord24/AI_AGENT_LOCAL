@@ -222,6 +222,112 @@ class ApiService {
     });
   }
 
+  static async runTerminalCommandStream({
+    command,
+    sessionId,
+    timeout = 120,
+    env = null,
+    signal,
+    onEvent,
+  }) {
+    if (typeof onEvent !== 'function') {
+      throw new Error('runTerminalCommandStream requires an onEvent callback');
+    }
+
+    const response = await fetch(`${API_BASE_URL}/api/terminal/command/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/x-ndjson',
+      },
+      body: JSON.stringify({
+        command,
+        session_id: sessionId,
+        timeout,
+        env,
+      }),
+      signal,
+    });
+
+    if (!response.ok) {
+      let detail;
+      try {
+        detail = await response.json();
+      } catch {
+        detail = null;
+      }
+      const message = detail?.detail || detail?.message || `Streaming failed (${response.status})`;
+      const error = new Error(message);
+      error.status = response.status;
+      error.code =
+        response.status === 404 ||
+        response.status === 405 ||
+        response.status === 501 ||
+        response.status === 503
+          ? 'STREAM_NOT_AVAILABLE'
+          : 'STREAM_HTTP_ERROR';
+      throw error;
+    }
+
+    if (!response.body || typeof response.body.getReader !== 'function') {
+      const error = new Error('Streaming responses are not supported in this browser');
+      error.code = 'STREAM_NOT_AVAILABLE';
+      throw error;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    const flushBuffer = async (force = false) => {
+      let newlineIndex;
+      while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+        const rawLine = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        const line = rawLine.trim();
+        if (!line) {
+          continue;
+        }
+        try {
+          const payload = JSON.parse(line);
+          await Promise.resolve(onEvent(payload));
+        } catch (error) {
+          console.warn('Skipping malformed terminal event chunk', rawLine, error);
+        }
+      }
+
+      if (force) {
+        const remaining = buffer.trim();
+        buffer = '';
+        if (remaining) {
+          try {
+            const payload = JSON.parse(remaining);
+            await Promise.resolve(onEvent(payload));
+          } catch (error) {
+            console.warn('Skipping trailing malformed terminal event chunk', remaining, error);
+          }
+        }
+      }
+    };
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        await flushBuffer(false);
+      }
+      buffer += decoder.decode();
+      await flushBuffer(true);
+    } finally {
+      if (typeof reader.releaseLock === 'function') {
+        reader.releaseLock();
+      }
+    }
+  }
+
   static async stopTerminalCommand(sessionId) {
     return this.post('/api/terminal/interrupt', {
       session_id: sessionId,

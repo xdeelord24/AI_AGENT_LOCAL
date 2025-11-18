@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Dict, Optional
 import logging
@@ -104,6 +105,40 @@ async def run_terminal_command(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Terminal error: {exc}",
+        ) from exc
+
+
+@router.post("/command/stream")
+async def stream_terminal_command(
+    payload: TerminalCommandPayload,
+    terminal_service=Depends(get_terminal_service),
+):
+    """Execute a terminal command and stream output incrementally."""
+    try:
+        event_stream = await terminal_service.stream_command_events(
+            payload.command,
+            session_id=payload.session_id,
+            timeout=payload.timeout,
+            env=payload.env,
+        )
+        return StreamingResponse(event_stream, media_type="application/x-ndjson")
+    except NotImplementedError as exc:
+        logger.warning("Terminal streaming unsupported: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=str(exc) or "Terminal streaming is not supported on this platform",
+        ) from exc
+    except RuntimeError as exc:
+        logger.warning("Terminal streaming error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc) or "Terminal streaming error",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Terminal streaming crashed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Terminal stream error: {exc}",
         ) from exc
 
 

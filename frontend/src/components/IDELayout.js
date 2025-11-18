@@ -951,6 +951,20 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     loadConnectivitySettings();
   }, [loadConnectivitySettings]);
 
+  const persistTerminalSessionId = useCallback((sessionId) => {
+    if (!sessionId) {
+      return;
+    }
+    setTerminalSessionId((prev) => (prev === sessionId ? prev : sessionId));
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem('terminalSessionId', sessionId);
+      } catch (error) {
+        console.error('Error persisting terminal session ID:', error);
+      }
+    }
+  }, []);
+
   const refreshFileTree = useCallback(async () => {
     await loadProjectTree(currentPath || '.', { setAsRoot: true, showToastMessage: false });
   }, [currentPath, loadProjectTree]);
@@ -974,14 +988,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     const ensureSession = async () => {
       try {
         const response = await ApiService.ensureTerminalSession(terminalSessionId);
-        if (response?.session_id && response.session_id !== terminalSessionId) {
-          setTerminalSessionId(response.session_id);
+        if (response?.session_id) {
+          persistTerminalSessionId(response.session_id);
         }
         if (response?.cwd) {
           setTerminalCwd(response.cwd);
-        }
-        if (typeof window !== 'undefined' && response?.session_id) {
-          window.localStorage.setItem('terminalSessionId', response.session_id);
         }
       } catch (error) {
         console.error('Error initializing terminal session:', error);
@@ -989,7 +1000,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       }
     };
     ensureSession();
-  }, [terminalSessionId]);
+  }, [persistTerminalSessionId, terminalSessionId]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -1232,11 +1243,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
     const { showExitCode = true } = options;
 
-    if (response.session_id && response.session_id !== terminalSessionId) {
-      setTerminalSessionId(response.session_id);
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem('terminalSessionId', response.session_id);
-      }
+    if (response.session_id) {
+      persistTerminalSessionId(response.session_id);
     }
 
     if (response.cwd) {
@@ -1272,12 +1280,71 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
 
     return response;
-  }, [appendTerminalLine, setTerminalCwd, setTerminalSessionId, terminalSessionId]);
+  }, [appendTerminalLine, persistTerminalSessionId, setTerminalCwd]);
 
   const ensureTerminalVisible = useCallback(() => {
     setBottomPanelVisible(true);
     setBottomPanelTab('terminal');
   }, []);
+
+  const handleTerminalStreamEvent = useCallback((event) => {
+    if (!event || typeof event !== 'object') {
+      return;
+    }
+
+    if (event.session_id) {
+      persistTerminalSessionId(event.session_id);
+    }
+    if (event.cwd) {
+      setTerminalCwd(event.cwd);
+    }
+
+    switch (event.type) {
+      case 'session':
+        break;
+      case 'stdout':
+      case 'stderr':
+        if (typeof event.text === 'string') {
+          appendTerminalLine(event.text, event.type);
+        }
+        break;
+      case 'message':
+        if (typeof event.text === 'string') {
+          const tone =
+            event.level === 'error'
+              ? 'error'
+              : event.level === 'info'
+                ? 'info'
+                : 'stdout';
+          appendTerminalLine(event.text, tone);
+        }
+        break;
+      case 'exit':
+        if (event.message) {
+          appendTerminalLine(event.message, event.success ? 'info' : 'error');
+        }
+        if (event.timed_out) {
+          appendTerminalLine(
+            `Command exceeded the ${event.timeout_seconds || 120}s limit. Continuous tasks (e.g., "ping -t") are not yet supported; try using a bounded option such as "-n 5".`,
+            'error'
+          );
+        }
+        if (typeof event.exit_code === 'number' && !event.was_cd) {
+          appendTerminalLine(
+            `Process exited with code ${event.exit_code}`,
+            event.exit_code === 0 ? 'info' : 'error'
+          );
+        }
+        break;
+      case 'info':
+        if (typeof event.text === 'string') {
+          appendTerminalLine(event.text, 'info');
+        }
+        break;
+      default:
+        break;
+    }
+  }, [appendTerminalLine, persistTerminalSessionId, setTerminalCwd]);
 
   const handleTerminalCompletion = useCallback(async () => {
     if (!terminalSessionId || isCompletingTerminal) {
@@ -1421,11 +1488,28 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
     setIsTerminalBusy(true);
     try {
-      const response = await ApiService.runTerminalCommand(trimmed, terminalSessionId);
-      processTerminalResponse(response);
+      await ApiService.runTerminalCommandStream({
+        command: trimmed,
+        sessionId: terminalSessionId,
+        timeout: 120,
+        onEvent: handleTerminalStreamEvent,
+      });
     } catch (error) {
-      console.error('Error executing terminal command:', error);
-      appendTerminalLine(error.response?.data?.detail || error.message, 'error');
+      if (error?.code === 'STREAM_NOT_AVAILABLE') {
+        try {
+          const response = await ApiService.runTerminalCommand(trimmed, terminalSessionId);
+          processTerminalResponse(response);
+        } catch (fallbackError) {
+          console.error('Error executing terminal command:', fallbackError);
+          appendTerminalLine(
+            fallbackError.response?.data?.detail || fallbackError.message || 'Terminal command failed',
+            'error'
+          );
+        }
+      } else if (error?.name !== 'AbortError') {
+        console.error('Error executing terminal command:', error);
+        appendTerminalLine(error.response?.data?.detail || error.message || 'Terminal command failed', 'error');
+      }
     } finally {
       setIsTerminalBusy(false);
     }
@@ -1433,6 +1517,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     addCommandToHistory,
     appendTerminalLine,
     ensureTerminalVisible,
+    handleTerminalStreamEvent,
     isTerminalBusy,
     processTerminalResponse,
     terminalCwd,
