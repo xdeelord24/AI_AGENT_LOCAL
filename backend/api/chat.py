@@ -1,14 +1,18 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Literal
 import asyncio
+import json
 import time
 from datetime import datetime
+from pathlib import Path
+import uuid
 
 router = APIRouter()
 
 MAX_PLAN_AUTOCONTINUE_ROUNDS = 3
 COMPLETED_TASK_STATUSES = {"completed", "complete", "done"}
+FEEDBACK_LOG_PATH = Path("data/feedback/feedback_log.jsonl")
 
 
 class ChatMessage(BaseModel):
@@ -27,11 +31,20 @@ class ChatResponse(BaseModel):
     response: str
     conversation_id: str
     timestamp: str
+    message_id: str
     context_used: Optional[Dict[str, Any]] = None
     file_operations: Optional[List[Dict[str, Any]]] = None
     ai_plan: Optional[Dict[str, Any]] = None
     agent_statuses: Optional[List[Dict[str, Any]]] = None
     activity_log: Optional[List[Dict[str, Any]]] = None
+
+
+class FeedbackRequest(BaseModel):
+    conversation_id: str
+    message_id: str
+    rating: Literal["like", "dislike"]
+    comment: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class StatusPreviewRequest(BaseModel):
@@ -121,6 +134,12 @@ def _finalize_activity_log(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return finalized
 
 
+def _append_feedback_entry(entry: Dict[str, Any]) -> None:
+    FEEDBACK_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with FEEDBACK_LOG_PATH.open("a", encoding="utf-8") as feedback_file:
+        feedback_file.write(json.dumps(entry) + "\n")
+
+
 async def get_ai_service(request: Request):
     """Dependency to get AI service instance"""
     return request.app.state.ai_service
@@ -158,6 +177,7 @@ async def send_message(
         current_message = request.message
         auto_continue_rounds = 0
         activity_events: List[Dict[str, Any]] = []
+        last_message_id: Optional[str] = None
         _record_activity_event(
             activity_events,
             "thinking",
@@ -194,6 +214,8 @@ async def send_message(
                 context_payload = dict(last_context_used)
 
             aggregated_messages.append(response.get("content", ""))
+            if response.get("message_id"):
+                last_message_id = response["message_id"]
 
             # CRITICAL: Never accumulate file operations or plans in ASK mode
             # Even if the AI service accidentally includes them, strip them here
@@ -251,17 +273,18 @@ async def send_message(
 
         # CRITICAL: Final check - ensure ASK mode NEVER returns file operations or plans
         # This is a redundant safeguard in case anything slipped through
-        final_file_ops = None
-        final_plan = None
-        if not is_ask_mode:
+        if is_ask_mode:
+            final_file_ops = None
+            final_plan = None
+        else:
             final_file_ops = accumulated_file_ops if accumulated_file_ops else None
             final_plan = final_ai_plan
-        # Explicitly set to None for ASK mode, don't rely on conditional
         
         return ChatResponse(
             response=combined_response,
             conversation_id=conversation_id or "",
             timestamp=last_timestamp or "",
+            message_id=last_message_id or str(uuid.uuid4()),
             context_used=last_context_used or context_payload,
             file_operations=final_file_ops,
             ai_plan=final_plan,
@@ -307,6 +330,24 @@ async def get_chat_status(ai_service = Depends(get_ai_service)):
         return status
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting status: {str(e)}")
+
+
+@router.post("/feedback")
+async def submit_feedback(feedback: FeedbackRequest):
+    """Record like/dislike feedback for assistant responses."""
+    entry = {
+        "conversation_id": feedback.conversation_id,
+        "message_id": feedback.message_id,
+        "rating": feedback.rating,
+        "comment": feedback.comment or "",
+        "metadata": feedback.metadata or {},
+        "recorded_at": datetime.utcnow().isoformat() + "Z"
+    }
+    try:
+        await asyncio.to_thread(_append_feedback_entry, entry)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to record feedback: {exc}")
+    return {"message": "Feedback recorded"}
 
 
 @router.post("/status-preview")

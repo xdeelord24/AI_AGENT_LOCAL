@@ -13,6 +13,9 @@ import os
 import re
 import time
 
+FILE_OP_METADATA_PATTERN = r'(?:file[\s_-]?operations|file[\s_-]?ops)'
+AI_PLAN_METADATA_PATTERN = r'(?:ai[\s_-]?plan|ai[\s_-]?todo)'
+
 try:
     from duckduckgo_search import DDGS
 except ImportError:
@@ -490,6 +493,120 @@ class AIService:
         if is_ask_mode:
             return cleaned_response, metadata
 
+        def to_snake_case(value: str) -> str:
+            if not isinstance(value, str):
+                return ""
+            converted = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', value)
+            converted = re.sub(r'[\s\-]+', '_', converted)
+            return converted.strip('_').lower()
+
+        def normalize_metadata_key(key: Any) -> str:
+            if not isinstance(key, str):
+                return ""
+            normalized = to_snake_case(key)
+            alias_map = {
+                "aiplan": "ai_plan",
+                "ai_todo": "ai_plan",
+                "plan": "ai_plan",
+                "todo_plan": "ai_plan",
+                "fileoperations": "file_operations",
+                "fileops": "file_operations",
+                "file_ops": "file_operations",
+                "fileedits": "file_operations",
+                "file_edit_requests": "file_operations",
+            }
+            return alias_map.get(normalized, normalized)
+
+        def is_plan_object(obj: Any) -> bool:
+            if not isinstance(obj, dict):
+                return False
+            summary = obj.get("summary")
+            tasks = obj.get("tasks")
+            return isinstance(summary, str) and isinstance(tasks, list)
+
+        def strip_code_fences(text: str) -> str:
+            if not isinstance(text, str):
+                return text
+            stripped = text.strip()
+            fence_match = re.match(r'^```[a-zA-Z0-9_+-]*\n([\s\S]*?)\n```$', stripped)
+            if fence_match:
+                return fence_match.group(1).strip("\n")
+            return stripped
+
+        def normalize_operation_type(op_type: Optional[str]) -> Optional[str]:
+            if not op_type:
+                return None
+            normalized = re.sub(r'[\s\-]+', '_', op_type.strip().lower())
+            normalized = normalized.replace("__", "_")
+            alias_map = {
+                "createfile": "create_file",
+                "newfile": "create_file",
+                "addfile": "create_file",
+                "writefile": "edit_file",
+                "overwritefile": "edit_file",
+                "updatefile": "edit_file",
+                "modifyfile": "edit_file",
+                "replacefile": "edit_file",
+                "editfile": "edit_file",
+                "appendfile": "edit_file",
+                "deletefile": "delete_file",
+                "removefile": "delete_file",
+                "rmfile": "delete_file",
+            }
+            normalized_no_underscore = normalized.replace("_", "")
+            if normalized in alias_map:
+                return alias_map[normalized]
+            if normalized_no_underscore in alias_map:
+                return alias_map[normalized_no_underscore]
+            if normalized in ("create", "create_file"):
+                return "create_file"
+            if normalized in ("edit", "update", "modify", "edit_file"):
+                return "edit_file"
+            if normalized in ("delete", "remove", "delete_file"):
+                return "delete_file"
+            return normalized if normalized in ("create_file", "edit_file", "delete_file") else None
+
+        def normalize_file_operation(op: Any) -> Optional[Dict[str, Any]]:
+            if not isinstance(op, dict):
+                return None
+            op_type = normalize_operation_type(
+                op.get("type") or op.get("action") or op.get("op") or op.get("operation")
+            )
+            path = op.get("path") or op.get("file") or op.get("target")
+            if not op_type or not path:
+                return None
+            normalized_op: Dict[str, Any] = {
+                "type": op_type,
+                "path": str(path).strip()
+            }
+            if "content" in op:
+                normalized_op["content"] = strip_code_fences(str(op["content"]))
+            if "beforeContent" in op:
+                normalized_op["beforeContent"] = strip_code_fences(str(op["beforeContent"]))
+            if "afterContent" in op:
+                normalized_op["afterContent"] = strip_code_fences(str(op["afterContent"]))
+            if "before" in op:
+                normalized_op["before"] = strip_code_fences(str(op["before"]))
+            if "after" in op:
+                normalized_op["after"] = strip_code_fences(str(op["after"]))
+            for key in ("diff", "metadata", "encoding", "language", "overwrite"):
+                if key in op:
+                    normalized_op[key] = op[key]
+            return normalized_op
+
+        def normalize_file_operations(obj: Any) -> List[Dict[str, Any]]:
+            normalized_ops: List[Dict[str, Any]] = []
+            if isinstance(obj, list):
+                for item in obj:
+                    normalized = normalize_file_operation(item)
+                    if normalized:
+                        normalized_ops.append(normalized)
+            elif isinstance(obj, dict):
+                normalized = normalize_file_operation(obj)
+                if normalized:
+                    normalized_ops.append(normalized)
+            return normalized_ops
+
         def extract_from_json(json_str: str) -> bool:
             """
             Try to extract metadata from a JSON string.
@@ -516,33 +633,55 @@ class AIService:
             def is_file_op(obj: Any) -> bool:
                 if not isinstance(obj, dict):
                     return False
-                op_type = (obj.get("type") or "").lower()
+                op_type = (
+                    obj.get("type")
+                    or obj.get("action")
+                    or obj.get("op")
+                    or obj.get("operation")
+                    or ""
+                ).lower()
                 path = obj.get("path")
                 return bool(op_type and path)
 
             # Canonical metadata shape
             if isinstance(data, dict):
-                file_ops = data.get("file_operations")
-                ai_plan = data.get("ai_plan")
+                file_ops_value = None
+                ai_plan_value = None
+                for key, value in list(data.items()):
+                    normalized_key = normalize_metadata_key(key)
+                    if normalized_key == "file_operations":
+                        file_ops_value = value
+                    elif normalized_key == "ai_plan":
+                        ai_plan_value = value
 
-                if isinstance(file_ops, list):
-                    metadata["file_operations"].extend(file_ops)
+                normalized_ops = normalize_file_operations(file_ops_value)
+                if normalized_ops:
+                    metadata["file_operations"].extend(normalized_ops)
                     found = True
 
-                if isinstance(ai_plan, dict):
-                    metadata["ai_plan"] = ai_plan
+                if isinstance(ai_plan_value, dict) and is_plan_object(ai_plan_value):
+                    metadata["ai_plan"] = ai_plan_value
                     found = True
 
                 # Convenience: single file operation object at top level
                 if not found and is_file_op(data):
-                    metadata["file_operations"].append(data)
+                    normalized_op = normalize_file_operation(data)
+                    if normalized_op:
+                        metadata["file_operations"].append(normalized_op)
+                        found = True
+
+                # Convenience: plan object at top level without ai_plan key
+                if not found and is_plan_object(data):
+                    metadata["ai_plan"] = data
                     found = True
 
             # Convenience: top-level list of file-operations
             if isinstance(data, list):
                 ops = [op for op in data if is_file_op(op)]
                 if ops:
-                    metadata["file_operations"].extend(ops)
+                    normalized_ops = normalize_file_operations(ops)
+                    if normalized_ops:
+                        metadata["file_operations"].extend(normalized_ops)
                     found = True
 
             return found
@@ -571,8 +710,9 @@ class AIService:
         # non-greedy "match anything" approach.
         inline_patterns = [
             # Canonical metadata object
-            r'\{[\s\S]*?"file_operations"[\s\S]*?\}',
-            r'\{[\s\S]*?"ai_plan"[\s\S]*?\}',
+            rf'\{{[\s\S]*?"{FILE_OP_METADATA_PATTERN}"[\s\S]*?\}}',
+            rf'\{{[\s\S]*?"{AI_PLAN_METADATA_PATTERN}"[\s\S]*?\}}',
+            r'\{[\s\S]*?"summary"\s*:\s*".*?"[\s\S]*?"tasks"\s*:\s*\[[\s\S]*?\]\s*\}',
             # Convenience: any JSON object that looks like a file operation
             r'\{[\s\S]*?"type"\s*:\s*"[a-zA-Z_]+?"[\s\S]*?"path"\s*:\s*"[^\"]+"[\s\S]*?\}',
         ]
@@ -581,6 +721,13 @@ class AIService:
                 json_candidate = match.group(0).strip()
                 if extract_from_json(json_candidate):
                     cleaned_response = cleaned_response.replace(json_candidate, "").strip()
+
+        cleaned_response = re.sub(
+            rf'(?mi)^\s*(?:{AI_PLAN_METADATA_PATTERN}|{FILE_OP_METADATA_PATTERN})\s*:?\s*$',
+            '',
+            cleaned_response
+        )
+        cleaned_response = re.sub(r'\n{3,}', '\n\n', cleaned_response).strip()
 
         return cleaned_response, metadata
 
@@ -596,11 +743,11 @@ class AIService:
         response = re.sub(r'\(Generated concrete file operations automatically\.\)', '', response, flags=re.IGNORECASE)
         
         # Remove JSON code blocks that contain metadata (ai_plan, file_operations)
-        json_block_pattern = r'```(?:json|text|python)?\s*\{[\s\S]*?"(?:ai_plan|file_operations)"[\s\S]*?\}[\s\S]*?```'
+        json_block_pattern = rf'```(?:json|text|python)?\s*\{{[\s\S]*?"(?:{AI_PLAN_METADATA_PATTERN}|{FILE_OP_METADATA_PATTERN})"[\s\S]*?\}}[\s\S]*?```'
         response = re.sub(json_block_pattern, '', response, flags=re.IGNORECASE | re.DOTALL)
         
         # Remove standalone JSON objects with metadata
-        json_metadata_pattern = r'\{[\s\S]*?"(?:ai_plan|file_operations)"[\s\S]*?\}'
+        json_metadata_pattern = rf'\{{[\s\S]*?"(?:{AI_PLAN_METADATA_PATTERN}|{FILE_OP_METADATA_PATTERN})"[\s\S]*?\}}'
         response = re.sub(json_metadata_pattern, '', response, flags=re.IGNORECASE | re.DOTALL)
         
         lines = response.split('\n')
@@ -620,6 +767,7 @@ class AIService:
             r'^(let me think|let me analyze|let me check|let me review)',
             r'^(i think|i believe|i assume|i suppose|i guess)',
             r'^(based on|according to|from what i can see)',
+            r'^since the search results',
         ]
         
         planning_patterns = [
@@ -651,6 +799,10 @@ class AIService:
         
         # Section headers that indicate thinking/planning/reporting
         thinking_headers = [
+            '# thinking',
+            '# analysis',
+            '# reasoning',
+            '# understanding',
             '## thinking',
             '## analysis',
             '## reasoning',
@@ -662,6 +814,15 @@ class AIService:
         ]
         
         planning_headers = [
+            '# plan',
+            '# planning',
+            '# strategy',
+            '# approach',
+            '# steps',
+            '# tasks',
+            '# todo list',
+            '# todo',
+            '# ai plan',
             '## plan',
             '## planning',
             '## strategy',
@@ -683,6 +844,18 @@ class AIService:
         ]
         
         reporting_headers = [
+            '# report',
+            '# summary',
+            '# results',
+            '# conclusion',
+            '# completion',
+            '# verification',
+            '# verification report',
+            '# task report',
+            '# task status',
+            '# task status update',
+            '# remaining risks',
+            '# better answer',
             '## report',
             '## summary',
             '## results',
@@ -708,6 +881,8 @@ class AIService:
         ]
         
         file_operations_headers = [
+            '# file operations',
+            '# file operation',
             '## file operations',
             '## file operation',
             '### file operations',
@@ -716,21 +891,72 @@ class AIService:
             '### file operations:',
         ]
         
+        metadata_label_names = {
+            'aiplan',
+            'ai plan',
+            'ai plan summary',
+            'web search',
+            'web search results',
+            'web.search',
+            'web_search',
+            'process steps',
+            'process',
+            'process status',
+            'activity log',
+            'agent statuses',
+            'agent status',
+            'better answer',
+        }
+        web_search_label_names = {
+            'web search',
+            'web search results',
+            'web.search',
+            'web_search',
+        }
+        
         i = 0
         while i < len(lines):
             line = lines[i]
             line_lower = line.lower().strip()
+            normalized_label = re.sub(r'\s+', ' ', line_lower.rstrip(':').replace('_', ' ').replace('.', ' ')).strip()
+            
+            if normalized_label in metadata_label_names:
+                if normalized_label in web_search_label_names:
+                    i += 1
+                    while i < len(lines):
+                        next_line = lines[i].strip()
+                        if not next_line:
+                            i += 1
+                            continue
+                        if next_line.startswith('```'):
+                            i += 1
+                            while i < len(lines) and not lines[i].strip().startswith('```'):
+                                i += 1
+                            if i < len(lines):
+                                i += 1
+                            continue
+                        if next_line.startswith('<tool_call') or next_line.startswith('</tool_call'):
+                            i += 1
+                            continue
+                        break
+                    continue
+                i += 1
+                continue
+            
+            if line_lower.startswith('<tool_call') or line_lower.startswith('</tool_call'):
+                i += 1
+                continue
             
             # Check for duplicate section headers (remove duplicates)
-            if line_lower.startswith('##') or line_lower.startswith('###'):
-                section_key = line_lower[:50]  # Use first 50 chars as key
+            if line_lower.startswith('#'):
+                section_key = normalized_label or line_lower[:50]  # Use normalized heading
                 # Also check for common repetitive headers
                 if (section_key in seen_sections or 
                     (line_lower.startswith('## trending') and any('trending' in s for s in seen_sections))):
                     # Skip duplicate section
                     i += 1
                     # Skip until next section or end
-                    while i < len(lines) and not (lines[i].strip().startswith('##') or lines[i].strip().startswith('###')):
+                    while i < len(lines) and not lines[i].strip().startswith('#'):
                         i += 1
                     continue
                 seen_sections.add(section_key)
@@ -767,7 +993,7 @@ class AIService:
                 continue
             
             # Check if we're exiting a section (new heading or empty line followed by content)
-            if line.strip().startswith('##') or line.strip().startswith('###'):
+            if line.strip().startswith('#'):
                 in_thinking_section = False
                 in_planning_section = False
                 in_reporting_section = False
@@ -783,7 +1009,7 @@ class AIService:
                     i += 1
                     continue
                 # Exit file operations section if we hit a new section or meaningful content
-                if line.strip().startswith('##') or line.strip().startswith('###'):
+                if line.strip().startswith('#'):
                     in_file_operations_section = False
                 elif line.strip() and not line_lower.startswith(('```', '- ', '* ', '1. ', '2. ')):
                     # If we hit non-file-ops content, exit the section
@@ -846,14 +1072,14 @@ class AIService:
                 'ai plan' in line_lower or
                 line_lower.startswith('fileoperations') or
                 line_lower.startswith('file operations') or
-                ('ai plan' in line_lower and (line_lower.startswith('##') or line_lower.startswith('###')))):
+                ('ai plan' in line_lower and line_lower.startswith('#'))):
                 # Skip this line and all content until next section or end
                 i += 1
                 while i < len(lines):
                     next_line = lines[i].strip()
                     next_line_lower = next_line.lower()
                     # Stop at next section header
-                    if next_line.startswith('##') or next_line.startswith('###'):
+                    if next_line.startswith('#'):
                         break
                     # Stop at empty line followed by non-indented content that's not part of the plan
                     if (next_line == '' and i + 1 < len(lines)):
@@ -1122,13 +1348,13 @@ class AIService:
             skip_verification = False
             for line in lines:
                 line_lower = line.lower().strip()
-                if 'verification' in line_lower and (line_lower.startswith('##') or line_lower.startswith('###') or line_lower == 'verification'):
+                if 'verification' in line_lower and (line_lower.startswith('#') or line_lower == 'verification'):
                     verification_count += 1
                     if verification_count > 1:
                         skip_verification = True
                         continue
                     skip_verification = False
-                elif skip_verification and (line_lower.startswith('##') or line_lower.startswith('###')):
+                elif skip_verification and line_lower.startswith('#'):
                     skip_verification = False
                 if not skip_verification:
                     filtered_lines.append(line)
@@ -1146,7 +1372,7 @@ class AIService:
             line_stripped = line.strip()
             
             # Check if this looks like a repeated section header
-            if line_stripped and (line_stripped.startswith('##') or line_stripped.startswith('###')):
+            if line_stripped and line_stripped.startswith('#'):
                 # Create a signature from the next few lines to detect duplicates
                 signature_lines = [line_stripped.lower()]
                 j = i + 1
@@ -1303,11 +1529,14 @@ class AIService:
         
         # Create conversation ID if not provided
         conversation_id = str(uuid.uuid4())
+        response_message_id = str(uuid.uuid4())
 
         # Clone and enrich context
         context = dict(context or {})
         web_search_mode = (context.get("web_search_mode") or "off").lower()
         context["web_search_mode"] = web_search_mode
+        web_search_enabled = web_search_mode in ("browser_tab", "google_chrome", "auto")
+        context["_web_search_attempted"] = False
         
         new_script_requested = bool(context.get("requested_new_script"))
         if not new_script_requested and self._detect_new_script_request(message):
@@ -1325,58 +1554,92 @@ class AIService:
             context["disable_active_file_context"] = True
 
         # Detect if query needs web search and use MCP tools to perform it
-        needs_web_search = self._detect_web_search_needed(message, web_search_mode)
+        force_web_search = (
+            web_search_mode in ("browser_tab", "google_chrome")
+            and not context.get("disable_forced_web_search")
+        )
+        needs_web_search = force_web_search or self._detect_web_search_needed(message, web_search_mode)
         if needs_web_search:
-            # Use MCP tools to perform web search instead of direct internet access
-            if self.is_mcp_enabled():
-                try:
-                    # Extract search query from message
-                    search_query = self._extract_search_query(message)
-                    
-                    # Use MCP web_search tool to perform the search
-                    tool_call = {
-                        "name": "web_search",
-                        "arguments": {
-                            "query": search_query,
-                            "max_results": self.web_search_max_results,
-                            "search_type": "text"
-                        }
-                    }
-                    
-                    # Execute web search via MCP
-                    tool_results = await self.mcp_client.execute_tool_calls(
-                        [tool_call],
-                        allow_write=True  # Web search doesn't modify files
-                    )
-                    
-                    # Extract results from MCP tool execution
-                    if tool_results and not tool_results[0].get("error", False):
-                        result_text = tool_results[0].get("result", "")
-                        # Parse the formatted result back to structured data
-                        # The MCP tool returns formatted text, so we store it for the prompt
-                        context["web_search_results_mcp"] = result_text
-                        context["web_search_mode"] = "auto"  # Mark as auto-triggered
-                        if web_search_mode == "off":
-                            web_search_mode = "auto"
-                            context["web_search_mode"] = "auto"
-                    else:
-                        error_msg = tool_results[0].get("result", "Unknown error") if tool_results else "No results"
-                        context["web_search_error"] = error_msg
-                except Exception as error:
-                    context["web_search_error"] = f"{type(error).__name__}: {error}"
+            normalized_query = (message or "").strip().lower()
+            requires_browser = any(term in normalized_query for term in [
+                "open ",
+                "visit ",
+                "navigate to ",
+                "browser tab",
+                "google chrome",
+                "use the browser",
+                "show me the website",
+                "display the page",
+                "on the website",
+                "in the browser",
+            ])
+            if requires_browser and not web_search_enabled:
+                context["web_search_error"] = (
+                    "Browser mode is disabled. Enable the browser tab to allow live web lookups."
+                )
             else:
-                # Fallback: if MCP not available, use direct search (shouldn't happen in production)
-                try:
-                    search_query = self._extract_search_query(message)
-                    search_results = await self.perform_web_search(search_query)
-                    if search_results:
-                        context["web_search_results"] = search_results
-                        context["web_search_mode"] = "auto"
-                        if web_search_mode == "off":
-                            web_search_mode = "auto"
+                # Use MCP tools to perform web search instead of direct internet access
+                if self.is_mcp_enabled():
+                    try:
+                        # Extract search query from message
+                        search_query = self._extract_search_query(message)
+                        
+                        # Use MCP web_search tool to perform the search
+                        tool_call = {
+                            "name": "web_search",
+                            "arguments": {
+                                "query": search_query,
+                                "max_results": self.web_search_max_results,
+                                "search_type": "text"
+                            }
+                        }
+                        
+                        # Execute web search via MCP
+                        tool_results = await self.mcp_client.execute_tool_calls(
+                            [tool_call],
+                            allow_write=True  # Web search doesn't modify files
+                        )
+                        
+                        # Extract results from MCP tool execution
+                        if tool_results and not tool_results[0].get("error", False):
+                            result_text = tool_results[0].get("result", "")
+                            context["web_search_results_mcp"] = result_text
+                            structured_results = self._parse_web_search_results_text(result_text)
+                            if structured_results:
+                                context["web_search_results"] = structured_results
+                            context["web_search_mode"] = "auto"  # Mark as auto-triggered
+                            if web_search_mode == "off":
+                                web_search_mode = "auto"
+                                context["web_search_mode"] = "auto"
+                            web_search_enabled = True
+                            context["_web_search_attempted"] = True
+                        else:
+                            error_msg = tool_results[0].get("result", "Unknown error") if tool_results else "No results"
+                            context["web_search_error"] = error_msg
+                            context["_web_search_attempted"] = True
+                    except Exception as error:
+                        context["web_search_error"] = f"{type(error).__name__}: {error}"
+                        context["_web_search_attempted"] = True
+                else:
+                    # Fallback: if MCP not available, use direct search (shouldn't happen in production)
+                    try:
+                        search_query = self._extract_search_query(message)
+                        search_results = await self.perform_web_search(search_query)
+                        if search_results:
+                            context["web_search_results"] = search_results
                             context["web_search_mode"] = "auto"
-                except Exception as error:
-                    context["web_search_error"] = f"{type(error).__name__}: {error}"
+                            if web_search_mode == "off":
+                                web_search_mode = "auto"
+                                context["web_search_mode"] = "auto"
+                            web_search_enabled = True
+                            context["_web_search_attempted"] = True
+                    except Exception as error:
+                        context["web_search_error"] = f"{type(error).__name__}: {error}"
+                        context["_web_search_attempted"] = True
+        if needs_web_search and not web_search_enabled and not context.get("web_search_error"):
+            context["web_search_error"] = (
+                "Browser mode is off, so live web searches are unavailable for this request."
+            )
         elif web_search_mode in ("browser_tab", "google_chrome"):
             # Explicit web search mode - don't perform automatic searches to avoid blocking
             # Instead, just enable web search capability and let the AI decide when to use it via tool calls
@@ -1479,7 +1742,7 @@ class AIService:
         # Check if AI response indicates uncertainty or lack of knowledge
         # If so, try web search as fallback (only if web search mode is not off)
         # When web search mode is "off", rely only on model knowledge
-        if (web_search_mode != "off" and 
+        if (web_search_enabled and 
             not context.get("web_search_results_mcp") and 
             not context.get("web_search_results")):
             if self._detect_ai_uncertainty(response, message):
@@ -1506,7 +1769,11 @@ class AIService:
                         if tool_results and not tool_results[0].get("error", False):
                             result_text = tool_results[0].get("result", "")
                             context["web_search_results_mcp"] = result_text
+                            structured_results = self._parse_web_search_results_text(result_text)
+                            if structured_results:
+                                context["web_search_results"] = structured_results
                             context["web_search_fallback"] = True  # Mark as fallback search
+                            context["_web_search_attempted"] = True
                             
                             # Build follow-up prompt with web search results
                             search_context = f"\n\nWeb search results for your query:\n{result_text}\n\n"
@@ -1531,6 +1798,7 @@ class AIService:
                             results_text = "\n\n".join(formatted_results)
                             context["web_search_results"] = search_results
                             context["web_search_fallback"] = True  # Mark as fallback search
+                            context["_web_search_attempted"] = True
                             
                             # Build follow-up prompt with web search results
                             search_context = f"\n\nWeb search results for your query:\n{results_text}\n\n"
@@ -1550,9 +1818,37 @@ class AIService:
         # Filter out thinking/planning/reporting content
         cleaned_response = self._filter_thinking_content(cleaned_response, context)
         
+        structured_results = self._get_structured_web_results(context)
         # Post-process: If AI used outdated price ($23,433 range), extract correct price from search results
-        if context.get("web_search_results_mcp") or context.get("web_search_results"):
+        if context.get("web_search_results_mcp") or structured_results:
             cleaned_response = self._correct_price_from_search_results(cleaned_response, context)
+        
+        if not cleaned_response.strip() and structured_results:
+            fallback_from_results = self._build_answer_from_web_results(message, structured_results)
+            if fallback_from_results:
+                cleaned_response = fallback_from_results
+        
+        final_uncertain = self._detect_ai_uncertainty(cleaned_response, message)
+        if final_uncertain and structured_results:
+            direct_answer = self._build_answer_from_web_results(message, structured_results)
+            if direct_answer:
+                cleaned_response = direct_answer
+                final_uncertain = False
+                metadata["ai_plan"] = None
+                metadata["file_operations"] = []
+        search_attempted = bool(context.get("_web_search_attempted"))
+        search_results_present = bool(context.get("web_search_results_mcp") or context.get("web_search_results"))
+        needs_fallback = final_uncertain and len(cleaned_response.strip()) < 400
+        if needs_fallback:
+            fallback_query = self._extract_search_query(message or "")
+            cleaned_response = self._build_no_answer_response(
+                fallback_query,
+                web_search_enabled,
+                search_attempted,
+                search_results_present
+            )
+            metadata["ai_plan"] = None
+            metadata["file_operations"] = []
         
         # CRITICAL: Ensure ASK mode NEVER has file operations or plans, even if the AI generated them
         if self._is_ask_context(context):
@@ -1582,12 +1878,14 @@ class AIService:
             "messages": conversation_history or [],
             "last_updated": datetime.now().isoformat()
         }
+        context.pop("_web_search_attempted", None)
         
         result = {
             "content": cleaned_response,
             "conversation_id": conversation_id,
             "timestamp": datetime.now().isoformat(),
-            "context_used": context
+            "context_used": context,
+            "message_id": response_message_id
         }
         
         # Only include file_operations and ai_plan if file modifications are allowed
@@ -1612,10 +1910,10 @@ class AIService:
         
         # Remove common file operation phrases
         patterns_to_remove = [
-            r'```json\s*\{[^}]*"file_operations"[^}]*\}[\s\S]*?```',
-            r'```json\s*\{[^}]*"ai_plan"[^}]*\}[\s\S]*?```',
-            r'\{[^}]*"file_operations"[^}]*\}',
-            r'\{[^}]*"ai_plan"[^}]*\}',
+            rf'```json\s*\{{[^}}]*"(?:{FILE_OP_METADATA_PATTERN})"[^}}]*\}}[\s\S]*?```',
+            rf'```json\s*\{{[^}}]*"(?:{AI_PLAN_METADATA_PATTERN})"[^}}]*\}}[\s\S]*?```',
+            rf'\{{[^}}]*"(?:{FILE_OP_METADATA_PATTERN})"[^}}]*\}}',
+            rf'\{{[^}}]*"(?:{AI_PLAN_METADATA_PATTERN})"[^}}]*\}}',
             r'##?\s*file\s+operations?\s*##?',
             r'##?\s*file\s+operation\s*##?',
         ]
@@ -2148,6 +2446,7 @@ class AIService:
         what_is_patterns = [
             r'\bwhat is\b.*\b(bitcoin|btc|ethereum|eth|stock|company|ceo|president)\b',
             r'\bwho is\b.*\b(current|now|today)\b',
+            r'\bwho is\b.+',
         ]
         
         # General information queries that likely need internet
@@ -2226,6 +2525,10 @@ class AIService:
             r'\bi don\'?t.*have.*latest\b',
             r'\bmy.*knowledge.*up.*to\b',
             r'\btraining.*data.*up.*to\b',
+            r'\bsearch results.*did not provide\b',
+            r'\bsearch results.*no relevant\b',
+            r'\bcouldn\'?t find.*search results\b',
+            r'\bno relevant information.*search results\b',
         ]
         
         # Check for uncertainty indicators
@@ -2255,6 +2558,174 @@ class AIService:
                 return True
         
         return False
+    
+    def _parse_web_search_results_text(self, raw_text: str) -> List[Dict[str, str]]:
+        """Best-effort conversion of MCP web_search text output into structured results."""
+        if not raw_text:
+            return []
+        structured: List[Dict[str, str]] = []
+        text = raw_text.strip()
+        if not text:
+            return []
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict) and "results" in data and isinstance(data["results"], list):
+                items = data["results"]
+            elif isinstance(data, list):
+                items = data
+            else:
+                items = []
+            for item in items:
+                if isinstance(item, dict):
+                    structured.append({
+                        "title": str(item.get("title") or "").strip(),
+                        "url": str(item.get("url") or item.get("link") or item.get("href") or "").strip(),
+                        "snippet": str(item.get("snippet") or item.get("description") or item.get("body") or "").strip(),
+                        "source": str(item.get("source") or item.get("host") or item.get("hostname") or "").strip(),
+                    })
+        except Exception:
+            pass
+        if structured:
+            return structured
+        
+        # Fallback: parse simple bullet/numbered lines.
+        current: Dict[str, str] = {}
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.lower().startswith(("title:", "result ", "- ")):
+                if current:
+                    structured.append(current)
+                    current = {}
+                stripped = stripped.lstrip("- ").strip()
+                if stripped.lower().startswith("title:"):
+                    current["title"] = stripped.split(":", 1)[1].strip()
+                else:
+                    current["title"] = stripped
+                continue
+            if stripped.lower().startswith("url:"):
+                current["url"] = stripped.split(":", 1)[1].strip()
+                continue
+            if stripped.lower().startswith("source:"):
+                current["source"] = stripped.split(":", 1)[1].strip()
+                continue
+            snippet = current.get("snippet", "")
+            current["snippet"] = (snippet + " " + stripped).strip()
+        if current:
+            structured.append(current)
+        
+        # Ensure at least minimal info
+        cleaned = []
+        for item in structured:
+            if any(item.get(k) for k in ("title", "snippet", "url")):
+                cleaned.append({
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "snippet": item.get("snippet", ""),
+                    "source": item.get("source", ""),
+                })
+        return cleaned
+
+    def _get_structured_web_results(self, context: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Ensure we always work with a list of structured web search results."""
+        results = context.get("web_search_results")
+        if isinstance(results, dict):
+            results = [results]
+        if not isinstance(results, list):
+            return []
+        structured: List[Dict[str, str]] = []
+        for item in results:
+            if isinstance(item, dict):
+                structured.append({
+                    "title": str(item.get("title") or "").strip(),
+                    "url": str(item.get("url") or "").strip(),
+                    "snippet": str(item.get("snippet") or "").strip(),
+                    "source": str(item.get("source") or "").strip(),
+                })
+        return structured
+
+    def _build_answer_from_web_results(
+        self,
+        message: str,
+        structured_results: List[Dict[str, str]]
+    ) -> Optional[str]:
+        """Generate a direct answer from structured search results."""
+        if not structured_results:
+            return None
+        query = (message or "").strip()
+        best = None
+        for result in structured_results:
+            snippet = (result.get("snippet") or "").strip()
+            if snippet:
+                best = result
+                break
+            if not best and (result.get("title") or result.get("url")):
+                best = result
+        if not best:
+            return None
+
+        snippet = (best.get("snippet") or "").strip()
+        if not snippet:
+            snippet = (best.get("title") or "").strip()
+        if not snippet:
+            return None
+        snippet = snippet.replace('\n', ' ').strip()
+        if len(snippet.split('. ')) > 1:
+            snippet = snippet.split('. ')[0].strip()
+
+        source = (best.get("source") or "").strip()
+        url = (best.get("url") or "").strip()
+        if url and not source:
+            parsed = re.sub(r'^https?://(www\.)?', '', url).split('/')[0]
+            source = parsed
+
+        answer_parts = [snippet]
+        if source:
+            if url:
+                answer_parts.append(f"Source: {source} ({url})")
+            else:
+                answer_parts.append(f"Source: {source}")
+        elif url:
+            answer_parts.append(f"Source: {url}")
+
+        if query and query.lower() not in snippet.lower():
+            answer_parts.insert(0, f"Query: {query}")
+
+        return "\n\n".join(part for part in answer_parts if part)
+    
+    def _build_no_answer_response(
+        self,
+        query: str,
+        web_search_available: bool,
+        search_attempted: bool,
+        search_results_present: bool
+    ) -> str:
+        """Create a safe fallback response when no reliable information is available."""
+        normalized_query = (query or "").strip('" ') or "this request"
+        normalized_query = normalized_query.replace('\n', ' ')[:160]
+        quoted_query = f"“{normalized_query}”"
+        
+        if web_search_available:
+            if search_attempted:
+                if search_results_present:
+                    return (
+                        f"I searched the web for {quoted_query}, but the available sources didn't provide a reliable answer. "
+                        "Please share more context or specify another query so I can keep looking."
+                    )
+                return (
+                    f"I attempted to search the web for {quoted_query}, but couldn't retrieve any trustworthy results. "
+                    "Try rephrasing the request or provide more details so I can search again."
+                )
+            return (
+                f"I don't have enough information about {quoted_query} yet. "
+                "Please allow me to run a web search (browser tab must stay enabled) or provide more context."
+            )
+        
+        return (
+            f"I don't have reliable information about {quoted_query}. "
+            "Enable the browser tab or provide additional details if you'd like me to search the internet."
+        )
     
     def _extract_search_query(self, message: str) -> str:
         """Extract or optimize search query from user message"""
@@ -2314,6 +2785,20 @@ class AIService:
         mode_value = (context.get("mode") or "").lower()
         chat_mode_value = (context.get("chat_mode") or "").lower()
         return mode_value == "plan" or chat_mode_value == "plan"
+    
+    @staticmethod
+    def _is_browser_search_enabled(web_search_mode: str) -> bool:
+        """Browser tab search is only available when explicitly enabled."""
+        normalized = (web_search_mode or "").lower()
+        return normalized in ("browser_tab", "google_chrome")
+    
+    @staticmethod
+    def _browser_disabled_response() -> str:
+        """Message shown when search is required but browser tab is off."""
+        return (
+            "I don't have enough local information to answer that confidently. "
+            "Please turn on Browser Tab web search and ask again so I can look it up online."
+        )
     
     def _can_modify_files(self, context: Dict[str, Any]) -> bool:
         """Centralized check: returns True only if file modifications are allowed"""

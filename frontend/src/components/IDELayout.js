@@ -8,7 +8,8 @@ import {
   Infinity, AtSign, Globe, Image, Mic, Square, Plus, Clock, History, MoreVertical,
   RefreshCw, Minimize2, Workflow, Trash2,
   Sparkles, Brain, ListChecks, FileSearch, Milestone, PenTool,
-  Activity, ShieldCheck, Megaphone, AlertTriangle
+  Activity, ShieldCheck, Megaphone, AlertTriangle,
+  ThumbsUp, ThumbsDown
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
@@ -805,6 +806,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   
   // Chat states
   const [chatMessages, setChatMessages] = useState([]);
+  const [messageFeedback, setMessageFeedback] = useState({});
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState({});
   const [chatInput, setChatInput] = useState('');
   const [composerInput, setComposerInput] = useState('');
   const [followUpInput, setFollowUpInput] = useState('');
@@ -837,6 +840,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [acceptedLines, setAcceptedLines] = useState(new Map()); // Track accepted lines per operation
   const [declinedLines, setDeclinedLines] = useState(new Map()); // Track declined lines per operation
   const [showReviewButton, setShowReviewButton] = useState(false); // Show "Review the Files" button
+  const [lineReviewRefreshKey, setLineReviewRefreshKey] = useState(0);
+  const triggerLineReviewRefresh = useCallback(() => {
+    setLineReviewRefreshKey((prev) => prev + 1);
+  }, []);
   const [chatStatus, setChatStatus] = useState(null);
   const [isLoadingStatus, setIsLoadingStatus] = useState(false);
   const [showConnectivityPanel, setShowConnectivityPanel] = useState(false);
@@ -4416,7 +4423,9 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
         rawContent: assistantContent,
         timestamp: response.timestamp,
         plan: assistantPlan,
-        activityLog: response.activity_log || null
+        activityLog: response.activity_log || null,
+        messageId: response.message_id || null,
+        conversationId: response.conversation_id || null,
       };
 
       setChatMessages(prev => {
@@ -4498,6 +4507,35 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
     await handleSendChat(followUpInput, shouldUseComposer);
     setFollowUpInput('');
   };
+
+  const handleMessageFeedback = useCallback(async (message, rating) => {
+    if (!message?.messageId || !message?.conversationId) {
+      toast.error('Feedback is unavailable for this response.');
+      return;
+    }
+    if (feedbackSubmitting[message.messageId]) {
+      return;
+    }
+    setFeedbackSubmitting((prev) => ({ ...prev, [message.messageId]: true }));
+    try {
+      await ApiService.submitFeedback({
+        conversationId: message.conversationId,
+        messageId: message.messageId,
+        rating,
+      });
+      setMessageFeedback((prev) => ({ ...prev, [message.messageId]: rating }));
+      toast.success(rating === 'like' ? 'Marked as helpful.' : 'Marked as not helpful.');
+    } catch (error) {
+      console.error('Failed to submit feedback', error);
+      toast.error(error.response?.data?.detail || 'Failed to submit feedback');
+    } finally {
+      setFeedbackSubmitting((prev) => {
+        const next = { ...prev };
+        delete next[message.messageId];
+        return next;
+      });
+    }
+  }, [feedbackSubmitting]);
 
   // Clear any inline diff decorations in the editor
   const clearEditorDiffDecorations = useCallback(() => {
@@ -4914,7 +4952,8 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
       return newMap;
     });
     setReviewedOperations((prev) => new Set([...prev, opIndex]));
-  }, [applyLineChangesToFile]);
+    triggerLineReviewRefresh();
+  }, [applyLineChangesToFile, triggerLineReviewRefresh]);
 
   const handleAcceptLine = useCallback((opIndex, lineNumber, lineType) => {
     handleAcceptLines(opIndex, [lineNumber], lineType);
@@ -4939,7 +4978,8 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
       next.delete(opIndex);
       return next;
     });
-  }, [applyLineChangesToFile]);
+    triggerLineReviewRefresh();
+  }, [applyLineChangesToFile, triggerLineReviewRefresh]);
 
   const handleDeclineLines = useCallback((opIndex, lineNumbers, lineType = 'added') => {
     if (!Array.isArray(lineNumbers) || lineNumbers.length === 0) {
@@ -4965,7 +5005,8 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
       return newMap;
     });
     setReviewedOperations((prev) => new Set([...prev, opIndex]));
-  }, [applyLineChangesToFile]);
+    triggerLineReviewRefresh();
+  }, [applyLineChangesToFile, triggerLineReviewRefresh]);
 
   const handleDeclineLine = useCallback((opIndex, lineNumber, lineType) => {
     handleDeclineLines(opIndex, [lineNumber], lineType);
@@ -5023,7 +5064,8 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
       next.delete(opIndex);
       return next;
     });
-  }, []);
+    triggerLineReviewRefresh();
+  }, [triggerLineReviewRefresh]);
 
   // Refs to always get latest versions of handlers for event listeners
   const handleAcceptLinesRef = useRef(handleAcceptLines);
@@ -5130,11 +5172,12 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
         return;
       }
       resetAcceptedStateForOperationRef.current?.(activeFileOperationIndex);
+      openOperationPreview(activeOp);
     };
 
     window.addEventListener('keydown', handleUndoHotkey, true);
     return () => window.removeEventListener('keydown', handleUndoHotkey, true);
-  }, [pendingFileOperations, activeFileOperationIndex, activeTab]);
+  }, [pendingFileOperations, activeFileOperationIndex, activeTab, openOperationPreview]);
 
   const handleDiscardPendingFileOperations = async () => {
     if (!pendingFileOperations || !pendingFileOperations.operations) {
@@ -5301,6 +5344,21 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
 
     if (!normalizedPath || normalizedActiveTab !== normalizedPath) {
       clearEditorDiffDecorations();
+      return;
+    }
+
+    const proposedContent = op.afterContent || op.content || '';
+    const editor = editorRef.current;
+    const editorValue = editor?.getValue ? editor.getValue() : null;
+    const activeFileEntry = openFiles.find((file) => normalizeEditorPath(file.path) === normalizedPath);
+    const fileContentMatches = activeFileEntry?.content === proposedContent;
+    const editorContentMatches = typeof editorValue === 'string' && editorValue === proposedContent;
+
+    if (!fileContentMatches && !editorContentMatches) {
+      const hasUserEdits = activeFileEntry && activeFileEntry.modified && !activeFileEntry.aiPreview;
+      if (!hasUserEdits) {
+        openOperationPreview(op);
+      }
       return;
     }
 
@@ -5812,6 +5870,9 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
     declinedLines,
     handleAcceptLine,
     handleDeclineLine,
+    openFiles,
+    openOperationPreview,
+    lineReviewRefreshKey,
   ]);
 
   const renderFileTree = (fileList, depth = 0, parentPath = null) => {
@@ -6943,6 +7004,14 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                         message.rawContent ?? message.content
                       );
                       const formattedHtml = formatMessageContent(normalizedContent);
+                      const currentFeedback =
+                        message.messageId && messageFeedback[message.messageId]
+                          ? messageFeedback[message.messageId]
+                          : null;
+                      const isSubmittingFeedback =
+                        message.messageId && feedbackSubmitting[message.messageId];
+                      const feedbackButtonBase =
+                        'flex items-center gap-1 px-2 py-1 rounded-md border text-xs transition-colors';
                       return (
                         <div
                           className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
@@ -7014,6 +7083,49 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                                 </div>
                               </div>
                             )}
+                          {message.role === 'assistant' && message.messageId && (
+                            <div className="mt-3 flex items-center gap-3 text-xs text-dark-400">
+                              <span>Was this helpful?</span>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  disabled={Boolean(isSubmittingFeedback)}
+                                  onClick={() => handleMessageFeedback(message, 'like')}
+                                  className={`${feedbackButtonBase} ${
+                                    currentFeedback === 'like'
+                                      ? 'bg-primary-600/20 border-primary-500 text-primary-100'
+                                      : 'border-dark-600 text-dark-300 hover:text-dark-100'
+                                  } ${isSubmittingFeedback ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                  title="Mark response as helpful"
+                                  aria-pressed={currentFeedback === 'like'}
+                                >
+                                  <ThumbsUp
+                                    className="w-3.5 h-3.5"
+                                    fill={currentFeedback === 'like' ? 'currentColor' : 'none'}
+                                  />
+                                  Like
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={Boolean(isSubmittingFeedback)}
+                                  onClick={() => handleMessageFeedback(message, 'dislike')}
+                                  className={`${feedbackButtonBase} ${
+                                    currentFeedback === 'dislike'
+                                      ? 'bg-red-600/20 border-red-500 text-red-200'
+                                      : 'border-dark-600 text-dark-300 hover:text-dark-100'
+                                  } ${isSubmittingFeedback ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                  title="Mark response as not helpful"
+                                  aria-pressed={currentFeedback === 'dislike'}
+                                >
+                                  <ThumbsDown
+                                    className="w-3.5 h-3.5"
+                                    fill={currentFeedback === 'dislike' ? 'currentColor' : 'none'}
+                                  />
+                                  Dislike
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}

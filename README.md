@@ -100,6 +100,7 @@ python start_backend.py
   - `OLLAMA_URL`: Ollama server URL (for example `http://localhost:11434`).
   - `DEFAULT_MODEL`: default AI model name (for example `codellama`).
   - `MAX_FILE_SIZE`: maximum file size the agent will read/edit.
+  - `MCP_CACHE_TTL_SECONDS`: how long (in seconds) MCP directory/tree responses are cached to speed up repeated tool calls (default `4`).
   - `LOG_LEVEL`, `DEBUG`, `RELOAD`, and basic model settings like `MAX_TOKENS`, `TEMPERATURE`, `TOP_P`.
 
 ### Start Scripts Overview

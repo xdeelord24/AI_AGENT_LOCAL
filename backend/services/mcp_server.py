@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import subprocess
+import time
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 
@@ -47,6 +48,32 @@ class MCPServerTools:
         self.web_search_enabled = web_search_enabled
         self.workspace_root = os.getcwd()
         self._web_search_service = web_search_service  # Shared web search service instance
+        try:
+            self._cache_ttl_seconds = max(1, int(os.getenv("MCP_CACHE_TTL_SECONDS", "4")))
+        except ValueError:
+            self._cache_ttl_seconds = 4
+        self._dir_cache: Dict[str, Dict[str, Any]] = {}
+        self._tree_cache: Dict[str, Dict[str, Any]] = {}
+
+    def _build_cache_key(self, path: str, suffix: str = "") -> str:
+        normalized = os.path.abspath(path)
+        return f"{normalized}::{suffix}" if suffix else normalized
+
+    def _get_cached_text(self, cache: Dict[str, Dict[str, Any]], key: str) -> Optional[str]:
+        entry = cache.get(key)
+        if not entry:
+            return None
+        if (time.time() - entry.get("ts", 0)) > self._cache_ttl_seconds:
+            cache.pop(key, None)
+            return None
+        return entry.get("text")
+
+    def _set_cached_text(self, cache: Dict[str, Dict[str, Any]], key: str, text: str) -> None:
+        cache[key] = {"ts": time.time(), "text": text}
+
+    def _invalidate_structure_caches(self) -> None:
+        self._dir_cache.clear()
+        self._tree_cache.clear()
     
     def get_tools(self) -> List[Tool]:
         """Get list of available MCP tools"""
@@ -320,6 +347,7 @@ class MCPServerTools:
                 path = os.path.join(self.workspace_root, path)
             
             await self.file_service.write_file(path, content)
+            self._invalidate_structure_caches()
             return [TextContent(type="text", text=f"Successfully wrote to {path}")]
         except Exception as e:
             return [TextContent(type="text", text=f"Error writing file: {str(e)}")]
@@ -333,7 +361,12 @@ class MCPServerTools:
             # Normalize path
             if not os.path.isabs(path) or path == ".":
                 path = os.path.join(self.workspace_root, path) if path != "." else self.workspace_root
-            
+
+            cache_key = self._build_cache_key(path, "list")
+            cached_text = self._get_cached_text(self._dir_cache, cache_key)
+            if cached_text:
+                return [TextContent(type="text", text=cached_text)]
+
             files = await self.file_service.list_directory(path)
             file_list = []
             for file_info in files:
@@ -342,6 +375,7 @@ class MCPServerTools:
                 file_list.append(f"{file_type:4s} {file_info.name:50s} {size}")
             
             result = f"Directory: {path}\n\n" + "\n".join(file_list)
+            self._set_cached_text(self._dir_cache, cache_key, result)
             return [TextContent(type="text", text=result)]
         except Exception as e:
             return [TextContent(type="text", text=f"Error listing directory: {str(e)}")]
@@ -356,8 +390,22 @@ class MCPServerTools:
                 path = os.path.join(self.workspace_root, path) if path != "." else self.workspace_root
             
             results = await self.file_service.search_files(query, path)
-            result_list = [f"- {r}" for r in results[:20]]  # Limit to 20 results
-            result = f"Search results for '{query}' in {path}:\n\n" + "\n".join(result_list)
+            if not results:
+                return [TextContent(type="text", text=f"No files matching '{query}' were found in {path}.")]
+
+            formatted_results = []
+            for entry in results[:20]:
+                entry_path = entry.get("path") or entry.get("name") or ""
+                info_parts = []
+                size_value = entry.get("size")
+                if isinstance(size_value, int):
+                    info_parts.append(f"{size_value} bytes")
+                if entry.get("modified_time"):
+                    info_parts.append(f"modified {entry['modified_time']}")
+                meta = f" ({'; '.join(info_parts)})" if info_parts else ""
+                formatted_results.append(f"- {entry_path}{meta}")
+
+            result = f"Search results for '{query}' in {path}:\n\n" + "\n".join(formatted_results)
             if len(results) > 20:
                 result += f"\n... and {len(results) - 20} more results"
             return [TextContent(type="text", text=result)]
@@ -372,7 +420,12 @@ class MCPServerTools:
         try:
             if not os.path.isabs(path) or path == ".":
                 path = os.path.join(self.workspace_root, path) if path != "." else self.workspace_root
-            
+
+            cache_key = self._build_cache_key(path, f"tree:{max_depth}")
+            cached_text = self._get_cached_text(self._tree_cache, cache_key)
+            if cached_text:
+                return [TextContent(type="text", text=cached_text)]
+
             tree = await self.file_service.get_project_structure(path, max_depth=max_depth)
             
             def format_tree(node, indent=0):
@@ -385,6 +438,7 @@ class MCPServerTools:
             
             tree_lines = format_tree(tree)
             result = f"File tree for {path}:\n\n" + "\n".join(tree_lines)
+            self._set_cached_text(self._tree_cache, cache_key, result)
             return [TextContent(type="text", text=result)]
         except Exception as e:
             return [TextContent(type="text", text=f"Error getting file tree: {str(e)}")]
@@ -473,6 +527,7 @@ class MCPServerTools:
                 if error:
                     result += f"STDERR:\n{error}\n"
                 
+                self._invalidate_structure_caches()
                 return [TextContent(type="text", text=result)]
             except asyncio.TimeoutError:
                 process.kill()

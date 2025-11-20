@@ -102,6 +102,15 @@ class ApiService {
     });
   }
 
+  static async submitFeedback({ conversationId, messageId, rating, comment = null }) {
+    return this.post('/api/chat/feedback', {
+      conversation_id: conversationId,
+      message_id: messageId,
+      rating,
+      comment,
+    });
+  }
+
   // Chat Sessions API
   static async createChatSession(title, messages, conversationId = null) {
     return this.post('/api/chat/sessions', {
