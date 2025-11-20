@@ -434,13 +434,18 @@ class AIService:
 
         return statuses
     
-    def _parse_response_metadata(self, response: str) -> Tuple[str, Dict[str, Any]]:
+    def _parse_response_metadata(self, response: str, context: Optional[Dict[str, Any]] = None) -> Tuple[str, Dict[str, Any]]:
         """Extract metadata such as file operations or AI plans from the response"""
         cleaned_response = response
         metadata: Dict[str, Any] = {
             "file_operations": [],
             "ai_plan": None
         }
+        
+        # In ASK mode, never extract file operations or plans
+        is_ask_mode = context and self._is_ask_context(context)
+        if is_ask_mode:
+            return cleaned_response, metadata
 
         def extract_from_json(json_str: str) -> bool:
             """
@@ -536,6 +541,275 @@ class AIService:
 
         return cleaned_response, metadata
 
+    def _filter_thinking_content(self, response: str, context: Dict[str, Any]) -> str:
+        """Remove thinking, planning, and reporting content from the response, keeping only the actual answer."""
+        if not response or not response.strip():
+            return response
+        
+        is_ask_mode = self._is_ask_context(context)
+        is_agent_mode = self._is_agent_context(context)
+        
+        # Remove the "(Generated concrete file operations automatically.)" message
+        response = re.sub(r'\(Generated concrete file operations automatically\.\)', '', response, flags=re.IGNORECASE)
+        
+        # Remove JSON code blocks that contain metadata (ai_plan, file_operations)
+        json_block_pattern = r'```(?:json|text|python)?\s*\{[\s\S]*?"(?:ai_plan|file_operations)"[\s\S]*?\}[\s\S]*?```'
+        response = re.sub(json_block_pattern, '', response, flags=re.IGNORECASE | re.DOTALL)
+        
+        # Remove standalone JSON objects with metadata
+        json_metadata_pattern = r'\{[\s\S]*?"(?:ai_plan|file_operations)"[\s\S]*?\}'
+        response = re.sub(json_metadata_pattern, '', response, flags=re.IGNORECASE | re.DOTALL)
+        
+        lines = response.split('\n')
+        filtered_lines = []
+        in_thinking_section = False
+        in_planning_section = False
+        in_reporting_section = False
+        in_file_operations_section = False
+        seen_sections = set()  # Track seen section headers to remove duplicates
+        
+        # Patterns that indicate thinking/planning/reporting content
+        thinking_patterns = [
+            r'^(let me|i\'ll|i will|i need to|i should|i must|i\'m going to|i am going to)',
+            r'^(first|second|third|next|then|after that|finally|now|so)',
+            r'^(thinking|analyzing|considering|evaluating|reviewing)',
+            r'^(to understand|to analyze|to determine|to figure out|to identify)',
+            r'^(let me think|let me analyze|let me check|let me review)',
+            r'^(i think|i believe|i assume|i suppose|i guess)',
+            r'^(based on|according to|from what i can see)',
+        ]
+        
+        planning_patterns = [
+            r'^(here\'s my plan|here is my plan|my plan is|the plan is)',
+            r'^(i\'ll break this down|i will break this down|breaking this down)',
+            r'^(step \d+|task \d+|phase \d+)',
+            r'^(first step|next step|final step|last step)',
+            r'^(plan:|planning:|strategy:)',
+            r'^(i\'ll start by|i will start by|starting with)',
+            r'^(let me create a plan|let me outline|let me structure)',
+            r'^(update aiplan|update ai_plan|update ai plan)',
+            r'^(gather more information|gathering information|to gather)',
+            r'^(after (inspecting|determining|completing)|i will update)',
+            r'^(inspect|inspecting)',
+        ]
+        
+        reporting_patterns = [
+            r'^(summary:|summary of|in summary|to summarize)',
+            r'^(report:|reporting:|final report|completion report)',
+            r'^(i\'ve completed|i have completed|i completed|completed:)',
+            r'^(done:|finished:|completed tasks:)',
+            r'^(results:|outcomes:|conclusion:)',
+            r'^(all tasks are|all steps are|everything is)',
+        ]
+        
+        # Section headers that indicate thinking/planning/reporting
+        thinking_headers = [
+            '## thinking',
+            '## analysis',
+            '## reasoning',
+            '## understanding',
+            '### thinking',
+            '### analysis',
+            '### reasoning',
+            '### understanding',
+        ]
+        
+        planning_headers = [
+            '## plan',
+            '## planning',
+            '## strategy',
+            '## approach',
+            '## steps',
+            '## tasks',
+            '### plan',
+            '### planning',
+            '### strategy',
+            '### approach',
+            '### steps',
+            '### tasks',
+        ]
+        
+        reporting_headers = [
+            '## report',
+            '## summary',
+            '## results',
+            '## conclusion',
+            '## completion',
+            '### report',
+            '### summary',
+            '### results',
+            '### conclusion',
+            '### completion',
+        ]
+        
+        file_operations_headers = [
+            '## file operations',
+            '## file operation',
+            '### file operations',
+            '### file operation',
+            '## file operations:',
+            '### file operations:',
+        ]
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            line_lower = line.lower().strip()
+            
+            # Check for duplicate section headers (remove duplicates)
+            if line_lower.startswith('##') or line_lower.startswith('###'):
+                section_key = line_lower[:50]  # Use first 50 chars as key
+                if section_key in seen_sections:
+                    # Skip duplicate section
+                    i += 1
+                    # Skip until next section or end
+                    while i < len(lines) and not (lines[i].strip().startswith('##') or lines[i].strip().startswith('###')):
+                        i += 1
+                    continue
+                seen_sections.add(section_key)
+            
+            # Check for "File Operations" sections (always remove in ASK mode, remove in other modes if empty)
+            if any(line_lower.startswith(header) for header in file_operations_headers):
+                in_file_operations_section = True
+                in_thinking_section = False
+                in_planning_section = False
+                in_reporting_section = False
+                i += 1
+                continue
+            
+            # Check for section headers
+            if any(line_lower.startswith(header) for header in thinking_headers):
+                in_thinking_section = True
+                in_planning_section = False
+                in_reporting_section = False
+                i += 1
+                continue
+            
+            if any(line_lower.startswith(header) for header in planning_headers):
+                in_thinking_section = False
+                in_planning_section = True
+                in_reporting_section = False
+                i += 1
+                continue
+            
+            if any(line_lower.startswith(header) for header in reporting_headers):
+                in_thinking_section = False
+                in_planning_section = False
+                in_reporting_section = True
+                i += 1
+                continue
+            
+            # Check if we're exiting a section (new heading or empty line followed by content)
+            if line.strip().startswith('##') or line.strip().startswith('###'):
+                in_thinking_section = False
+                in_planning_section = False
+                in_reporting_section = False
+                in_file_operations_section = False
+            
+            # Skip file operations sections (always in ASK mode, or if empty in other modes)
+            if in_file_operations_section:
+                if is_ask_mode:
+                    i += 1
+                    continue
+                # In other modes, check if this line is part of file operations content
+                if line_lower and ('file' in line_lower and 'operation' in line_lower):
+                    i += 1
+                    continue
+                # Exit file operations section if we hit a new section or meaningful content
+                if line.strip().startswith('##') or line.strip().startswith('###'):
+                    in_file_operations_section = False
+                elif line.strip() and not line_lower.startswith(('```', '- ', '* ', '1. ', '2. ')):
+                    # If we hit non-file-ops content, exit the section
+                    in_file_operations_section = False
+            
+            # Skip thinking sections entirely
+            if in_thinking_section:
+                i += 1
+                continue
+            
+            # Skip planning sections in ASK mode, but keep them in AGENT mode if they're brief
+            if in_planning_section:
+                if is_ask_mode:
+                    i += 1
+                    continue
+                # In agent mode, only skip if it's clearly just planning prose
+                if any(re.match(pattern, line_lower) for pattern in planning_patterns):
+                    i += 1
+                    continue
+            
+            # Skip reporting sections that are just summaries (unless it's the only content)
+            if in_reporting_section:
+                if any(re.match(pattern, line_lower) for pattern in reporting_patterns):
+                    # Check if there's substantial content before this
+                    if len(filtered_lines) > 5:
+                        i += 1
+                        continue
+            
+            # Check for thinking patterns in regular lines (only at start of line)
+            # Be more conservative - only skip if it's clearly thinking prose
+            if line_lower and not line_lower.startswith(('```', '##', '###', '- ', '* ', '1. ', '2. ')):
+                if any(re.match(pattern, line_lower) for pattern in thinking_patterns):
+                    # Skip this line and potentially following lines if they continue the thought
+                    i += 1
+                    # Skip continuation lines (indented or starting with "  ")
+                    while i < len(lines) and (lines[i].startswith('  ') or lines[i].strip() == ''):
+                        i += 1
+                    continue
+            
+            # Check for planning patterns (skip in ASK mode)
+            if is_ask_mode and any(re.match(pattern, line_lower) for pattern in planning_patterns):
+                i += 1
+                continue
+            
+            # Keep the line
+            filtered_lines.append(line)
+            i += 1
+        
+        result = '\n'.join(filtered_lines).strip()
+        
+        # Remove unhelpful phrases that don't provide answers
+        unhelpful_phrases = [
+            r'please provide more (context|information|details)',
+            r'i need (more|additional) (information|context|details)',
+            r'to complete (this|the) task, i need',
+            r'specify the next step',
+        ]
+        for phrase in unhelpful_phrases:
+            result = re.sub(phrase, '', result, flags=re.IGNORECASE)
+        
+        # Clean up multiple consecutive empty lines
+        result = re.sub(r'\n{3,}', '\n\n', result)
+        
+        # Remove lines that are just "File Operations" or similar
+        result_lines = result.split('\n')
+        cleaned_result_lines = []
+        for line in result_lines:
+            line_lower = line.lower().strip()
+            if line_lower in ('file operations', 'file operation', 'project overview', 'verification'):
+                continue
+            cleaned_result_lines.append(line)
+        result = '\n'.join(cleaned_result_lines).strip()
+        
+        # If we filtered everything, return a minimal response
+        if not result or len(result) < 10:
+            # Try to extract just code blocks or the last meaningful paragraph
+            code_blocks = re.findall(r'```[\s\S]*?```', response, re.DOTALL)
+            if code_blocks:
+                return '\n\n'.join(code_blocks)
+            
+            # Return the last paragraph that's not thinking/planning
+            paragraphs = response.split('\n\n')
+            for para in reversed(paragraphs):
+                para_lower = para.lower().strip()
+                if not any(re.match(pattern, para_lower) for pattern in thinking_patterns + planning_patterns):
+                    if len(para.strip()) > 20:
+                        return para.strip()
+            
+            # Last resort: return original if filtering removed everything
+            return response.strip()
+        
+        return result
+
     async def perform_web_search(self, query: str, max_results: Optional[int] = None) -> List[Dict[str, Any]]:
         """Fetch search results from DuckDuckGo when browsing is enabled."""
         if not query or DDGS is None:
@@ -616,10 +890,19 @@ class AIService:
         # Get response from configured provider
         response = await self._call_model(prompt)
         
-        # Parse metadata from response
-        cleaned_response, metadata = self._parse_response_metadata(response)
+        # Parse metadata from response (pass context to block extraction in ASK mode)
+        cleaned_response, metadata = self._parse_response_metadata(response, context)
         
-        if not metadata.get("file_operations") and self._should_force_file_operations(message, cleaned_response, context):
+        # Filter out thinking/planning/reporting content
+        cleaned_response = self._filter_thinking_content(cleaned_response, context)
+        
+        # Double-check: ensure ASK mode never has file operations or plans
+        if self._is_ask_context(context):
+            metadata["file_operations"] = []
+            metadata["ai_plan"] = None
+        
+        # Never generate file operations in ASK mode
+        if not self._is_ask_context(context) and not metadata.get("file_operations") and self._should_force_file_operations(message, cleaned_response, context):
             fallback_cleaned, fallback_metadata = await self._generate_file_operations_metadata(
                 message=message,
                 context=context,
@@ -649,12 +932,14 @@ class AIService:
             "context_used": context
         }
         
-        file_operations = metadata.get("file_operations") or []
-        if file_operations:
-            result["file_operations"] = file_operations
+        # Only include file_operations and ai_plan if not in ASK mode
+        if not self._is_ask_context(context):
+            file_operations = metadata.get("file_operations") or []
+            if file_operations:
+                result["file_operations"] = file_operations
 
-        if metadata.get("ai_plan"):
-            result["ai_plan"] = metadata["ai_plan"]
+            if metadata.get("ai_plan"):
+                result["ai_plan"] = metadata["ai_plan"]
         
         return result
     
@@ -670,6 +955,7 @@ class AIService:
         chat_mode_value = (context.get("chat_mode") or "").lower()
         is_composer = bool(context.get("composer_mode"))
         is_agent_mode = is_composer or mode_value in ("agent", "plan") or chat_mode_value in ("agent", "plan")
+        is_ask_mode = (not is_agent_mode) and (mode_value == "ask" or chat_mode_value == "ask")
 
         prompt_parts = [
             "You are an expert AI coding assistant similar to Cursor. You help developers with:",
@@ -680,8 +966,34 @@ class AIService:
             "- Creating and editing files",
             "- Best practices and patterns",
             "",
-            "IMPORTANT: When the user asks you to create, edit, or modify files, you MUST include",
-            "file operations in a special JSON format at the end of your response.",
+        ]
+
+        if is_ask_mode:
+            prompt_parts.extend([
+                "ASK MODE (read-only) REQUIREMENTS:",
+                "- Provide a single, direct answer focused on the user's question.",
+                "- DO NOT include thinking, planning, or reasoning prose in your response—just provide the answer directly.",
+                "- ABSOLUTELY FORBIDDEN: Do NOT create, edit, or delete ANY files. ASK mode is read-only.",
+                "- ABSOLUTELY FORBIDDEN: Do NOT emit file_operations or ai_plan metadata in ANY form (not in JSON blocks, not in code, not anywhere).",
+                "- ABSOLUTELY FORBIDDEN: Do NOT include JSON objects with 'file_operations' or 'ai_plan' keys anywhere in your response.",
+                "- It's fine to include small code snippets for illustration, but never instruct the IDE to modify files.",
+                "- If the user requests edits, explain that Ask mode is read-only and suggest switching to Agent mode instead of performing the change.",
+                "- Your response must be pure text/markdown with NO file operation metadata whatsoever.",
+                "",
+            ])
+        else:
+            prompt_parts.extend([
+                "IMPORTANT: When the user asks you to create, edit, or modify files, you MUST include",
+                "file operations in a special JSON format at the end of your response.",
+                "",
+            ])
+
+        prompt_parts.extend([
+            "RESPONSE CONTENT RULES:",
+            "- DO NOT include thinking, planning, reasoning, or reporting prose in your response text.",
+            "- Your response should contain only the actual answer, code, explanations, or results.",
+            "- Avoid phrases like 'Let me think...', 'I'll analyze...', 'Here's my plan...', 'In summary...', etc.",
+            "- If you need to show your thinking process, put it in the `ai_plan` metadata (for agent/plan modes only).",
             "",
             "MARKDOWN FORMATTING RULES:",
             "- Always answer using GitHub-flavored Markdown.",
@@ -697,12 +1009,14 @@ class AIService:
             "- Do not include artificial line numbers inside code blocks.",
             "- When mentioning URLs, either wrap them in backticks or use standard Markdown links like [docs](https://example.com).",
             "",
-        ]
+        ])
 
         if is_agent_mode:
             prompt_parts.extend([
                 "AGENT MODE REQUIREMENTS:",
-                "- Think step-by-step before responding and explicitly narrate your reasoning.",
+                "- Think step-by-step internally, but DO NOT include thinking/planning/reporting prose in your response text.",
+                "- Put your thinking process, planning steps, and task breakdowns in the `ai_plan` metadata only.",
+                "- Your response text should contain only the actual answer, code, explanations, or results—not your internal reasoning process.",
                 "- Break large requests into 3–6 concrete subtasks that flow through this lifecycle: gather information ➜ plan ➜ implement ➜ verify ➜ report.",
                 "- Always begin with at least one information-gathering task (inspect mentioned files, open files, file_tree_structure, or provided web_search_results when browsing is enabled) and actually perform it before you present the plan.",
                 "- Maintain a TODO list (max 5 items) where every task has an id, title, and status (`pending`, `in_progress`, or `completed`). Update statuses as you make progress so the user can monitor it.",
@@ -720,7 +1034,7 @@ class AIService:
                 "- When web_search_mode is not 'off', treat the supplied web_search_results as part of your information-gathering step—never claim you lack browsing ability.",
                 ""
             ])
-        else:
+        elif not is_ask_mode:
             prompt_parts.append("If you develop a TODO plan, include it via the `ai_plan` metadata described below.")
             prompt_parts.append("")
         
@@ -733,20 +1047,32 @@ class AIService:
                 ""
             ])
 
-        prompt_parts.extend(self.METADATA_FORMAT_LINES)
-        prompt_parts.extend([
-            "Always provide practical, working code examples. Be concise but thorough.",
-            "",
-            "ABSOLUTE RULES:",
-            "- If the user mentions files via @filename or provides a path, open those files (content is in CONTEXT) and edit them via file_operations.",
-            "- Do NOT reply with generic statements like 'we need to inspect the file' or 'we need to access the file'—assume the IDE has already provided the relevant file contents in CONTEXT and operate directly on that content.",
-            "- On follow-up requests like \"change it\" or \"update that code\", assume the target file is the current active_file or default_target_file from context and still produce concrete file_operations.",
-            "- Do not stop after describing a plan; always include the updated file content in file_operations so the IDE can apply the change.",
-            "- Keep natural-language responses short; rely on file_operations to convey the actual modifications.",
-            "- When web_search_mode is not 'off', do NOT reply with generic suggestions to visit websites; instead, read the provided web_search_results and answer the user's question as concretely as possible using those results.",
-            '- When web_search_mode is not \"off\", statements like \"I cannot browse the internet\" or \"I cannot access external information\" are FALSE. You DO have access to web_search_results; never claim that you lack browsing or external access.',
-            ""
-        ])
+        if not is_ask_mode:
+            prompt_parts.extend(self.METADATA_FORMAT_LINES)
+            prompt_parts.extend([
+                "Always provide practical, working code examples. Be concise but thorough.",
+                "",
+                "ABSOLUTE RULES:",
+                "- If the user mentions files via @filename or provides a path, open those files (content is in CONTEXT) and edit them via file_operations.",
+                "- Do NOT reply with generic statements like 'we need to inspect the file' or 'we need to access the file'—assume the IDE has already provided the relevant file contents in CONTEXT and operate directly on that content.",
+                "- On follow-up requests like \"change it\" or \"update that code\", assume the target file is the current active_file or default_target_file from context and still produce concrete file_operations.",
+                "- Do not stop after describing a plan; always include the updated file content in file_operations so the IDE can apply the change.",
+                "- Keep natural-language responses short; rely on file_operations to convey the actual modifications.",
+                "- When web_search_mode is not 'off', do NOT reply with generic suggestions to visit websites; instead, read the provided web_search_results and answer the user's question as concretely as possible using those results.",
+                '- When web_search_mode is not "off", statements like "I cannot browse the internet" or "I cannot access external information" are FALSE. You DO have access to web_search_results; never claim that you lack browsing or external access.',
+                ""
+            ])
+        else:
+            prompt_parts.extend([
+                "Always provide practical, working explanations. Be concise but thorough.",
+                "",
+                "ABSOLUTE RULES FOR ASK MODE:",
+                "- Reference the provided context (files, history, or web results) to answer directly.",
+                "- Never include ai_plan or file_operations metadata; respond with natural language only.",
+                "- If fulfilling the request would require editing files, explain the limitation and recommend switching to Agent mode instead of fabricating edits.",
+                ""
+            ])
+
 
         web_search_mode = (context.get("web_search_mode") or "off").lower()
         if web_search_mode in ("browser_tab", "google_chrome"):
@@ -930,6 +1256,15 @@ class AIService:
             return True
         return mode_value in ("agent", "plan") or chat_mode_value in ("agent", "plan")
     
+    def _is_ask_context(self, context: Dict[str, Any]) -> bool:
+        if not context:
+            return False
+        if context.get("composer_mode"):
+            return False
+        mode_value = (context.get("mode") or "").lower()
+        chat_mode_value = (context.get("chat_mode") or "").lower()
+        return mode_value == "ask" or chat_mode_value == "ask"
+    
     def _should_force_file_operations(
         self,
         message: str,
@@ -1017,7 +1352,7 @@ class AIService:
             print(f"Failed to regenerate file operations metadata: {error}")
             return "", {"file_operations": [], "ai_plan": None}
         
-        return self._parse_response_metadata(fallback_response)
+        return self._parse_response_metadata(fallback_response, context)
     
     async def _call_model(self, prompt: str) -> str:
         if self.provider == "huggingface":

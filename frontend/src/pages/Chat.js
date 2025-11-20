@@ -1,8 +1,25 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  Send, Bot, User, Loader2,
-  ChevronDown, Monitor, Infinity, Workflow,
-  Globe, CheckCircle
+  Send,
+  Bot,
+  User,
+  Loader2,
+  ChevronDown,
+  Monitor,
+  Infinity,
+  Workflow,
+  Globe,
+  CheckCircle,
+  Sparkles,
+  Brain,
+  ListChecks,
+  FileSearch,
+  Waypoints,
+  PenTool,
+  Activity,
+  ShieldCheck,
+  Megaphone,
+  AlertTriangle
 } from 'lucide-react';
 import { ApiService } from '../services/api';
 import { formatMessageContent, initializeCopyCodeListeners } from '../utils/messageFormatter';
@@ -71,6 +88,84 @@ const COMMON_FILE_EXTENSIONS = new Set([
 ]);
 
 const SPECIAL_FILENAME_HINTS = new Set(['dockerfile', 'makefile', 'license']);
+
+const THINKING_PHASE_META = {
+  thinking: {
+    label: 'Understanding the request',
+    description: 'Scoping your prompt and recalling prior context.',
+    tone: 'primary'
+  },
+  analysis: {
+    label: 'Analyzing context',
+    description: 'Reviewing recent history and loaded files.',
+    tone: 'info'
+  },
+  grepping: {
+    label: 'Searching the workspace',
+    description: 'Finding relevant references and examples.',
+    tone: 'info'
+  },
+  collecting: {
+    label: 'Collecting structure',
+    description: 'Mapping folders, open files, and dependencies.',
+    tone: 'muted'
+  },
+  subtasks: {
+    label: 'Planning tasks',
+    description: 'Breaking the request into actionable TODOs.',
+    tone: 'primary'
+  },
+  sequencing: {
+    label: 'Sequencing plan',
+    description: 'Ordering tasks for safe execution.',
+    tone: 'primary'
+  },
+  drafting: {
+    label: 'Drafting changes',
+    description: 'Drafting code edits and explanations.',
+    tone: 'accent'
+  },
+  monitoring: {
+    label: 'Tracking progress',
+    description: 'Ensuring plan stays on course.',
+    tone: 'muted'
+  },
+  verifying: {
+    label: 'Verifying work',
+    description: 'Running quick checks before responding.',
+    tone: 'success'
+  },
+  reporting: {
+    label: 'Reporting results',
+    description: 'Summarizing findings and next steps.',
+    tone: 'success'
+  },
+  responding: {
+    label: 'Packaging answer',
+    description: 'Finalizing wording for delivery.',
+    tone: 'accent'
+  },
+  error: {
+    label: 'Issue detected',
+    description: 'Ran into an unexpected problem.',
+    tone: 'danger'
+  }
+};
+
+const PHASE_ICON_MAP = {
+  thinking: Brain,
+  analysis: FileSearch,
+  grepping: FileSearch,
+  collecting: Waypoints,
+  subtasks: ListChecks,
+  sequencing: Waypoints,
+  drafting: PenTool,
+  monitoring: Activity,
+  verifying: ShieldCheck,
+  reporting: Megaphone,
+  responding: Sparkles,
+  error: AlertTriangle
+};
 
 const formatDuration = (ms = 0) => {
   if (ms == null || Number.isNaN(ms)) {
@@ -219,6 +314,89 @@ const ActivityTimeline = ({
         })}
       </ol>
     </CollapsibleSection>
+  );
+};
+
+const toneClasses = {
+  primary: 'border-primary-500 text-primary-100 bg-primary-500/10',
+  accent: 'border-purple-500 text-purple-100 bg-purple-500/10',
+  info: 'border-blue-500 text-blue-100 bg-blue-500/10',
+  muted: 'border-dark-600 text-dark-200 bg-dark-800/60',
+  success: 'border-emerald-500 text-emerald-100 bg-emerald-500/10',
+  danger: 'border-red-500 text-red-100 bg-red-500/10'
+};
+
+const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
+  if (!Array.isArray(steps) || steps.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-2xl border border-primary-800/40 bg-gradient-to-br from-primary-500/15 via-dark-900/60 to-dark-900/80 p-4 space-y-4 shadow-inner shadow-black/20">
+      <div className="flex items-center justify-between text-sm text-dark-200">
+        <div className="flex items-center gap-2 text-primary-200">
+          <Sparkles className="w-4 h-4" />
+          <span>Live thinking pipeline</span>
+        </div>
+        <span className="text-xs text-dark-400 uppercase tracking-wide">
+          {Math.max(1, Math.round(elapsedMs / 1000))}s elapsed
+        </span>
+      </div>
+      <ol className="space-y-4 relative">
+        {steps.map((step, idx) => {
+          const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
+          const status =
+            step.status ||
+            (step.completedAt
+              ? 'done'
+              : idx === steps.length - 1
+              ? 'active'
+              : 'done');
+          const toneClass = toneClasses[step.tone] || toneClasses.primary;
+          const durationMs =
+            step.durationMs ??
+            (step.completedAt && step.activatedAt
+              ? step.completedAt - step.activatedAt
+              : null);
+          const statusLabel =
+            status === 'done'
+              ? `Done in ${formatDuration(durationMs)}`
+              : status === 'active'
+              ? 'In progress'
+              : 'Pending';
+
+          return (
+            <li key={step.key || `${step.phase}-${idx}`} className="flex gap-3">
+              <div className="flex flex-col items-center">
+                <div
+                  className={`w-9 h-9 rounded-full border-2 flex items-center justify-center ${toneClass} ${
+                    status === 'active' ? 'ring-2 ring-primary-500/40 animate-pulse' : ''
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                </div>
+                {idx < steps.length - 1 && (
+                  <span className="flex-1 w-px bg-dark-700 mt-1" />
+                )}
+              </div>
+              <div className="flex-1 space-y-1">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="text-sm text-dark-100 font-medium leading-snug">
+                    {step.label || THINKING_PHASE_META[step.phase]?.label || 'Working…'}
+                  </div>
+                  <div className="text-xs text-dark-500 whitespace-nowrap">{statusLabel}</div>
+                </div>
+                {(step.description || THINKING_PHASE_META[step.phase]?.description) && (
+                  <p className="text-xs text-dark-400">
+                    {step.description || THINKING_PHASE_META[step.phase]?.description}
+                  </p>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 };
 
@@ -563,20 +741,38 @@ const Chat = () => {
     setAgentStatuses([]);
   }, []);
 
-  const showThinkingStatus = useCallback((label) => {
-    if (!label) {
-      clearAgentStatuses();
-      return;
-    }
+  const registerAgentPhase = useCallback((phaseKey, label) => {
     const now = Date.now();
-    setAgentStatuses([{
-      key: `thinking-${now}`,
-      label,
-      activatedAt: now,
-      completedAt: null,
-      durationMs: null,
-    }]);
-  }, [clearAgentStatuses]);
+    const meta = THINKING_PHASE_META[phaseKey] || {};
+
+    setAgentStatuses((prev) => {
+      const normalizedPrev = prev.map((step) =>
+        step.status === 'active'
+          ? {
+              ...step,
+              status: 'done',
+              completedAt: now,
+              durationMs: step.activatedAt ? Math.max(0, now - step.activatedAt) : null
+            }
+          : step
+      );
+
+      return [
+        ...normalizedPrev,
+        {
+          key: `${phaseKey || 'phase'}-${now}`,
+          phase: phaseKey,
+          label: label || meta.label || 'Working…',
+          description: meta.description || null,
+          tone: meta.tone || 'primary',
+          status: 'active',
+          activatedAt: now,
+          completedAt: null,
+          durationMs: null
+        }
+      ];
+    });
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -764,9 +960,7 @@ useEffect(() => {
       if (!shouldShowAgentStatuses) {
         return;
       }
-      if (key === 'thinking') {
-        showThinkingStatus(label);
-      }
+      registerAgentPhase(key, label);
     };
 
     clearAgentStatuses();
@@ -917,11 +1111,13 @@ useEffect(() => {
       }
       triggerPhase('verifying', 'Verifying updates and running quick checks');
       triggerPhase('reporting', 'Reporting outcomes and next steps');
+      triggerPhase('responding', 'Packaging final response');
       setIsLoading(false);
       setThinkingAiPlan(null);
     } catch (error) {
       console.error('Error sending message:', error);
       toast.error('Failed to send message. Please check your connection.');
+      triggerPhase('error', 'Ran into a connection issue');
       
       const errorMessage = {
         id: Date.now() + 1,
@@ -1265,6 +1461,9 @@ useEffect(() => {
                         AI is thinking… {Math.max(1, Math.round(thinkingElapsed / 1000))}s elapsed
                       </span>
                     </div>
+                    {agentStatuses.length > 0 && (
+                      <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
+                    )}
                     {thinkingAiPlan && (
                       <CollapsibleSection
                         title="TODO plan before execution"
@@ -1274,12 +1473,6 @@ useEffect(() => {
                         <PlanCard plan={thinkingAiPlan} />
                       </CollapsibleSection>
                     )}
-                    <ActivityTimeline
-                      timeline={agentStatuses}
-                      isLive
-                      defaultCollapsed={false}
-                      title="AI workflow (live)"
-                    />
                   </div>
                 )}
                 <div ref={messagesEndRef} />

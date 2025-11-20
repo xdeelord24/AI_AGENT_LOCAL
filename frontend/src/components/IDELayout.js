@@ -6,7 +6,9 @@ import {
   ChevronRight as ChevronRightIcon, ChevronDown,
   Send, User, Loader2, CheckCircle, AlertCircle,
   Infinity, AtSign, Globe, Image, Mic, Square, Plus, Clock, History, MoreVertical,
-  RefreshCw, Minimize2, Workflow, Trash2
+  RefreshCw, Minimize2, Workflow, Trash2,
+  Sparkles, Brain, ListChecks, FileSearch, Milestone, PenTool,
+  Activity, ShieldCheck, Megaphone, AlertTriangle, Check, X as XIcon
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
@@ -167,7 +169,12 @@ const resolveWorkspacePath = (rawPath = '') => {
 
 const normalizeEditorPath = (path = '') => {
   if (!path) return '';
-  return resolveWorkspacePath(path);
+  // Remove "@" prefix if present (used for mentions but not actual file paths)
+  let cleanedPath = path;
+  if (cleanedPath.startsWith('@')) {
+    cleanedPath = cleanedPath.slice(1);
+  }
+  return resolveWorkspacePath(cleanedPath);
 };
 
 // Ensure we only keep the final operation per file path so we don't
@@ -207,6 +214,141 @@ const COMPLETION_LIST_COLUMNS = 4;
 const QUICK_TERMINAL_COMMANDS = ['ls', 'dir', 'pwd'];
 const PLAN_PREVIEW_DELAY_MS = 350;
 const MAX_FILE_SUGGESTIONS = 10;
+
+const definePhaseMeta = (label, summary, options = {}) => ({
+  label,
+  description: summary,
+  detail: options.detail ?? null,
+  tone: options.tone ?? 'primary'
+});
+
+const THINKING_PHASE_META = {
+  thinking: definePhaseMeta(
+    'Understanding the ask',
+    'Re-reading your prompt, extracting goals, constraints, and prior context.'
+  ),
+  analysis: definePhaseMeta(
+    'Analyzing context',
+    'Reviewing conversation history, loaded files, and agent settings.',
+    { tone: 'info' }
+  ),
+  grepping: definePhaseMeta(
+    'Searching workspace',
+    'Scanning relevant directories and files for code, references, or examples.',
+    { tone: 'info' }
+  ),
+  context: definePhaseMeta(
+    'Collecting structure',
+    'Snapshots workspace layout, open buffers, dependencies, and active files.',
+    { tone: 'muted' }
+  ),
+  web_lookup: definePhaseMeta(
+    'Reviewing the web',
+    'Running quick web lookups for APIs, docs, or current references.',
+    { tone: 'info' }
+  ),
+  subtasks: definePhaseMeta(
+    'Planning work',
+    'Breaking the request into concrete TODOs and acceptance checks.'
+  ),
+  planning: definePhaseMeta(
+    'Sequencing plan',
+    'Ordering tasks for safe execution, noting prerequisites and blockers.'
+  ),
+  drafting: definePhaseMeta(
+    'Drafting changes',
+    'Writing code edits, explanations, and response scaffolding.',
+    { tone: 'accent' }
+  ),
+  progress: definePhaseMeta(
+    'Tracking progress',
+    'Checking TODO completion and updating plan status.',
+    { tone: 'muted' }
+  ),
+  verification: definePhaseMeta(
+    'Verifying work',
+    'Reviewing changes, self-testing, and running lightweight sanity checks.',
+    { tone: 'success' }
+  ),
+  reporting: definePhaseMeta(
+    'Summarizing results',
+    'Packaging findings, next steps, and any follow-up recommendations.',
+    { tone: 'success' }
+  ),
+  responding: definePhaseMeta(
+    'Finalizing reply',
+    'Polishing natural-language response and stitching in artifacts.',
+    { tone: 'accent' }
+  ),
+  error: definePhaseMeta(
+    'Issue detected',
+    'An unexpected problem interrupted the workflow; surfacing the details.',
+    { tone: 'danger' }
+  )
+};
+
+const PHASE_ICON_MAP = {
+  thinking: Brain,
+  analysis: FileSearch,
+  grepping: FileSearch,
+  context: Milestone,
+  web_lookup: Globe,
+  subtasks: ListChecks,
+  planning: Milestone,
+  drafting: PenTool,
+  progress: Activity,
+  verification: ShieldCheck,
+  reporting: Megaphone,
+  error: AlertTriangle
+};
+
+const toneClasses = {
+  primary: 'border-primary-500 text-primary-100 bg-primary-500/10',
+  accent: 'border-purple-500 text-purple-100 bg-purple-500/10',
+  info: 'border-blue-500 text-blue-100 bg-blue-500/10',
+  muted: 'border-dark-600 text-dark-200 bg-dark-800/60',
+  success: 'border-emerald-500 text-emerald-100 bg-emerald-500/10',
+  danger: 'border-red-500 text-red-100 bg-red-500/10'
+};
+
+const derivePhaseFromKey = (key = '') => {
+  if (!key) return 'thinking';
+  const normalized = key.split(':')[0];
+  if (normalized.startsWith('grep')) {
+    return 'grepping';
+  }
+  if (THINKING_PHASE_META[normalized]) {
+    return normalized;
+  }
+  return 'thinking';
+};
+
+const buildPhaseStep = (status = {}, activatedAt = Date.now()) => {
+  const phase = derivePhaseFromKey(status.key);
+  const meta = THINKING_PHASE_META[phase] || {};
+  return {
+    ...status,
+    phase,
+    label: status.label || meta.label || 'Working…',
+    description: meta.description || null,
+    tone: meta.tone || 'primary',
+    status: 'active',
+    activatedAt,
+    completedAt: null,
+    durationMs: null
+  };
+};
+
+const formatDuration = (ms = 0) => {
+  if (ms == null || Number.isNaN(ms)) {
+    return '—';
+  }
+  if (ms < 1000) {
+    return '<1s';
+  }
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  return `${seconds}s`;
+};
 
 const escapeHtml = (text = '') =>
   String(text)
@@ -532,7 +674,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       const nextFiles = [];
 
       prevFiles.forEach((file) => {
-        if (file.path === normalizedPath) {
+        // Compare normalized paths to catch duplicates with different path formats
+        const fileNormalizedPath = normalizeEditorPath(file.path);
+        if (fileNormalizedPath === normalizedPath) {
           if (!replaced) {
             const resolvedName =
               fileInfo.name ||
@@ -543,14 +687,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             nextFiles.push({
               ...file,
               ...fileInfo,
-              path: normalizedPath,
+              path: normalizedPath, // Always use normalized path
               name: resolvedName,
             });
             replaced = true;
           }
+          // Skip duplicates with same normalized path
           return;
         }
-        nextFiles.push(file);
+        // Keep existing files but normalize their paths too
+        nextFiles.push({
+          ...file,
+          path: fileNormalizedPath,
+        });
       });
 
       if (!replaced) {
@@ -578,34 +727,41 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
       setOpenFiles(nextFiles);
 
-      const hasPath = (path) =>
-        !!(path && nextFiles.some((file) => file.path === path));
+      const hasPath = (path) => {
+        if (!path) return false;
+        const normalizedPath = normalizeEditorPath(path);
+        return nextFiles.some((file) => normalizeEditorPath(file.path) === normalizedPath);
+      };
       const getFallbackPath = () => {
         if (options.preferredActive && hasPath(options.preferredActive)) {
-          return options.preferredActive;
+          return normalizeEditorPath(options.preferredActive);
         }
         return nextFiles.length > 0
-          ? nextFiles[nextFiles.length - 1].path
+          ? normalizeEditorPath(nextFiles[nextFiles.length - 1].path)
           : null;
       };
 
-      if (selectedFile && !hasPath(selectedFile)) {
+      const normalizedSelectedFile = selectedFile ? normalizeEditorPath(selectedFile) : null;
+      if (normalizedSelectedFile && !hasPath(normalizedSelectedFile)) {
         const fallbackSelection = getFallbackPath();
-        if (selectedFile !== fallbackSelection) {
+        if (normalizedSelectedFile !== fallbackSelection) {
           setSelectedFile(fallbackSelection);
         }
       }
 
-      let nextActive = activeTab;
+      let nextActive = activeTab ? normalizeEditorPath(activeTab) : null;
 
-      if (options.forceActive && hasPath(options.forceActive)) {
-        nextActive = options.forceActive;
-        if (activeTab !== nextActive) {
+      const normalizedForceActive = options.forceActive ? normalizeEditorPath(options.forceActive) : null;
+      if (normalizedForceActive && hasPath(normalizedForceActive)) {
+        nextActive = normalizedForceActive;
+        const normalizedActiveTab = activeTab ? normalizeEditorPath(activeTab) : null;
+        if (normalizedActiveTab !== nextActive) {
           setActiveTab(nextActive);
         }
       } else if (!hasPath(activeTab)) {
         nextActive = getFallbackPath();
-        if (activeTab !== nextActive) {
+        const normalizedActiveTab = activeTab ? normalizeEditorPath(activeTab) : null;
+        if (normalizedActiveTab !== nextActive) {
           setActiveTab(nextActive);
         }
       }
@@ -615,8 +771,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         return;
       }
 
+      const normalizedNextActive = normalizeEditorPath(nextActive);
       const activeFileData = nextFiles.find(
-        (file) => file.path === nextActive
+        (file) => normalizeEditorPath(file.path) === normalizedNextActive
       );
       if (!activeFileData) {
         setEditorContent('');
@@ -676,6 +833,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [pendingFileOperations, setPendingFileOperations] = useState(null);
   const [activeFileOperationIndex, setActiveFileOperationIndex] = useState(0);
   const [isApplyingFileOperations, setIsApplyingFileOperations] = useState(false);
+  const [reviewedOperations, setReviewedOperations] = useState(new Set()); // Track reviewed operation indices
+  const [acceptedLines, setAcceptedLines] = useState(new Map()); // Track accepted lines per operation
+  const [declinedLines, setDeclinedLines] = useState(new Map()); // Track declined lines per operation
+  const [showReviewButton, setShowReviewButton] = useState(false); // Show "Review the Files" button
   const [chatStatus, setChatStatus] = useState(null);
   const [isLoadingStatus, setIsLoadingStatus] = useState(false);
   const [showConnectivityPanel, setShowConnectivityPanel] = useState(false);
@@ -691,6 +852,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [showAutoDropdown, setShowAutoDropdown] = useState(false);
   const [showAgentModeMenu, setShowAgentModeMenu] = useState(false);
   const [agentStatuses, setAgentStatuses] = useState([]);
+  const [thinkingStart, setThinkingStart] = useState(null);
+  const [thinkingElapsed, setThinkingElapsed] = useState(0);
   const composerInputRef = useRef(null);
   const chatInputRef = useRef(null);
   const editorRef = useRef(null);
@@ -705,6 +868,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const monacoRef = useRef(null);
   const editorDiffDecorationsRef = useRef([]);
   const editorDiffViewZonesRef = useRef([]);
+  const editorContentWidgetsRef = useRef([]);
   const selectedChatMode = chatModeOptions.find(mode => mode.id === agentMode) || chatModeOptions[0];
   const selectedWebSearchMode = webSearchOptions.find(mode => mode.id === webSearchMode) || webSearchOptions[0];
 
@@ -829,15 +993,27 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   const scheduleAgentStatuses = useCallback((statuses = []) => {
     clearAgentStatuses();
+    if (!Array.isArray(statuses) || statuses.length === 0) {
+      return;
+    }
     statuses.forEach((status) => {
       const timerId = setTimeout(() => {
         setAgentStatuses((prev) => {
-          if (prev.find((item) => item.key === status.key)) {
-            return prev;
-          }
-          return [...prev, status];
+          const now = Date.now();
+          const normalizedPrev = prev.map((step) =>
+            step.status === 'active'
+              ? {
+                  ...step,
+                  status: 'done',
+                  completedAt: now,
+                  durationMs: step.activatedAt ? Math.max(0, now - step.activatedAt) : null
+                }
+              : step
+          );
+          const nextStep = buildPhaseStep(status, now);
+          return [...normalizedPrev, nextStep];
         });
-      }, Math.max(status.delay_ms ?? 0, 0));
+      }, Math.max(status?.delay_ms ?? 0, 0));
       agentStatusTimersRef.current.push(timerId);
     });
   }, [clearAgentStatuses]);
@@ -1182,6 +1358,18 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     loadConnectivitySettings();
   }, [loadConnectivitySettings]);
 
+  useEffect(() => {
+    if (!thinkingStart) {
+      setThinkingElapsed(0);
+      return;
+    }
+    setThinkingElapsed(Date.now() - thinkingStart);
+    const intervalId = setInterval(() => {
+      setThinkingElapsed(Date.now() - thinkingStart);
+    }, 1000);
+    return () => clearInterval(intervalId);
+  }, [thinkingStart]);
+
   const persistTerminalSessionId = useCallback((sessionId) => {
     if (!sessionId) {
       return;
@@ -1290,7 +1478,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const loadFile = useCallback(async (filePath) => {
     try {
       const normalizedPath = normalizeEditorPath(filePath);
-      const existingFile = openFiles.find(f => f.path === normalizedPath);
+      const existingFile = openFiles.find(f => normalizeEditorPath(f.path) === normalizedPath);
       if (existingFile) {
         setActiveTab(normalizedPath);
         setEditorContent(existingFile.content);
@@ -1319,15 +1507,66 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   }, [getLanguageFromPath, openFiles, upsertOpenFile]);
 
   useEffect(() => {
-    if (selectedFile && !openFiles.find(f => f.path === selectedFile)) {
-      loadFile(selectedFile);
-    } else if (selectedFile && openFiles.find(f => f.path === selectedFile)) {
-      const file = openFiles.find(f => f.path === selectedFile);
-      setActiveTab(file.path);
-      setEditorContent(file.content);
-      setEditorLanguage(file.language);
+    const normalizedSelectedFile = selectedFile ? normalizeEditorPath(selectedFile) : null;
+    if (normalizedSelectedFile && !openFiles.find(f => normalizeEditorPath(f.path) === normalizedSelectedFile)) {
+      loadFile(normalizedSelectedFile);
+    } else if (selectedFile && openFiles.find(f => normalizeEditorPath(f.path) === normalizeEditorPath(selectedFile))) {
+      const normalizedSelectedFile = normalizeEditorPath(selectedFile);
+      const file = openFiles.find(f => normalizeEditorPath(f.path) === normalizedSelectedFile);
+      if (file) {
+        setActiveTab(normalizeEditorPath(file.path));
+        setEditorContent(file.content);
+        setEditorLanguage(file.language);
+      }
     }
   }, [selectedFile, openFiles, loadFile]);
+
+  // Deduplicate and normalize all paths in openFiles
+  useEffect(() => {
+    setOpenFiles((prev) => {
+      const seen = new Map();
+      const deduplicated = [];
+      let needsUpdate = false;
+
+      for (const file of prev) {
+        const normalizedPath = normalizeEditorPath(file.path);
+        
+        // Check if path needs normalization
+        if (file.path !== normalizedPath) {
+          needsUpdate = true;
+        }
+        
+        // Check if we've seen this normalized path before
+        if (!seen.has(normalizedPath)) {
+          seen.set(normalizedPath, true);
+          deduplicated.push({
+            ...file,
+            path: normalizedPath, // Ensure all paths are normalized
+          });
+        } else {
+          // Duplicate found
+          needsUpdate = true;
+        }
+      }
+
+      // Only update if there were duplicates or paths needed normalization
+      if (needsUpdate) {
+        return deduplicated;
+      }
+
+      return prev;
+    });
+  }, [openFiles.length]); // Only check when length changes to avoid infinite loops
+
+  // Normalize activeTab whenever it changes
+  useEffect(() => {
+    if (activeTab) {
+      const normalizedActiveTab = normalizeEditorPath(activeTab);
+      if (activeTab !== normalizedActiveTab) {
+        setActiveTab(normalizedActiveTab);
+      }
+    }
+  }, [activeTab]);
 
   // Auto-scroll chat to bottom
   useEffect(() => {
@@ -1370,7 +1609,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   // Save file function
   const saveFile = useCallback(async (filePath, options = {}) => {
     try {
-      const file = openFiles.find(f => f.path === filePath);
+      const normalizedPath = normalizeEditorPath(filePath);
+      const file = openFiles.find(f => normalizeEditorPath(f.path) === normalizedPath);
       if (!file) {
         toast.error('No file to save');
         return;
@@ -2514,7 +2754,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     (filePath) => {
       if (!filePath) return;
       const normalized = normalizeEditorPath(filePath);
-      const nextOpenFiles = openFiles.filter((file) => file.path !== normalized);
+      const nextOpenFiles = openFiles.filter((file) => normalizeEditorPath(file.path) !== normalized);
       if (nextOpenFiles.length === openFiles.length) {
         return;
       }
@@ -2527,11 +2767,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     (filePath) => {
       if (openFiles.length <= 1 || !filePath) return;
       const normalized = normalizeEditorPath(filePath);
-      if (!openFiles.some((file) => file.path === normalized)) {
+      if (!openFiles.some((file) => normalizeEditorPath(file.path) === normalized)) {
         return;
       }
       const nextOpenFiles = openFiles.filter(
-        (file) => file.path === normalized
+        (file) => normalizeEditorPath(file.path) === normalized
       );
       applyOpenFilesAfterChange(nextOpenFiles, {
         forceActive: normalized,
@@ -2545,7 +2785,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     (filePath) => {
       if (!filePath) return;
       const normalized = normalizeEditorPath(filePath);
-      const targetIndex = openFiles.findIndex((file) => file.path === normalized);
+      const targetIndex = openFiles.findIndex((file) => normalizeEditorPath(file.path) === normalized);
       if (targetIndex === -1 || targetIndex === openFiles.length - 1) {
         return;
       }
@@ -2582,8 +2822,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       event.preventDefault();
       event.stopPropagation();
 
-      if (activeTab !== file.path) {
-        setActiveTab(file.path);
+      const normalizedPath = normalizeEditorPath(file.path);
+      const normalizedActiveTab = normalizeEditorPath(activeTab || '');
+      if (normalizedActiveTab !== normalizedPath) {
+        setActiveTab(normalizedPath);
         setEditorContent(file.content);
         setEditorLanguage(file.language);
       }
@@ -2852,7 +3094,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
     const normalized = normalizeEditorPath(target.path);
     const tabCount = openFiles.length;
-    const targetIndex = openFiles.findIndex((file) => file.path === normalized);
+    const targetIndex = openFiles.findIndex((file) => normalizeEditorPath(file.path) === normalized);
     const tabsToRight = targetIndex >= 0 ? tabCount - targetIndex - 1 : 0;
     const hasSavedTabs = openFiles.some((file) => !file.modified);
 
@@ -3382,6 +3624,71 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     blocked: 'border-red-700 bg-red-600/10 text-red-300'
   };
 
+const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
+  if (!Array.isArray(steps) || steps.length === 0) {
+    return null;
+  }
+
+  const displaySteps = steps.slice(-5);
+  const activeStep = [...displaySteps].reverse().find((step) => step.status === 'active') || displaySteps[displaySteps.length - 1];
+
+  return (
+    <div className="rounded-xl border border-primary-800/40 bg-dark-900/70 p-3 space-y-3">
+      <div className="flex items-center justify-between text-xs text-dark-400 uppercase tracking-wide">
+        <div className="flex items-center gap-2 text-primary-200">
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>Live thinking</span>
+        </div>
+        <span>{Math.max(1, Math.round(Math.max(elapsedMs, 1000) / 1000))}s</span>
+      </div>
+      <ol className="space-y-2">
+        {displaySteps.map((step) => {
+          const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
+          const isActive = step === activeStep;
+          const now = Date.now();
+          const duration =
+            step.status === 'done' && step.durationMs
+              ? formatDuration(step.durationMs)
+              : isActive && step.activatedAt
+              ? formatDuration(Math.max(0, now - step.activatedAt))
+              : null;
+          const toneClass = toneClasses[step.tone] || toneClasses.primary;
+
+          return (
+            <li
+              key={step.key}
+              className={`rounded-lg border px-2.5 py-2 text-sm transition-all ${
+                isActive ? 'border-primary-600/60 bg-primary-900/15' : 'border-dark-700 bg-dark-800/30'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass} ${
+                      isActive ? 'animate-pulse' : ''
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                  </div>
+                  <span className={`text-sm ${isActive ? 'text-primary-100' : 'text-dark-200'}`}>{step.label}</span>
+                </div>
+                <span className="text-[11px] text-dark-500 font-mono uppercase">
+                  {isActive ? 'now' : duration || '—'}
+                </span>
+              </div>
+              {isActive && (
+                <p className="text-xs text-dark-300 mt-1">
+                  {step.description || THINKING_PHASE_META[step.phase]?.description || 'Working…'}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+};
+
   const renderAiPlan = (plan) => {
     if (!plan) return null;
     const summary = normalizeChatInput(
@@ -3537,6 +3844,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setThinkingAiPlan(null);
     setIsLoadingChat(true);
     setShowFileSuggestions(false);
+    setThinkingStart(Date.now());
+    setThinkingElapsed(0);
 
     // Create abort controller for this request
     const abortController = new AbortController();
@@ -3667,6 +3976,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             mode: modePayload,
           });
           setActiveFileOperationIndex(0);
+          setShowReviewButton(true); // Show "Review the Files" button
+          setReviewedOperations(new Set());
+          setAcceptedLines(new Map());
+          setDeclinedLines(new Map());
           toast.success('Review the AI file changes before deciding to keep them.');
         } catch (error) {
           console.error('Failed to build AI file operation previews:', error);
@@ -3677,6 +3990,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             mode: modePayload,
           });
           setActiveFileOperationIndex(0);
+          setShowReviewButton(true); // Show "Review the Files" button
+          setReviewedOperations(new Set());
+          setAcceptedLines(new Map());
+          setDeclinedLines(new Map());
           toast.error('AI proposed file changes, but previews failed to load. Review carefully before applying.');
         }
       }
@@ -3694,6 +4011,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     } finally {
       setChatAbortController(null);
       clearAgentStatuses();
+      setThinkingStart(null);
     }
   };
 
@@ -3720,6 +4038,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       });
       editorDiffViewZonesRef.current = [];
     }
+    
+    // Clear content widgets
+    editorContentWidgetsRef.current.forEach((widgetRef) => {
+      if (typeof widgetRef === 'string') {
+        editorRef.current.removeContentWidget({ getId: () => widgetRef });
+      } else if (widgetRef && widgetRef.cleanup) {
+        widgetRef.cleanup();
+        editorRef.current.removeContentWidget({ getId: () => widgetRef.id });
+      }
+    });
+    editorContentWidgetsRef.current = [];
   }, []);
 
   // Process file operations from AI response (writes to disk and updates open files)
@@ -3736,18 +4065,30 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           await ApiService.writeFile(filePath, content);
           
           // Open the file if it doesn't exist in openFiles
-          if (!openFiles.find(f => f.path === filePath)) {
+          const normalizedFilePath = normalizeEditorPath(filePath);
+          if (!openFiles.find(f => normalizeEditorPath(f.path) === normalizedFilePath)) {
             const fileInfo = {
-              path: filePath,
-              name: filePath.split('/').pop() || 'untitled',
+              path: normalizedFilePath,
+              name: normalizedFilePath.split('/').pop() || 'untitled',
               content,
-              language: getLanguageFromPath(filePath),
+              language: getLanguageFromPath(normalizedFilePath),
               modified: false
             };
             upsertOpenFile(fileInfo);
-            setActiveTab(filePath);
-            setEditorContent(content);
-            setEditorLanguage(fileInfo.language);
+            
+            // Only switch tabs if there's no existing tab with the same filename
+            // This prevents switching to a different tab when files have same name but different paths (e.g., with @ prefix)
+            const fileName = fileInfo.name;
+            const hasSameFileNameTab = openFiles.some(f => {
+              const existingFileName = f.path.split('/').pop() || '';
+              return existingFileName === fileName && normalizeEditorPath(f.path) !== normalizedFilePath;
+            });
+            
+            if (!hasSameFileNameTab) {
+              setActiveTab(normalizedFilePath);
+              setEditorContent(content);
+              setEditorLanguage(fileInfo.language);
+            }
           }
           
           toast.success(`Created file: ${filePath}`);
@@ -3758,14 +4099,16 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           await ApiService.writeFile(filePath, content);
           
           // Update in openFiles if open
-          const fileIndex = openFiles.findIndex(f => f.path === filePath);
+          const normalizedFilePath = normalizeEditorPath(filePath);
+          const fileIndex = openFiles.findIndex(f => normalizeEditorPath(f.path) === normalizedFilePath);
           if (fileIndex >= 0) {
             setOpenFiles(prev => prev.map((f, idx) => 
-              idx === fileIndex ? { ...f, content, modified: false } : f
+              idx === fileIndex ? { ...f, content, modified: false, aiPreview: false } : f
             ));
             
             // Update editor if active
-            if (activeTab === filePath) {
+            const normalizedActiveTab = normalizeEditorPath(activeTab || '');
+            if (normalizedActiveTab === normalizedFilePath) {
               setEditorContent(content);
             }
           } else {
@@ -3778,9 +4121,20 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
               modified: false
             };
             upsertOpenFile(fileInfo);
-            setActiveTab(filePath);
-            setEditorContent(content);
-            setEditorLanguage(fileInfo.language);
+            
+            // Only switch tabs if there's no existing tab with the same filename
+            // This prevents switching to a different tab when files have same name but different paths (e.g., with @ prefix)
+            const fileName = fileInfo.name;
+            const hasSameFileNameTab = openFiles.some(f => {
+              const existingFileName = f.path.split('/').pop() || '';
+              return existingFileName === fileName && normalizeEditorPath(f.path) !== normalizedFilePath;
+            });
+            
+            if (!hasSameFileNameTab) {
+              setActiveTab(filePath);
+              setEditorContent(content);
+              setEditorLanguage(fileInfo.language);
+            }
           }
           
           toast.success(`Updated file: ${filePath}`);
@@ -3880,34 +4234,53 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     (op) => {
       const targetPath = normalizeEditorPath(op.path);
       const afterContent = op.afterContent || op.content || '';
+      const fileName = targetPath.split('/').pop() || 'untitled';
+
+      // Check if there's already a tab with the same filename but different path
+      // This prevents switching to a different tab when files have same name but different paths (e.g., with @ prefix)
+      const hasSameFileNameTab = openFiles.some(f => {
+        const existingFileName = f.path.split('/').pop() || '';
+        return existingFileName === fileName && normalizeEditorPath(f.path) !== targetPath;
+      });
 
       // Update or create the open file entry with the AI-proposed content
+      // Don't mark as modified - these are preview changes, not actual edits
       setOpenFiles((prev) => {
-        const existingIndex = prev.findIndex((f) => f.path === targetPath);
+        const existingIndex = prev.findIndex((f) => normalizeEditorPath(f.path) === targetPath);
         const baseFile = {
           path: targetPath,
-          name: targetPath.split('/').pop() || 'untitled',
+          name: fileName,
           content: afterContent,
           language: getLanguageFromPath(targetPath),
-          modified: true,
+          modified: false, // AI preview changes don't count as modifications
           aiPreview: true,
         };
 
         if (existingIndex >= 0) {
+          // File already exists, just update it without creating a duplicate
           const next = [...prev];
-          next[existingIndex] = { ...next[existingIndex], ...baseFile };
+          // Preserve existing modified state if user has actually edited the file
+          const existingFile = next[existingIndex];
+          const wasUserModified = existingFile.modified && !existingFile.aiPreview;
+          next[existingIndex] = { 
+            ...next[existingIndex], 
+            ...baseFile,
+            modified: wasUserModified, // Keep user modifications
+          };
           return next;
         }
+        // File doesn't exist, add it
         return [...prev, baseFile];
       });
 
-      setActiveTab(targetPath);
-      setEditorContent(afterContent);
-      setEditorLanguage(getLanguageFromPath(targetPath));
-
-      // Diff decorations are applied in a separate effect once the editor is mounted.
+      // Only set active tab if there's no existing tab with the same filename
+      if (!hasSameFileNameTab) {
+        setActiveTab(targetPath);
+        setEditorContent(afterContent);
+        setEditorLanguage(getLanguageFromPath(targetPath));
+      }
     },
-    [getLanguageFromPath, setOpenFiles]
+    [getLanguageFromPath, openFiles]
   );
 
   const handleApplyPendingFileOperations = async () => {
@@ -3916,6 +4289,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setIsApplyingFileOperations(true);
       await processFileOperations(pendingFileOperations.operations);
       toast.success('Applied AI changes');
+      // Reset review state
+      setReviewedOperations(new Set());
+      setAcceptedLines(new Map());
+      setDeclinedLines(new Map());
+      setShowReviewButton(false);
     } catch (error) {
       console.error('Failed to apply AI changes:', error);
       toast.error('Failed to apply AI changes');
@@ -3925,6 +4303,186 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setActiveFileOperationIndex(0);
     }
   };
+
+  // Apply accepted/declined lines to file content immediately
+  const applyLineChangesToFile = useCallback((opIndex, acceptedLinesMap, declinedLinesMap) => {
+    if (!pendingFileOperations || !pendingFileOperations.operations) return;
+    
+    const op = pendingFileOperations.operations[opIndex];
+    if (!op || !op.diff) return;
+    
+    const targetPath = normalizeEditorPath(op.path);
+    const fileIndex = openFiles.findIndex(f => normalizeEditorPath(f.path) === targetPath);
+    if (fileIndex < 0) return;
+    
+    // Start with the proposed content (afterContent)
+    const afterContent = op.afterContent || op.content || '';
+    const beforeContent = op.beforeContent || '';
+    const afterLines = afterContent.split('\n');
+    const beforeLines = beforeContent.split('\n');
+    
+    // Build a map of line numbers to diff entries for quick lookup
+    const addedLinesMap = new Map(); // newNumber -> diffLine
+    const removedLinesMap = new Map(); // oldNumber -> diffLine
+    
+    op.diff.forEach((diffLine) => {
+      if (diffLine.type === 'added' && typeof diffLine.newNumber === 'number') {
+        addedLinesMap.set(diffLine.newNumber, diffLine);
+      } else if (diffLine.type === 'removed' && typeof diffLine.oldNumber === 'number') {
+        removedLinesMap.set(diffLine.oldNumber, diffLine);
+      }
+    });
+    
+    // Build new content by filtering based on accepted/declined lines
+    const newLines = [];
+    
+    // Process the afterContent (proposed content) line by line
+    afterLines.forEach((line, index) => {
+      const lineNumber = index + 1; // 1-based line numbers
+      const lineKey = `${opIndex}-${lineNumber}`;
+      const isAccepted = acceptedLinesMap.has(lineKey);
+      const isDeclined = declinedLinesMap.has(lineKey);
+      
+      // Check if this line was added in the diff
+      const addedDiffLine = addedLinesMap.get(lineNumber);
+      
+      if (addedDiffLine) {
+        // This is an added line
+        // If accepted, keep it; if declined, remove it
+        if (isAccepted && !isDeclined) {
+          newLines.push(line);
+        }
+        // If declined, skip this line
+      } else {
+        // This is a context line (not added), keep it
+        newLines.push(line);
+      }
+    });
+    
+    // Now handle removed lines that were declined (undo removal - add them back)
+    removedLinesMap.forEach((removedDiffLine, oldLineNumber) => {
+      const lineKey = `${opIndex}-${oldLineNumber}`;
+      const isDeclined = declinedLinesMap.has(lineKey);
+      
+      if (isDeclined) {
+        // User wants to undo the removal - add the line back
+        // Find the position to insert it (before the line that replaced it, or at the end)
+        const removedText = removedDiffLine.text || '';
+        if (oldLineNumber <= beforeLines.length) {
+          // Try to find where to insert it based on context
+          // For simplicity, append at the end for now
+          // TODO: Could be improved to insert at correct position
+          newLines.push(removedText);
+        }
+      }
+    });
+    
+    const newContent = newLines.join('\n');
+    
+    // Update the file content
+    setOpenFiles((prev) => {
+      const next = [...prev];
+      next[fileIndex] = {
+        ...next[fileIndex],
+        content: newContent,
+        modified: true, // Mark as modified since user made changes
+      };
+      return next;
+    });
+    
+    // Update editor if this file is active
+    if (activeTab && normalizeEditorPath(activeTab) === targetPath) {
+      setEditorContent(newContent);
+    }
+  }, [pendingFileOperations, openFiles, activeTab]);
+
+  const handleAcceptLine = useCallback((opIndex, lineNumber, lineType) => {
+    setAcceptedLines((prev) => {
+      const newMap = new Map(prev);
+      const key = `${opIndex}-${lineNumber}`;
+      newMap.set(key, { lineNumber, lineType });
+      return newMap;
+    });
+    setDeclinedLines((prev) => {
+      const newMap = new Map(prev);
+      const key = `${opIndex}-${lineNumber}`;
+      newMap.delete(key);
+      
+      // Apply changes immediately with updated maps
+      setTimeout(() => {
+        setAcceptedLines((acceptedMap) => {
+          applyLineChangesToFile(opIndex, acceptedMap, newMap);
+          return acceptedMap;
+        });
+      }, 0);
+      
+      return newMap;
+    });
+    
+    // Mark operation as reviewed when user interacts with lines
+    setReviewedOperations((prev) => new Set([...prev, opIndex]));
+  }, [applyLineChangesToFile]);
+
+  const handleDeclineLine = useCallback((opIndex, lineNumber, lineType) => {
+    setDeclinedLines((prev) => {
+      const newMap = new Map(prev);
+      const key = `${opIndex}-${lineNumber}`;
+      newMap.set(key, { lineNumber, lineType });
+      return newMap;
+    });
+    setAcceptedLines((prev) => {
+      const newMap = new Map(prev);
+      const key = `${opIndex}-${lineNumber}`;
+      newMap.delete(key);
+      
+      // Apply changes immediately with updated maps
+      setTimeout(() => {
+        setDeclinedLines((declinedMap) => {
+          applyLineChangesToFile(opIndex, newMap, declinedMap);
+          return declinedMap;
+        });
+      }, 0);
+      
+      return newMap;
+    });
+    
+    // Mark operation as reviewed when user interacts with lines
+    setReviewedOperations((prev) => new Set([...prev, opIndex]));
+  }, [applyLineChangesToFile]);
+
+  // Refs to always get latest versions of handlers for event listeners
+  const handleAcceptLineRef = useRef(handleAcceptLine);
+  const handleDeclineLineRef = useRef(handleDeclineLine);
+
+  // Update refs when handlers change
+  useEffect(() => {
+    handleAcceptLineRef.current = handleAcceptLine;
+    handleDeclineLineRef.current = handleDeclineLine;
+  }, [handleAcceptLine, handleDeclineLine]);
+
+  const handleReviewNextFile = useCallback(() => {
+    if (!pendingFileOperations) return;
+    const operations = pendingFileOperations.operations || [];
+    const nextIndex = activeFileOperationIndex + 1;
+    if (nextIndex < operations.length) {
+      setActiveFileOperationIndex(nextIndex);
+      setReviewedOperations((prev) => new Set([...prev, activeFileOperationIndex]));
+    } else {
+      // All files reviewed, show apply/discard options
+      setReviewedOperations((prev) => new Set([...prev, activeFileOperationIndex]));
+    }
+  }, [pendingFileOperations, activeFileOperationIndex]);
+
+  const handleStartReview = useCallback(() => {
+    if (!pendingFileOperations) return;
+    setShowReviewButton(false);
+    setActiveFileOperationIndex(0);
+    const operations = pendingFileOperations.operations || [];
+    if (operations.length > 0) {
+      const firstOp = operations[0];
+      openOperationPreview(firstOp);
+    }
+  }, [pendingFileOperations, openOperationPreview]);
 
   const handleDiscardPendingFileOperations = async () => {
     if (!pendingFileOperations || !pendingFileOperations.operations) {
@@ -3937,68 +4495,131 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     try {
       setIsApplyingFileOperations(true);
 
-      // If we created any files on disk during preview, clean them up
+      // Get ALL create_file operations (not just those with previewCreated flag)
+      // These are files that were newly created and need to be cleaned up
       const createdPaths = pendingFileOperations.operations
-        .filter((op) => op.type === 'create_file' && op.previewCreated)
+        .filter((op) => op.type === 'create_file')
         .map((op) => normalizeEditorPath(op.path));
 
       if (createdPaths.length > 0) {
+        // Get current open files to determine what to switch to
+        const currentOpenFiles = [...openFiles];
+        const remainingFiles = currentOpenFiles.filter(
+          (file) => !createdPaths.includes(normalizeEditorPath(file.path))
+        );
+
+        // Remove created files from open tabs first (before deletion)
+        setOpenFiles((prev) => {
+          return prev.filter((file) => !createdPaths.includes(normalizeEditorPath(file.path)));
+        });
+
+        // Adjust activeTab/editor if the active file was removed
+        const normalizedActive = activeTab ? normalizeEditorPath(activeTab) : null;
+        if (normalizedActive && createdPaths.includes(normalizedActive)) {
+          // Find a remaining file to switch to
+          if (remainingFiles.length > 0) {
+            const lastFile = remainingFiles[remainingFiles.length - 1];
+            setEditorContent(lastFile.content);
+            setEditorLanguage(lastFile.language);
+            setActiveTab(lastFile.path);
+          } else {
+            setEditorContent('');
+            setEditorLanguage(null);
+            setActiveTab(null);
+          }
+        }
+
+        // Delete created files from disk
         for (const filePath of createdPaths) {
           try {
             await ApiService.deleteFile(filePath);
           } catch (error) {
+            // File might not exist on disk yet, or might have been deleted already
+            // This is okay - we just want to ensure it's removed if it exists
             // eslint-disable-next-line no-console
-            console.warn('Failed to delete preview file on discard:', filePath, error);
+            console.warn('Failed to delete created file on discard (may not exist):', filePath, error);
           }
         }
 
-        // Remove any preview-created files from open tabs
-        setOpenFiles((prev) => prev.filter((file) => !createdPaths.includes(file.path)));
-
-        // Adjust activeTab/editor if the active file was removed
-        setActiveTab((currentActive) => {
-          if (!currentActive || !createdPaths.includes(currentActive)) {
-            return currentActive;
-          }
-          const remaining = openFiles.filter((f) => !createdPaths.includes(f.path));
-          if (remaining.length > 0) {
-            const lastFile = remaining[remaining.length - 1];
-            setEditorContent(lastFile.content);
-            setEditorLanguage(lastFile.language);
-            return lastFile.path;
-          }
-          setEditorContent('');
-          return null;
-        });
-
+        // Refresh file tree to remove created files from the tree view
         await refreshFileTree();
+      }
+
+      // Also handle edit_file operations that might have been previewed
+      // Reset any files that were modified but not saved
+      const editedPaths = pendingFileOperations.operations
+        .filter((op) => op.type === 'edit_file')
+        .map((op) => normalizeEditorPath(op.path));
+
+      if (editedPaths.length > 0) {
+        // Reload the original content for edited files that are open
+        for (const filePath of editedPaths) {
+          const openFile = openFiles.find((f) => normalizeEditorPath(f.path) === filePath);
+          if (openFile) {
+            try {
+              // Reload the original file content from disk
+              const fileData = await ApiService.readFile(filePath);
+              if (fileData?.content !== undefined) {
+                setOpenFiles((prev) =>
+                  prev.map((f) =>
+                    normalizeEditorPath(f.path) === filePath
+                      ? { ...f, content: fileData.content, modified: false, aiPreview: false }
+                      : f
+                  )
+                );
+                // Update editor if this file is active
+                if (activeTab === filePath) {
+                  setEditorContent(fileData.content);
+                }
+              }
+            } catch (error) {
+              // File might not exist or couldn't be read - that's okay
+              // eslint-disable-next-line no-console
+              console.warn('Failed to reload file content on discard:', filePath, error);
+            }
+          }
+        }
       }
     } finally {
       setIsApplyingFileOperations(false);
       setPendingFileOperations(null);
       setActiveFileOperationIndex(0);
+      // Reset review state
+      setReviewedOperations(new Set());
+      setAcceptedLines(new Map());
+      setDeclinedLines(new Map());
+      setShowReviewButton(false);
       toast('Dismissed AI changes');
     }
   };
 
   // When reviewing changes, automatically open the currently selected operation
   // in the editor so the user can immediately see the proposed code.
-  useEffect(() => {
-    if (!pendingFileOperations || !pendingFileOperations.operations?.length) {
-      return;
-    }
+  // DISABLED: Let user use "Review the Files" button instead of auto-opening
+  // useEffect(() => {
+  //   if (!pendingFileOperations || !pendingFileOperations.operations?.length) {
+  //     return;
+  //   }
 
-    const operations = pendingFileOperations.operations;
-    const totalOps = operations.length;
-    const index = Math.min(
-      Math.max(activeFileOperationIndex, 0),
-      Math.max(totalOps - 1, 0)
-    );
-    const op = operations[index];
+  //   const operations = pendingFileOperations.operations;
+  //   const totalOps = operations.length;
+  //   const index = Math.min(
+  //     Math.max(activeFileOperationIndex, 0),
+  //     Math.max(totalOps - 1, 0)
+  //   );
+  //   const op = operations[index];
 
-    if (!op) return;
-    openOperationPreview(op);
-  }, [pendingFileOperations, activeFileOperationIndex, openOperationPreview]);
+  //   if (!op) return;
+    
+  //   const targetPath = normalizeEditorPath(op.path);
+  //   const normalizedActiveTab = activeTab ? normalizeEditorPath(activeTab) : null;
+    
+  //   // Only auto-open if the file is not already the active tab
+  //   // This prevents duplicate opens when user manually clicks "Review the file"
+  //   if (normalizedActiveTab !== targetPath) {
+  //     openOperationPreview(op);
+  //   }
+  // }, [pendingFileOperations, activeFileOperationIndex, openOperationPreview, activeTab]);
 
   useEffect(() => {
     if (!pendingFileOperations || !pendingFileOperations.operations?.length) {
@@ -4024,18 +4645,23 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
 
     const normalizedPath = normalizeEditorPath(op.path);
+    const normalizedActiveTab = activeTab ? normalizeEditorPath(activeTab) : null;
 
-    if (!normalizedPath || activeTab !== normalizedPath) {
+    if (!normalizedPath || normalizedActiveTab !== normalizedPath) {
       clearEditorDiffDecorations();
       return;
     }
 
-    const editor = editorRef.current;
-    const monaco = monacoRef.current;
-    const model = editor.getModel();
-    if (!model) {
-      return;
-    }
+    // Small delay to ensure editor content is fully loaded and model is ready
+    const timeoutId = setTimeout(() => {
+      const editor = editorRef.current;
+      const monaco = monacoRef.current;
+      if (!editor || !monaco) return;
+      
+      const model = editor.getModel();
+      if (!model) {
+        return;
+      }
 
     const lineCount = model.getLineCount();
     const decorations = [];
@@ -4053,9 +4679,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       pendingRemoved = [];
     };
 
+    const addedLines = [];
     op.diff.forEach((line) => {
       if (line.type === 'added' && typeof line.newNumber === 'number') {
         if (line.newNumber >= 1 && line.newNumber <= lineCount) {
+          addedLines.push({ lineNumber: line.newNumber, line });
           decorations.push({
             range: new monaco.Range(
               line.newNumber,
@@ -4103,18 +4731,78 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         const domNode = document.createElement('div');
         domNode.className = 'ai-editor-removed-zone';
         domNode.style.height = `${block.lines.length * lineHeight}px`;
+        const currentOpIndex = activeFileOperationIndex;
         domNode.innerHTML = block.lines
           .map(
-            (line) => `
-              <div class="ai-editor-removed-line">
+            (line, lineIdx) => {
+              const lineKey = `${currentOpIndex}-${line.oldNumber}`;
+              const isAccepted = acceptedLines.has(lineKey);
+              const isDeclined = declinedLines.has(lineKey);
+              return `
+              <div class="ai-editor-removed-line" data-line-key="${lineKey}" data-line-number="${line.oldNumber}">
                 <span class="ai-editor-removed-marker">−</span>
                 <span class="ai-editor-removed-text">${
                   escapeHtml(line.text === '' ? ' ' : line.text)
                 }</span>
+                <div class="ai-editor-line-actions">
+                  <button 
+                    class="ai-line-undo-btn ${isDeclined ? 'active' : ''}" 
+                    data-action="decline" 
+                    data-line-key="${lineKey}"
+                    style="padding: 4px 10px; border: 1px solid ${isDeclined ? '#475569' : '#374151'}; background: ${isDeclined ? '#1e293b' : '#0f172a'}; color: ${isDeclined ? '#e2e8f0' : '#94a3b8'}; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 500; transition: all 0.2s; white-space: nowrap;"
+                    title="Undo this line"
+                  >
+                    Undo
+                  </button>
+                  <button 
+                    class="ai-line-keep-btn ${isAccepted ? 'active' : ''}" 
+                    data-action="accept" 
+                    data-line-key="${lineKey}"
+                    style="padding: 4px 10px; border: 1px solid ${isAccepted ? '#22c55e' : '#22c55e'}; background: ${isAccepted ? '#22c55e' : '#22c55e'}; color: white; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 500; transition: all 0.2s; white-space: nowrap;"
+                    title="Keep this line"
+                  >
+                    Keep
+                  </button>
+                </div>
               </div>
-            `
+            `;
+            }
           )
           .join('');
+        
+        // Add event listeners for accept/decline buttons
+        domNode.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const btn = e.target.closest('[data-action]');
+          if (!btn) return;
+          const action = btn.dataset.action;
+          const lineKey = btn.dataset.lineKey;
+          if (!lineKey) return;
+          
+          const parts = lineKey.split('-');
+          if (parts.length < 2) return;
+          
+          const opIndex = parseInt(parts[0]);
+          const lineNumber = parseInt(parts[1]);
+          
+          if (isNaN(opIndex) || isNaN(lineNumber)) return;
+          
+          const line = block.lines.find(l => l.oldNumber === lineNumber);
+          if (line) {
+            if (action === 'accept') {
+              if (e.stopImmediatePropagation) {
+                e.stopImmediatePropagation();
+              }
+              handleAcceptLineRef.current(opIndex, lineNumber, 'removed');
+            } else if (action === 'decline') {
+              if (e.stopImmediatePropagation) {
+                e.stopImmediatePropagation();
+              }
+              handleDeclineLineRef.current(opIndex, lineNumber, 'removed');
+            }
+          }
+        }, true);
 
         const marginDomNode = document.createElement('div');
         marginDomNode.className = 'ai-editor-removed-margin';
@@ -4132,6 +4820,364 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
     editorDiffViewZonesRef.current = newZoneIds;
   });
+
+      // Add content widgets for added lines with accept/decline buttons
+      const currentOpIndex = activeFileOperationIndex;
+      const monacoInstance = monacoRef.current;
+    
+    // Remove existing content widgets
+    editorContentWidgetsRef.current.forEach((widgetRef) => {
+      if (typeof widgetRef === 'string') {
+        editor.removeContentWidget({ getId: () => widgetRef });
+      } else if (widgetRef && widgetRef.cleanup) {
+        widgetRef.cleanup();
+        editor.removeContentWidget({ getId: () => widgetRef.id });
+      }
+    });
+    editorContentWidgetsRef.current = [];
+
+    // Group consecutive added lines together (within 2 lines of each other)
+    const MAX_GAP = 2; // Maximum gap between lines to consider them a group
+    const lineGroups = [];
+    
+    if (addedLines.length > 0) {
+      // Sort added lines by line number
+      const sortedLines = [...addedLines].sort((a, b) => a.lineNumber - b.lineNumber);
+      
+      let currentGroup = [sortedLines[0]];
+      
+      for (let i = 1; i < sortedLines.length; i++) {
+        const prevLine = sortedLines[i - 1];
+        const currLine = sortedLines[i];
+        const gap = currLine.lineNumber - prevLine.lineNumber;
+        
+        // If lines are close together (within MAX_GAP), add to current group
+        if (gap <= MAX_GAP) {
+          currentGroup.push(currLine);
+        } else {
+          // Start a new group
+          lineGroups.push(currentGroup);
+          currentGroup = [currLine];
+        }
+      }
+      
+      // Don't forget the last group
+      if (currentGroup.length > 0) {
+        lineGroups.push(currentGroup);
+      }
+    }
+    
+    // Create content widgets for each group - one widget per group, positioned on the right
+    lineGroups.forEach((group) => {
+      const firstLine = group[0];
+      const lastLine = group[group.length - 1];
+      const groupLineNumbers = group.map(({ lineNumber }) => lineNumber);
+      const groupKey = `${currentOpIndex}-${firstLine.lineNumber}-${lastLine.lineNumber}`;
+      
+      // Check if all lines in the group are accepted/declined
+      const allAccepted = groupLineNumbers.every(lineNum => {
+        const lineKey = `${currentOpIndex}-${lineNum}`;
+        return acceptedLines.has(lineKey);
+      });
+      const allDeclined = groupLineNumbers.every(lineNum => {
+        const lineKey = `${currentOpIndex}-${lineNum}`;
+        return declinedLines.has(lineKey);
+      });
+      
+      // Determine button states
+      const isAccepted = allAccepted;
+      const isDeclined = allDeclined;
+      
+      const widgetId = `ai-line-widget-${groupKey}`;
+      const domNode = document.createElement('div');
+      domNode.className = 'ai-editor-line-widget';
+      domNode.style.cssText = `
+        position: absolute;
+        right: 10px;
+        display: flex;
+        flex-direction: row;
+        gap: 6px;
+        align-items: center;
+        z-index: 100;
+        background: rgba(15, 23, 42, 0.95);
+        border: none;
+        border-radius: 4px;
+        padding: 2px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        white-space: nowrap;
+        pointer-events: auto;
+      `;
+      
+      // Show line count if group has multiple lines
+      const lineCountText = group.length > 1 ? ` (${group.length})` : '';
+      
+      const undoBtn = document.createElement('button');
+      undoBtn.type = 'button'; // Prevent form submission
+      undoBtn.textContent = `Undo${lineCountText}`;
+      undoBtn.className = 'ai-line-undo-btn';
+      undoBtn.setAttribute('data-group-key', groupKey);
+      undoBtn.setAttribute('data-action', 'decline');
+      undoBtn.setAttribute('data-line-numbers', groupLineNumbers.join(','));
+      undoBtn.style.cssText = `
+        padding: 4px 10px;
+        border: 1px solid ${isDeclined ? '#475569' : '#374151'};
+        background: ${isDeclined ? '#1e293b' : '#0f172a'};
+        color: ${isDeclined ? '#e2e8f0' : '#94a3b8'};
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 500;
+        transition: all 0.2s;
+        white-space: nowrap;
+        flex-shrink: 0;
+        pointer-events: auto;
+        user-select: none;
+      `;
+      undoBtn.title = group.length > 1 
+        ? `Undo ${group.length} lines (${firstLine.lineNumber}-${lastLine.lineNumber})`
+        : `Undo line ${firstLine.lineNumber}`;
+      // Store references to avoid closure issues
+      const opIndex = currentOpIndex;
+      const lineNums = [...groupLineNumbers];
+      
+      // Create a proper event handler function that will work
+      const createUndoHandler = () => {
+        return function(e) {
+          console.log('Undo button clicked!', { opIndex, lineNums });
+          e = e || window.event;
+          try {
+            if (e) {
+              if (typeof e.preventDefault === 'function') {
+                e.preventDefault();
+              }
+              if (typeof e.stopPropagation === 'function') {
+                e.stopPropagation();
+              }
+              if (typeof e.stopImmediatePropagation === 'function') {
+                e.stopImmediatePropagation();
+              }
+              if (e.cancelBubble !== undefined) {
+                e.cancelBubble = true;
+              }
+            }
+            // Decline all lines in the group
+            console.log('Calling handleDeclineLine for lines:', lineNums);
+            lineNums.forEach(lineNum => {
+              handleDeclineLineRef.current(opIndex, lineNum, 'added');
+            });
+            console.log('handleDeclineLine calls completed');
+          } catch (error) {
+            console.error('Error in undo handler:', error);
+          }
+          return false;
+        };
+      };
+      
+      // Attach handler - use addEventListener with capture to intercept before Monaco
+      const undoHandler = createUndoHandler();
+      undoBtn.addEventListener('click', undoHandler, true); // Use capture phase to intercept early
+      
+      // Handle mousedown to prevent editor from capturing it
+      undoBtn.onmousedown = function(e) {
+        e = e || window.event;
+        if (e) {
+          if (typeof e.stopPropagation === 'function') {
+            e.stopPropagation();
+          }
+          if (e.cancelBubble !== undefined) {
+            e.cancelBubble = true;
+          }
+        }
+      };
+      
+      const keepBtn = document.createElement('button');
+      keepBtn.type = 'button'; // Prevent form submission
+      keepBtn.textContent = `Keep${lineCountText}`;
+      keepBtn.className = 'ai-line-keep-btn';
+      keepBtn.setAttribute('data-group-key', groupKey);
+      keepBtn.setAttribute('data-action', 'accept');
+      keepBtn.setAttribute('data-line-numbers', groupLineNumbers.join(','));
+      keepBtn.style.cssText = `
+        padding: 4px 10px;
+        border: 1px solid ${isAccepted ? '#22c55e' : '#22c55e'};
+        background: ${isAccepted ? '#22c55e' : '#22c55e'};
+        color: white;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 500;
+        transition: all 0.2s;
+        white-space: nowrap;
+        flex-shrink: 0;
+        pointer-events: auto;
+        user-select: none;
+      `;
+      keepBtn.title = group.length > 1 
+        ? `Keep ${group.length} lines (${firstLine.lineNumber}-${lastLine.lineNumber})`
+        : `Keep line ${firstLine.lineNumber}`;
+      // Create a proper event handler function that will work
+      const createKeepHandler = () => {
+        return function(e) {
+          console.log('Keep button clicked!', { opIndex, lineNums });
+          e = e || window.event;
+          try {
+            if (e) {
+              if (typeof e.preventDefault === 'function') {
+                e.preventDefault();
+              }
+              if (typeof e.stopPropagation === 'function') {
+                e.stopPropagation();
+              }
+              if (typeof e.stopImmediatePropagation === 'function') {
+                e.stopImmediatePropagation();
+              }
+              if (e.cancelBubble !== undefined) {
+                e.cancelBubble = true;
+              }
+            }
+            // Accept all lines in the group
+            console.log('Calling handleAcceptLine for lines:', lineNums);
+            lineNums.forEach(lineNum => {
+              handleAcceptLineRef.current(opIndex, lineNum, 'added');
+            });
+            console.log('handleAcceptLine calls completed');
+          } catch (error) {
+            console.error('Error in keep handler:', error);
+          }
+          return false;
+        };
+      };
+      
+      // Attach handler - use addEventListener with capture to intercept before Monaco
+      const keepHandler = createKeepHandler();
+      keepBtn.addEventListener('click', keepHandler, true); // Use capture phase to intercept early
+      
+      // Handle mousedown to prevent editor from capturing it
+      keepBtn.onmousedown = function(e) {
+        e = e || window.event;
+        if (e) {
+          if (typeof e.stopPropagation === 'function') {
+            e.stopPropagation();
+          }
+          if (e.cancelBubble !== undefined) {
+            e.cancelBubble = true;
+          }
+        }
+      };
+      
+      domNode.appendChild(undoBtn);
+      domNode.appendChild(keepBtn);
+      
+      // Position widget on the first line of the group
+      const widgetLineNumber = firstLine.lineNumber;
+      
+      const widget = {
+        getId: () => widgetId,
+        getDomNode: () => domNode,
+        getPosition: () => {
+          // Use a very large column number to position at the far right
+          // The widget will be positioned by Monaco, then we'll adjust with CSS
+          return {
+            position: { lineNumber: widgetLineNumber, column: 99999 },
+            preference: [
+              monacoInstance.editor.ContentWidgetPositionPreference.ABOVE,
+              monacoInstance.editor.ContentWidgetPositionPreference.BELOW
+            ]
+          };
+        },
+        suppressMouseDown: false, // Let Monaco handle mouse events normally, but our buttons will intercept
+        allowEditorOverflow: false
+      };
+      
+      editor.addContentWidget(widget);
+      
+      // Position the widget at the far right after it's rendered
+      requestAnimationFrame(() => {
+        // Store references in closure for use in updatePosition
+        const storedOpIndex = opIndex;
+        const storedLineNums = [...lineNums];
+        
+        const updatePosition = () => {
+          const editorContainer = editor.getContainerDomNode();
+          if (!editorContainer || !domNode || !domNode.parentElement) return;
+          
+          const widgetParent = domNode.parentElement;
+          
+          // Only position within the editor content area, not blocking tabs
+          if (widgetParent) {
+            const lineTop = editor.getTopForLineNumber(widgetLineNumber);
+            const scrollTop = editor.getScrollTop();
+            const layoutInfo = editor.getLayoutInfo();
+            
+            // Calculate position relative to editor content area
+            // Get the editor's content area (view-lines container)
+            const editorOverlay = editorContainer.querySelector('.monaco-editor .monaco-editor-overlay');
+            if (!editorOverlay) return;
+            
+            // Position widget always at the right edge of the content area
+            // This prevents overlaying code and keeps buttons visible
+            const rightOffset = 10;
+            
+            // Calculate position: Monaco positions widgets relative to the overlay
+            // The overlay spans the full editor width, but we want to position
+            // the widget at the right edge of the content area (where code is displayed)
+            const editorWidth = layoutInfo.width;
+            const contentLeft = layoutInfo.contentLeft;
+            const contentWidth = layoutInfo.contentWidth;
+            
+            // The content area ends at: contentLeft + contentWidth
+            // From the right edge of the editor overlay, the content area ends at:
+            // editorWidth - (contentLeft + contentWidth)
+            // Position it at the right edge with a small offset from the content edge
+            const contentRightEdge = editorWidth - (contentLeft + contentWidth);
+            const rightPosition = contentRightEdge + rightOffset;
+            
+            widgetParent.style.cssText = `
+              position: absolute !important;
+              right: ${rightPosition}px !important;
+              top: ${lineTop - scrollTop}px !important;
+              z-index: 10 !important;
+              pointer-events: none !important;
+              max-width: ${contentWidth - rightOffset * 2}px !important;
+              overflow: visible !important;
+            `;
+            
+            // Ensure the widget itself has pointer events but parent doesn't block
+            // Only update pointer-events, don't overwrite all styles
+            domNode.style.pointerEvents = 'auto';
+            domNode.style.position = 'relative';
+            domNode.style.zIndex = '11';
+            
+            // Make buttons clickable - ensure they have pointer events
+            // Handlers are already attached, just ensure pointer-events are set
+            const buttons = domNode.querySelectorAll('button');
+            buttons.forEach(btn => {
+              btn.style.pointerEvents = 'auto';
+              btn.style.cursor = 'pointer';
+              btn.style.zIndex = '12';
+            });
+          }
+        };
+        
+        updatePosition();
+        const scrollDisposable = editor.onDidScrollChange(updatePosition);
+        
+        // Also update on resize
+        const resizeDisposable = editor.onDidLayoutChange(updatePosition);
+        
+        // Store cleanup
+        editorContentWidgetsRef.current.push({
+          id: widgetId,
+          cleanup: () => {
+            scrollDisposable.dispose();
+            resizeDisposable.dispose();
+          }
+        });
+      });
+    });
+    }, 150);
+    
+    return () => clearTimeout(timeoutId);
   }, [
     pendingFileOperations,
     activeFileOperationIndex,
@@ -4139,6 +5185,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     editorContent,
     clearEditorDiffDecorations,
     activeTab,
+    acceptedLines,
+    declinedLines,
+    handleAcceptLine,
+    handleDeclineLine,
   ]);
 
   const renderFileTree = (fileList, depth = 0) => {
@@ -4439,160 +5489,210 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           {/* Editor Tabs */}
           {openFiles.length > 0 && (
             <div className="flex bg-dark-800 border-b border-dark-700 overflow-x-auto">
-              {openFiles.map((file) => (
-                <div
-                  key={file.path}
-                  className={`flex items-center px-3 py-2 border-r border-dark-700 cursor-pointer text-sm ${
-                    activeTab === file.path ? 'bg-dark-900' : 'bg-dark-800 hover:bg-dark-750'
-                  }`}
-                  onClick={() => {
-                    setActiveTab(file.path);
-                    setEditorContent(file.content);
-                    setEditorLanguage(file.language);
-                  }}
-                  onContextMenu={(e) => handleTabContextMenu(e, file)}
-                >
-                  <File className="w-3 h-3 mr-2 text-dark-400" />
-                  <span className="text-dark-200">{file.name}</span>
-                  {file.modified && (
-                    <span className="ml-1 w-2 h-2 bg-primary-500 rounded-full" title="Modified" />
-                  )}
-                  <button
+              {openFiles
+                .filter((file, index, self) => {
+                  // Deduplicate based on normalized paths
+                  const normalizedPath = normalizeEditorPath(file.path);
+                  return index === self.findIndex((f) => normalizeEditorPath(f.path) === normalizedPath);
+                })
+                .map((file) => (
+                  <div
+                    key={normalizeEditorPath(file.path)}
+                    className={`flex items-center px-3 py-2 border-r border-dark-700 cursor-pointer text-sm relative z-10 ${
+                      normalizeEditorPath(activeTab || '') === normalizeEditorPath(file.path) ? 'bg-dark-900' : 'bg-dark-800 hover:bg-dark-750'
+                    }`}
+                    style={{ pointerEvents: 'auto', zIndex: 10 }}
                     onClick={(e) => {
-                      e.stopPropagation();
-                      if (file.modified) {
-                        if (window.confirm(`${file.name} has unsaved changes. Save before closing?`)) {
-                          saveFile(file.path);
-                        }
+                      // Only handle tab click if not clicking on the close button
+                      if (e.target.closest('button[title="Close tab"]')) {
+                        return;
                       }
-                      closeTab(file.path, e);
+                      const normalizedPath = normalizeEditorPath(file.path);
+                      setActiveTab(normalizedPath);
+                      setEditorContent(file.content);
+                      setEditorLanguage(file.language);
                     }}
-                    className="ml-2 hover:bg-dark-700 rounded p-0.5"
-                    title="Close tab"
+                    onContextMenu={(e) => handleTabContextMenu(e, file)}
                   >
-                    <X className="w-3 h-3 text-dark-400" />
-                  </button>
-                </div>
-              ))}
+                    <File className="w-3 h-3 mr-2 text-dark-400" />
+                    <span className="text-dark-200">{file.name}</span>
+                    {file.modified && (
+                      <span className="ml-1 w-2 h-2 bg-primary-500 rounded-full" title="Modified" />
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (e.stopImmediatePropagation) {
+                          e.stopImmediatePropagation();
+                        }
+                        // Only show confirmation for actual user modifications, not AI previews
+                        if (file.modified && !file.aiPreview) {
+                          if (window.confirm(`${file.name} has unsaved changes. Save before closing?`)) {
+                            saveFile(file.path);
+                          }
+                        }
+                        closeTab(file.path, e);
+                      }}
+                      className="ml-2 hover:bg-dark-700 rounded p-0.5 z-10 relative"
+                      style={{ pointerEvents: 'auto', zIndex: 10 }}
+                      title="Close tab"
+                    >
+                      <X className="w-3 h-3 text-dark-400" />
+                    </button>
+                  </div>
+                ))}
             </div>
           )}
 
-          {pendingFileOperations && (() => {
-            const operations = pendingFileOperations.operations || [];
-            const totalOps = operations.length;
-            if (totalOps === 0) return null;
-
-            const clampedIndex = Math.min(
-              Math.max(activeFileOperationIndex, 0),
-              Math.max(totalOps - 1, 0)
-            );
-            const op = operations[clampedIndex];
-            const normalizedPath = normalizeEditorPath(op.path);
-
-            const goPrev = () => {
-              setActiveFileOperationIndex((prev) => (prev > 0 ? prev - 1 : prev));
-            };
-
-            const goNext = () => {
-              setActiveFileOperationIndex((prev) =>
-                prev < totalOps - 1 ? prev + 1 : prev
-              );
-            };
-
-            const isOperationFileOpen = openFiles.some(
-              (file) => file.path === normalizedPath
-            );
-
-            const handleReviewClick = () => {
-              if (op) {
-                openOperationPreview(op);
-              }
-            };
-
-            return (
-              <div className="border-b border-primary-700/40 bg-primary-900/10 text-sm p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <h4 className="text-dark-100 font-semibold">Review AI changes</h4>
-                    <p className="text-xs text-dark-300">
-                      Change {clampedIndex + 1} of {totalOps} •{' '}
-                      {pendingFileOperations.mode?.toUpperCase() || 'AI'}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-1 text-xs text-dark-300">
-                      <button
-                        type="button"
-                        onClick={goPrev}
-                        disabled={clampedIndex === 0}
-                        className="p-1 rounded border border-dark-600 hover:bg-dark-800 disabled:opacity-40"
-                        aria-label="Previous change"
-                      >
-                        <ChevronLeft className="w-3 h-3" />
-                      </button>
-                      <span className="min-w-[42px] text-center">
-                        {clampedIndex + 1} / {totalOps}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={goNext}
-                        disabled={clampedIndex >= totalOps - 1}
-                        className="p-1 rounded border border-dark-600 hover:bg-dark-800 disabled:opacity-40"
-                        aria-label="Next change"
-                      >
-                        <ChevronRight className="w-3 h-3" />
-                      </button>
-                    </div>
-                    {isOperationFileOpen ? (
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={handleDiscardPendingFileOperations}
-                          disabled={isApplyingFileOperations}
-                          className="px-3 py-1.5 rounded-lg border border-dark-600 text-dark-200 text-xs hover:bg-dark-800 disabled:opacity-60"
-                        >
-                          Undo All
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleApplyPendingFileOperations}
-                          disabled={isApplyingFileOperations}
-                          className="px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs disabled:opacity-60"
-                        >
-                          {isApplyingFileOperations ? 'Applying…' : 'Keep All'}
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={handleReviewClick}
-                        className="px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs disabled:opacity-60"
-                        disabled={isApplyingFileOperations}
-                      >
-                        Review the file
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="mt-2 flex items-center justify-between text-xs text-dark-300">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded bg-dark-800 text-primary-400 uppercase text-[10px]">
-                      {op.type.replace('_', ' ')}
-                    </span>
-                    <span className="text-dark-200 truncate max-w-[320px]">
-                      {normalizedPath}
-                    </span>
-                  </div>
-                  <span className="text-[11px] text-dark-500">
-                    File below shows this change with highlighted lines.
-                  </span>
-                </div>
-              </div>
-            );
-          })()}
 
           {/* Editor Content */}
           <div className="flex-1 relative">
+            {/* Floating "Review the Files" button - center bottom */}
+            {showReviewButton && pendingFileOperations && (
+              <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-50">
+                <button
+                  type="button"
+                  onClick={handleStartReview}
+                  className="px-6 py-3 rounded-xl bg-primary-600 hover:bg-primary-700 text-white font-semibold text-sm shadow-lg shadow-primary-500/30 flex items-center gap-2 transition-all hover:scale-105"
+                >
+                  <FileSearch className="w-4 h-4" />
+                  Review the Files
+                </button>
+              </div>
+            )}
+
+            {/* Floating "Review AI changes" panel - center bottom */}
+            {pendingFileOperations && !showReviewButton && (() => {
+              const operations = pendingFileOperations.operations || [];
+              const totalOps = operations.length;
+              if (totalOps === 0) return null;
+
+              const clampedIndex = Math.min(
+                Math.max(activeFileOperationIndex, 0),
+                Math.max(totalOps - 1, 0)
+              );
+              const op = operations[clampedIndex];
+              const normalizedPath = normalizeEditorPath(op.path);
+
+              const goPrev = () => {
+                setActiveFileOperationIndex((prev) => (prev > 0 ? prev - 1 : prev));
+              };
+
+              const goNext = () => {
+                setActiveFileOperationIndex((prev) =>
+                  prev < totalOps - 1 ? prev + 1 : prev
+                );
+              };
+
+              const isOperationFileOpen = openFiles.some(
+                (file) => file.path === normalizedPath
+              );
+
+              const handleReviewClick = () => {
+                if (op) {
+                  openOperationPreview(op);
+                }
+              };
+
+              return (
+                <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-50">
+                  <div className="bg-dark-800 border border-dark-700 rounded-xl shadow-2xl p-4 space-y-3 min-w-[500px] max-w-[700px]">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <h4 className="text-dark-100 font-semibold">Review AI changes</h4>
+                        <p className="text-xs text-dark-300">
+                          Change {clampedIndex + 1} of {totalOps} •{' '}
+                          {pendingFileOperations.mode?.toUpperCase() || 'AI'}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1 text-xs text-dark-300">
+                          <button
+                            type="button"
+                            onClick={goPrev}
+                            disabled={clampedIndex === 0}
+                            className="p-1 rounded border border-dark-600 hover:bg-dark-800 disabled:opacity-40"
+                            aria-label="Previous change"
+                          >
+                            <ChevronLeft className="w-3 h-3" />
+                          </button>
+                          <span className="min-w-[42px] text-center">
+                            {clampedIndex + 1} / {totalOps}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={goNext}
+                            disabled={clampedIndex >= totalOps - 1}
+                            className="p-1 rounded border border-dark-600 hover:bg-dark-800 disabled:opacity-40"
+                            aria-label="Next change"
+                          >
+                            <ChevronRight className="w-3 h-3" />
+                          </button>
+                        </div>
+                        {isOperationFileOpen ? (
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={handleDiscardPendingFileOperations}
+                              disabled={isApplyingFileOperations}
+                              className="px-3 py-1.5 rounded-lg border border-dark-600 text-dark-200 text-xs hover:bg-dark-800 disabled:opacity-60"
+                            >
+                              Undo All
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleApplyPendingFileOperations}
+                              disabled={isApplyingFileOperations}
+                              className="px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs disabled:opacity-60"
+                            >
+                              {isApplyingFileOperations ? 'Applying…' : 'Keep All'}
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={handleReviewClick}
+                            className="px-3 py-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs disabled:opacity-60"
+                            disabled={isApplyingFileOperations}
+                          >
+                            Review the file
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-dark-300">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded bg-dark-800 text-primary-400 uppercase text-[10px]">
+                          {op.type.replace('_', ' ')}
+                        </span>
+                        <span className="text-dark-200 truncate max-w-[320px]">
+                          {normalizedPath}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-dark-500">
+                        File below shows this change with highlighted lines.
+                      </span>
+                    </div>
+                    {/* Show "Review the next file" button if current file is reviewed */}
+                    {reviewedOperations.has(activeFileOperationIndex) && clampedIndex < totalOps - 1 && (
+                      <div className="pt-2 border-t border-dark-700">
+                        <button
+                          type="button"
+                          onClick={handleReviewNextFile}
+                          className="w-full px-4 py-2 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                          Review the next file
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
             {activeTab ? (
               <Editor
                 height="100%"
@@ -4606,9 +5706,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                 onChange={(value) => {
                   const newContent = value || '';
                   setEditorContent(newContent);
-                  // Update content in openFiles and mark as modified
+                  // Update content in openFiles and mark as modified (user edit, not AI preview)
                   setOpenFiles(prev => prev.map(f => 
-                    f.path === activeTab ? { ...f, content: newContent, modified: true } : f
+                    f.path === activeTab ? { ...f, content: newContent, modified: true, aiPreview: false } : f
                   ));
                 }}
                 theme="vs-dark"
@@ -5068,20 +6168,18 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                   {isLoadingChat && (
                     <div className="flex space-x-2">
                       <Bot className="w-5 h-5 text-primary-500 mt-1" />
-                      <div className="bg-dark-700 px-3 py-2 rounded-lg">
-                        <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
+                      <div className="bg-dark-700 px-3 py-3 rounded-lg space-y-3">
+                        <div className="flex items-center gap-2 text-sm text-dark-300">
+                          <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
+                          <span>
+                            AI is thinking… {Math.max(1, Math.round(Math.max(thinkingElapsed, 1000) / 1000))}s elapsed
+                          </span>
+                        </div>
                         {agentStatuses.length > 0 && (
-                          <div className="mt-2 space-y-1 text-xs text-dark-300">
-                            {agentStatuses.map((status) => (
-                              <div key={status.key} className="flex items-center gap-2">
-                                <Loader2 className="w-3 h-3 animate-spin text-primary-500" />
-                                <span>{status.label}</span>
-                              </div>
-                            ))}
-                          </div>
+                          <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
                         )}
                         {thinkingAiPlan && (
-                          <div className="mt-3 border-t border-dark-600 pt-3">
+                          <div className="border-t border-dark-600 pt-3">
                             {renderAiPlan(thinkingAiPlan)}
                           </div>
                         )}

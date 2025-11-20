@@ -95,6 +95,8 @@ code {
   align-items: center;
   white-space: pre-wrap;
   word-break: break-word;
+  width: 100%;
+  justify-content: space-between;
 }
 
 .ai-editor-removed-marker {
@@ -102,6 +104,63 @@ code {
   font-weight: 600;
   width: 10px;
   text-align: center;
+}
+
+/* Line action buttons */
+.ai-editor-line-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* Position AI line widgets on the right side */
+.ai-editor-line-widget {
+  pointer-events: auto !important;
+  z-index: 10 !important;
+}
+
+.ai-editor-line-widget button {
+  pointer-events: auto !important;
+  user-select: none !important;
+  cursor: pointer !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+}
+
+.ai-editor-line-widget button:active {
+  transform: scale(0.98);
+}
+
+/* Ensure tab bar is clickable */
+.bg-dark-800.border-b {
+  pointer-events: auto !important;
+  z-index: 20 !important;
+}
+
+.bg-dark-800.border-b > div {
+  pointer-events: auto !important;
+}
+
+.ai-line-undo-btn,
+.ai-line-keep-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ai-line-undo-btn:hover {
+  background: #1e293b !important;
+  border-color: #475569 !important;
+  color: #e2e8f0 !important;
+}
+
+.ai-line-keep-btn:hover {
+  background: #16a34a !important;
+  border-color: #16a34a !important;
+  opacity: 0.9;
 }
 
 .ai-editor-removed-text {

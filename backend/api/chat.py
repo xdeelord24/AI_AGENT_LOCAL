@@ -150,6 +150,11 @@ async def send_message(
         last_timestamp: Optional[str] = None
         last_context_used: Optional[Dict[str, Any]] = None
 
+        # Detect ASK mode - never accumulate file operations or plans in ASK mode
+        mode_value = (context_payload.get("mode") or "").lower()
+        chat_mode_value = (context_payload.get("chat_mode") or "").lower()
+        is_ask_mode = (mode_value == "ask" or chat_mode_value == "ask") and not context_payload.get("composer_mode")
+
         current_message = request.message
         auto_continue_rounds = 0
         activity_events: List[Dict[str, Any]] = []
@@ -190,14 +195,20 @@ async def send_message(
 
             aggregated_messages.append(response.get("content", ""))
 
-            if response.get("file_operations"):
-                accumulated_file_ops.extend(response["file_operations"])
+            # Never accumulate file operations or plans in ASK mode
+            if not is_ask_mode:
+                if response.get("file_operations"):
+                    accumulated_file_ops.extend(response["file_operations"])
 
-            if response.get("ai_plan"):
-                final_ai_plan = response["ai_plan"]
+                if response.get("ai_plan"):
+                    final_ai_plan = response["ai_plan"]
 
             working_history.append({"role": "user", "content": current_message})
             working_history.append({"role": "assistant", "content": response.get("content", "")})
+
+            # In ASK mode, never auto-continue (no plans to execute)
+            if is_ask_mode:
+                break
 
             ai_plan = response.get("ai_plan")
             if not _plan_has_pending_tasks(ai_plan):
@@ -237,8 +248,8 @@ async def send_message(
             conversation_id=conversation_id or "",
             timestamp=last_timestamp or "",
             context_used=last_context_used or context_payload,
-            file_operations=accumulated_file_ops or None,
-            ai_plan=final_ai_plan,
+            file_operations=None if is_ask_mode else (accumulated_file_ops or None),
+            ai_plan=None if is_ask_mode else final_ai_plan,
             agent_statuses=agent_statuses,
             activity_log=activity_log or None
         )
