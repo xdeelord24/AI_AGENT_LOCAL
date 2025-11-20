@@ -896,13 +896,15 @@ class AIService:
         # Filter out thinking/planning/reporting content
         cleaned_response = self._filter_thinking_content(cleaned_response, context)
         
-        # Double-check: ensure ASK mode never has file operations or plans
+        # CRITICAL: Ensure ASK mode NEVER has file operations or plans, even if the AI generated them
         if self._is_ask_context(context):
             metadata["file_operations"] = []
             metadata["ai_plan"] = None
+            # Also strip any file operation mentions from the response text
+            cleaned_response = self._strip_file_operation_mentions(cleaned_response)
         
         # Never generate file operations in ASK mode
-        if not self._is_ask_context(context) and not metadata.get("file_operations") and self._should_force_file_operations(message, cleaned_response, context):
+        if self._can_modify_files(context) and not metadata.get("file_operations") and self._should_force_file_operations(message, cleaned_response, context):
             fallback_cleaned, fallback_metadata = await self._generate_file_operations_metadata(
                 message=message,
                 context=context,
@@ -932,16 +934,44 @@ class AIService:
             "context_used": context
         }
         
-        # Only include file_operations and ai_plan if not in ASK mode
-        if not self._is_ask_context(context):
+        # Only include file_operations and ai_plan if file modifications are allowed
+        if self._can_modify_files(context):
             file_operations = metadata.get("file_operations") or []
             if file_operations:
                 result["file_operations"] = file_operations
 
             if metadata.get("ai_plan"):
                 result["ai_plan"] = metadata["ai_plan"]
+        else:
+            # Explicitly set to None/null in ASK mode to prevent any confusion
+            result["file_operations"] = None
+            result["ai_plan"] = None
         
         return result
+    
+    def _strip_file_operation_mentions(self, response: str) -> str:
+        """Remove any mentions of file operations from responses in ASK mode"""
+        if not response:
+            return response
+        
+        # Remove common file operation phrases
+        patterns_to_remove = [
+            r'```json\s*\{[^}]*"file_operations"[^}]*\}[\s\S]*?```',
+            r'```json\s*\{[^}]*"ai_plan"[^}]*\}[\s\S]*?```',
+            r'\{[^}]*"file_operations"[^}]*\}',
+            r'\{[^}]*"ai_plan"[^}]*\}',
+            r'##?\s*file\s+operations?\s*##?',
+            r'##?\s*file\s+operation\s*##?',
+        ]
+        
+        cleaned = response
+        for pattern in patterns_to_remove:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.DOTALL)
+        
+        # Clean up multiple consecutive empty lines
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        
+        return cleaned.strip()
     
     def _build_prompt(
         self, 
@@ -970,15 +1000,20 @@ class AIService:
 
         if is_ask_mode:
             prompt_parts.extend([
-                "ASK MODE (read-only) REQUIREMENTS:",
-                "- Provide a single, direct answer focused on the user's question.",
-                "- DO NOT include thinking, planning, or reasoning prose in your response—just provide the answer directly.",
-                "- ABSOLUTELY FORBIDDEN: Do NOT create, edit, or delete ANY files. ASK mode is read-only.",
-                "- ABSOLUTELY FORBIDDEN: Do NOT emit file_operations or ai_plan metadata in ANY form (not in JSON blocks, not in code, not anywhere).",
-                "- ABSOLUTELY FORBIDDEN: Do NOT include JSON objects with 'file_operations' or 'ai_plan' keys anywhere in your response.",
-                "- It's fine to include small code snippets for illustration, but never instruct the IDE to modify files.",
-                "- If the user requests edits, explain that Ask mode is read-only and suggest switching to Agent mode instead of performing the change.",
-                "- Your response must be pure text/markdown with NO file operation metadata whatsoever.",
+                "⚠️ ASK MODE (READ-ONLY) - CRITICAL RESTRICTIONS ⚠️",
+                "",
+                "ASK mode is STRICTLY read-only. You MUST follow these rules:",
+                "",
+                "1. NEVER create, edit, delete, or modify ANY files in ASK mode.",
+                "2. NEVER include file_operations or ai_plan metadata in your response (not in JSON, not in code blocks, not anywhere).",
+                "3. NEVER include JSON objects with 'file_operations' or 'ai_plan' keys.",
+                "4. NEVER generate code blocks that look like file operation metadata.",
+                "5. If the user asks for file modifications, explain that ASK mode is read-only and suggest switching to Agent mode.",
+                "6. Provide only a direct, concise answer to the user's question.",
+                "7. DO NOT include thinking, planning, or reasoning prose—just the answer.",
+                "8. You may include small code snippets for illustration, but never instruct the IDE to modify files.",
+                "",
+                "SYSTEM ENFORCEMENT: Even if you generate file_operations, they will be automatically stripped and ignored in ASK mode.",
                 "",
             ])
         else:
@@ -1257,6 +1292,7 @@ class AIService:
         return mode_value in ("agent", "plan") or chat_mode_value in ("agent", "plan")
     
     def _is_ask_context(self, context: Dict[str, Any]) -> bool:
+        """Check if the current context is in ASK (read-only) mode"""
         if not context:
             return False
         if context.get("composer_mode"):
@@ -1264,6 +1300,24 @@ class AIService:
         mode_value = (context.get("mode") or "").lower()
         chat_mode_value = (context.get("chat_mode") or "").lower()
         return mode_value == "ask" or chat_mode_value == "ask"
+    
+    def _is_plan_context(self, context: Dict[str, Any]) -> bool:
+        """Check if the current context is in PLAN mode"""
+        if not context:
+            return False
+        if context.get("composer_mode"):
+            return True  # Composer mode acts like agent/plan mode
+        mode_value = (context.get("mode") or "").lower()
+        chat_mode_value = (context.get("chat_mode") or "").lower()
+        return mode_value == "plan" or chat_mode_value == "plan"
+    
+    def _can_modify_files(self, context: Dict[str, Any]) -> bool:
+        """Centralized check: returns True only if file modifications are allowed"""
+        # ASK mode is always read-only
+        if self._is_ask_context(context):
+            return False
+        # AGENT and PLAN modes can modify files
+        return self._is_agent_context(context) or self._is_plan_context(context)
     
     def _should_force_file_operations(
         self,

@@ -16,3 +16,4 @@ flask==2.3.3
 flask-cors==4.0.0
 duckduckgo-search==4.1.1
 huggingface-hub==0.23.4
+mcp>=0.1.0

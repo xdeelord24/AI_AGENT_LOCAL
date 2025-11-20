@@ -1099,7 +1099,11 @@ useEffect(() => {
         }
       ]);
 
-      if (response.file_operations?.length) {
+      // CRITICAL: In ASK mode, NEVER process file operations, even if the backend sends them
+      // This is a redundant safety check in case anything slips through
+      const isAskMode = (agentMode || '').toLowerCase() === 'ask';
+      
+      if (!isAskMode && response.file_operations?.length) {
         const pendingEntry = {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           operations: response.file_operations,
@@ -1108,6 +1112,9 @@ useEffect(() => {
         };
         setPendingFileOpsQueue((prev) => [...prev, pendingEntry]);
         toast.success('Review the pending AI file changes before applying them.');
+      } else if (isAskMode && response.file_operations?.length) {
+        // Log a warning if file operations are received in ASK mode (this shouldn't happen)
+        console.warn('ASK mode: Ignoring file operations that were incorrectly sent by backend', response.file_operations);
       }
       triggerPhase('verifying', 'Verifying updates and running quick checks');
       triggerPhase('reporting', 'Reporting outcomes and next steps');

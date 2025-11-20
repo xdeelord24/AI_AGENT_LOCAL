@@ -195,8 +195,14 @@ async def send_message(
 
             aggregated_messages.append(response.get("content", ""))
 
-            # Never accumulate file operations or plans in ASK mode
-            if not is_ask_mode:
+            # CRITICAL: Never accumulate file operations or plans in ASK mode
+            # Even if the AI service accidentally includes them, strip them here
+            if is_ask_mode:
+                # Explicitly strip any file operations or plans that might have been generated
+                response["file_operations"] = None
+                response["ai_plan"] = None
+            else:
+                # Only accumulate file operations and plans in non-ASK modes
                 if response.get("file_operations"):
                     accumulated_file_ops.extend(response["file_operations"])
 
@@ -243,13 +249,22 @@ async def send_message(
 
         activity_log = _finalize_activity_log(activity_events)
 
+        # CRITICAL: Final check - ensure ASK mode NEVER returns file operations or plans
+        # This is a redundant safeguard in case anything slipped through
+        final_file_ops = None
+        final_plan = None
+        if not is_ask_mode:
+            final_file_ops = accumulated_file_ops if accumulated_file_ops else None
+            final_plan = final_ai_plan
+        # Explicitly set to None for ASK mode, don't rely on conditional
+        
         return ChatResponse(
             response=combined_response,
             conversation_id=conversation_id or "",
             timestamp=last_timestamp or "",
             context_used=last_context_used or context_payload,
-            file_operations=None if is_ask_mode else (accumulated_file_ops or None),
-            ai_plan=None if is_ask_mode else final_ai_plan,
+            file_operations=final_file_ops,
+            ai_plan=final_plan,
             agent_statuses=agent_statuses,
             activity_log=activity_log or None
         )

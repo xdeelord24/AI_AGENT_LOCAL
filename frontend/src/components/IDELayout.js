@@ -3960,7 +3960,11 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
 
       setChatMessages(prev => [...prev, assistantMessage]);
 
-      if (response.file_operations && response.file_operations.length > 0) {
+      // CRITICAL: In ASK mode, NEVER process file operations, even if the backend sends them
+      // This is a redundant safety check in case anything slips through
+      const isAskMode = (modePayload || '').toLowerCase() === 'ask';
+      
+      if (!isAskMode && response.file_operations && response.file_operations.length > 0) {
         const normalizedOperations = coalesceFileOperationsForEditor(
           response.file_operations.map((op) => ({
             ...op,
@@ -3996,6 +4000,9 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
           setDeclinedLines(new Map());
           toast.error('AI proposed file changes, but previews failed to load. Review carefully before applying.');
         }
+      } else if (isAskMode && response.file_operations && response.file_operations.length > 0) {
+        // Log a warning if file operations are received in ASK mode (this shouldn't happen)
+        console.warn('ASK mode: Ignoring file operations that were incorrectly sent by backend', response.file_operations);
       }
       setIsLoadingChat(false);
       setThinkingAiPlan(null);
