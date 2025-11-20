@@ -1674,7 +1674,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           return; // Successfully updated, exit early
         } catch (error) {
           // No session found with this conversation_id, will create a new one
-          console.log('No existing session found for conversation_id, creating new session');
+          // Suppress 404 errors as they're expected when no session exists yet
+          if (error.response?.status !== 404) {
+            console.warn('Error checking for existing session by conversation_id:', error);
+          }
+          // Silently continue to create a new session
         }
       }
 

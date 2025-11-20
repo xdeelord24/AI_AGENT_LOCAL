@@ -19,20 +19,26 @@ class ApiService {
   }
 
   static async request(method, url, data = null, config = {}) {
+    // Extract custom options that aren't axios config
+    const { suppress404, ...axiosConfig } = config;
+    
     try {
       const response = await axios({
         method,
         url: `${API_BASE_URL}${url}`,
         data,
-        signal: config.signal,
-        ...config
+        ...axiosConfig
       });
       return response.data;
     } catch (error) {
       if (error.name === 'CanceledError' || error.name === 'AbortError') {
         throw error;
       }
-      console.error(`API ${method} ${url} failed:`, error);
+      // Suppress console errors for expected 404s (e.g., when checking for non-existent sessions)
+      // Only log unexpected errors
+      if (error.response?.status !== 404 || suppress404 !== true) {
+        console.error(`API ${method} ${url} failed:`, error);
+      }
       throw error;
     }
   }
@@ -114,7 +120,7 @@ class ApiService {
   }
 
   static async getChatSessionByConversationId(conversationId) {
-    return this.get(`/api/chat/sessions/by-conversation/${conversationId}`);
+    return this.get(`/api/chat/sessions/by-conversation/${conversationId}`, { suppress404: true });
   }
 
   static async updateChatSession(sessionId, title = null, messages = null) {

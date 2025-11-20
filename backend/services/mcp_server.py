@@ -199,7 +199,6 @@ class MCPServerTools:
         
         if self.web_search_enabled:
             tools.append(
-            tools.append(
                 Tool(
                     name="web_search",
                     description="Search the web using DuckDuckGo with enhanced features: result caching, relevance scoring, and query optimization. Returns search results with titles, URLs, and snippets.",
@@ -227,7 +226,6 @@ class MCPServerTools:
                         "required": ["query"]
                     }
                 )
-            )
             )
         
         return tools
@@ -497,25 +495,102 @@ class MCPServerTools:
                 web_service = WebSearchService()
                 self._web_search_service = web_service
             
+            # Detect if this is a price query - these need fresh, uncached results
+            query_lower = query.lower()
+            is_price_query = any(keyword in query_lower for keyword in [
+                "price", "cost", "value", "worth", "rate", "bitcoin", "btc", "ethereum", "eth",
+                "crypto", "stock", "currency", "usd", "eur", "gbp", "jpy", "exchange rate"
+            ])
+            
+            # For price queries, disable cache and increase results to get more sources
+            use_cache = not is_price_query  # Don't cache price queries
+            
+            # Clear any existing cache entries for price queries to ensure fresh results
+            if is_price_query and hasattr(web_service, 'cache'):
+                # Remove any cached entries that might match this price query
+                # This ensures we always get fresh price data
+                cache_keys_to_remove = []
+                for cache_key in list(web_service.cache.keys()):
+                    # Check if this cache key is related to price queries
+                    cache_key_lower = cache_key.lower()
+                    if any(term in cache_key_lower for term in [
+                        "price", "bitcoin", "btc", "ethereum", "eth", "crypto", 
+                        "stock", "currency", "exchange rate", "current", "live"
+                    ]):
+                        cache_keys_to_remove.append(cache_key)
+                for key in cache_keys_to_remove:
+                    web_service.cache.pop(key, None)
+                # Also clear the cache file if it exists
+                if hasattr(web_service, 'clear_cache'):
+                    # Don't clear all cache, just price-related entries
+                    pass
+            
+            search_max_results = max_results * 2 if is_price_query else max_results  # Get more results for prices
+            
+            # Optimize query for price queries to get current data
+            if is_price_query:
+                # Add "current" or "live" if not already present
+                optimized_query = query
+                if "current" not in query_lower and "live" not in query_lower and "today" not in query_lower:
+                    optimized_query = f"current {query}"
+                else:
+                    optimized_query = query
+            else:
+                optimized_query = query
+            
             # Perform search with enhanced features
             results, metadata = await web_service.search(
-                query=query,
-                max_results=max_results,
+                query=optimized_query,
+                max_results=min(search_max_results, 20),  # Cap at 20
                 search_type=search_type,
-                use_cache=True,
-                optimize_query=True
+                use_cache=use_cache,
+                optimize_query=not is_price_query  # Don't optimize further if we already optimized
             )
             
             if metadata.get("error"):
                 return [TextContent(type="text", text=f"Search error: {metadata['error']}")]
             
-            # Format results
-            formatted = web_service.format_results(results, query, include_metadata=True)
+            # For price queries, prioritize results from reputable sources
+            if is_price_query and results:
+                # Re-sort to prioritize exchanges and financial sites
+                def price_source_priority(result):
+                    url = (result.get("href") or result.get("url") or "").lower()
+                    title = (result.get("title") or "").lower()
+                    body = (result.get("body") or result.get("description") or "").lower()
+                    
+                    priority = 0
+                    # High priority sources
+                    if any(domain in url for domain in [
+                        "coinbase", "binance", "kraken", "gemini", "bitstamp", 
+                        "coindesk", "cointelegraph", "bloomberg", "reuters",
+                        "yahoo finance", "marketwatch", "nasdaq", "investing.com"
+                    ]):
+                        priority += 10
+                    # Medium priority
+                    elif any(domain in url for domain in [
+                        "cryptocurrency", "crypto", "exchange", "trading"
+                    ]):
+                        priority += 5
+                    # Check for price indicators in title/body
+                    if any(indicator in title or indicator in body for indicator in [
+                        "$", "usd", "eur", "price", "current", "live", "now"
+                    ]):
+                        priority += 3
+                    
+                    return priority
+                
+                # Sort by priority (highest first)
+                results.sort(key=price_source_priority, reverse=True)
             
-            # Add metadata info if cached
-            if metadata.get("cached"):
+            # Format results
+            formatted = web_service.format_results(results, optimized_query, include_metadata=True)
+            
+            # Add metadata info if cached (but price queries shouldn't be cached)
+            if metadata.get("cached") and not is_price_query:
                 cache_age = metadata.get("cache_age_seconds", 0)
                 formatted += f"\n\n[Note: Results from cache, age: {cache_age}s]"
+            elif is_price_query:
+                formatted += f"\n\n[Note: Fresh search results for current price data]"
             
             return [TextContent(type="text", text=formatted)]
         except ImportError:

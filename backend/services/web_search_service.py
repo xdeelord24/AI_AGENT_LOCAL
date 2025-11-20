@@ -100,6 +100,20 @@ class WebSearchService:
     
     def _optimize_query(self, query: str) -> str:
         """Optimize search query for better results"""
+        query_lower = query.lower()
+        
+        # For price queries, add "current" or "live" if not present
+        is_price_query = any(keyword in query_lower for keyword in [
+            "price", "cost", "value", "worth", "rate", "bitcoin", "btc", "ethereum", "eth",
+            "crypto", "stock", "currency", "exchange rate"
+        ])
+        
+        if is_price_query:
+            # Add "current" if not already present
+            if "current" not in query_lower and "live" not in query_lower and "today" not in query_lower and "now" not in query_lower:
+                return f"current {query}".strip()
+            return query.strip()
+        
         # Remove common stop words that don't help search
         stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by"}
         

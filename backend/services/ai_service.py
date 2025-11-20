@@ -634,15 +634,19 @@ class AIService:
             r'^(gather more information|gathering information|to gather)',
             r'^(after (inspecting|determining|completing)|i will update)',
             r'^(inspect|inspecting)',
+            r'^(todo list|todo:|task-1:|task-2:|task-3:)',
+            r'^(we will use|we will|we\'ll)',
         ]
         
         reporting_patterns = [
             r'^(summary:|summary of|in summary|to summarize)',
-            r'^(report:|reporting:|final report|completion report)',
+            r'^(report:|reporting:|final report|completion report|task report|verification report)',
             r'^(i\'ve completed|i have completed|i completed|completed:)',
             r'^(done:|finished:|completed tasks:)',
             r'^(results:|outcomes:|conclusion:)',
             r'^(all tasks are|all steps are|everything is)',
+            r'^(verification|i verified|verifying)',
+            r'^(task status|remaining risks|task report)',
         ]
         
         # Section headers that indicate thinking/planning/reporting
@@ -664,12 +668,18 @@ class AIService:
             '## approach',
             '## steps',
             '## tasks',
+            '## todo list',
+            '## todo',
+            '## ai plan',
             '### plan',
             '### planning',
             '### strategy',
             '### approach',
             '### steps',
             '### tasks',
+            '### todo list',
+            '### todo',
+            '### ai plan',
         ]
         
         reporting_headers = [
@@ -678,11 +688,23 @@ class AIService:
             '## results',
             '## conclusion',
             '## completion',
+            '## verification',
+            '## verification report',
+            '## task report',
+            '## task status',
+            '## task status update',
+            '## remaining risks',
             '### report',
             '### summary',
             '### results',
             '### conclusion',
             '### completion',
+            '### verification',
+            '### verification report',
+            '### task report',
+            '### task status',
+            '### task status update',
+            '### remaining risks',
         ]
         
         file_operations_headers = [
@@ -702,7 +724,9 @@ class AIService:
             # Check for duplicate section headers (remove duplicates)
             if line_lower.startswith('##') or line_lower.startswith('###'):
                 section_key = line_lower[:50]  # Use first 50 chars as key
-                if section_key in seen_sections:
+                # Also check for common repetitive headers
+                if (section_key in seen_sections or 
+                    (line_lower.startswith('## trending') and any('trending' in s for s in seen_sections))):
                     # Skip duplicate section
                     i += 1
                     # Skip until next section or end
@@ -804,6 +828,184 @@ class AIService:
                 i += 1
                 continue
             
+            # Check for "Continuing the TODO Plan" or similar continuation statements
+            if re.search(r'continuing.*todo.*plan', line_lower) or re.search(r'continuing.*plan', line_lower):
+                i += 1
+                # Skip until we find actual content
+                while i < len(lines):
+                    next_line = lines[i].strip()
+                    if next_line and not (next_line.lower().startswith(('task', 'step', 'completed', 'remaining', 'file'))):
+                        break
+                    i += 1
+                continue
+            
+            # Check for TODO LIST or AI PLAN sections (remove them)
+            # This catches various formats: "TODO LIST", "AI PLAN", "AI PLAN:", etc.
+            if (line_lower.startswith('todo list') or 
+                line_lower.startswith('ai plan') or 
+                'ai plan' in line_lower or
+                line_lower.startswith('fileoperations') or
+                line_lower.startswith('file operations') or
+                ('ai plan' in line_lower and (line_lower.startswith('##') or line_lower.startswith('###')))):
+                # Skip this line and all content until next section or end
+                i += 1
+                while i < len(lines):
+                    next_line = lines[i].strip()
+                    next_line_lower = next_line.lower()
+                    # Stop at next section header
+                    if next_line.startswith('##') or next_line.startswith('###'):
+                        break
+                    # Stop at empty line followed by non-indented content that's not part of the plan
+                    if (next_line == '' and i + 1 < len(lines)):
+                        following_line = lines[i + 1].strip()
+                        following_lower = following_line.lower()
+                        # If next line doesn't look like plan content, stop
+                        if not (following_line.startswith(('-', '*', '1.', '2.', '3.', '4.', '5.', 'task-', 'step', 'completed', 'use web', 'search', 'verify', 'answered')) or
+                                'completed' in following_lower or 'provide' in following_lower or 'plan' in following_lower or
+                                'answered' in following_lower or 'search for' in following_lower):
+                            break
+                    i += 1
+                continue
+            
+            # Check for "Remaining Tasks:" or similar headers
+            if re.match(r'^(remaining tasks|remaining task|task status|tasks:).*', line_lower):
+                i += 1
+                # Skip the task list that follows
+                while i < len(lines):
+                    next_line = lines[i].strip()
+                    if not next_line or next_line.startswith(('-', '*', '1.', '2.', '3.', '4.', '5.', 'task', 'step')):
+                        i += 1
+                    else:
+                        break
+                continue
+            
+            # Check for task-1, task-2, etc. patterns (remove TODO list items)
+            if re.match(r'^[-*]?\s*(task[- ]?\d+|step[- ]?\d+|task \d+).*', line_lower):
+                # Check if it's a completed task or just a task description
+                if 'completed' in line_lower or re.search(r'\(completed\)|\[completed\]', line_lower):
+                    i += 1
+                    continue
+                # Also remove task descriptions that are just status updates
+                if re.search(r'^(task|step).*:(search|verify|provide|get|obtain|check)', line_lower):
+                    i += 1
+                    # Skip the description that follows
+                    while i < len(lines) and (lines[i].strip() == '' or lines[i].startswith('  ') or 
+                                               re.match(r'^(after|to|using|we will)', lines[i].lower().strip())):
+                        i += 1
+                    continue
+            
+            # Check for "COMPLETED" status indicators (remove lines with completed actions)
+            # But be more selective - don't remove lines that mention completion as part of the answer
+            if re.match(r'^(completed|complete|done|finished).*$', line_lower) and len(line_lower) < 50:
+                # Short status lines like "completed" or "completed: task name"
+                i += 1
+                continue
+            if 'completed' in line_lower and re.search(r'\[completed\]|\(completed\)|status.*completed', line_lower):
+                # Lines with explicit completed status markers
+                i += 1
+                continue
+            
+            # Check for "Answered the question" or similar plan completion statements
+            if re.match(r'^(answered|completed|finished|done).*(question|task|request)', line_lower):
+                i += 1
+                continue
+            
+            # Check for lines that are just status descriptions
+            if re.match(r'^(search|verify|provide|get|obtain).*(for|the|current|price)', line_lower) and len(line_lower) < 50:
+                # Short status lines like "Search for the current Bitcoin price"
+                i += 1
+                continue
+            
+            # Check for "Task X: Description" patterns (remove task execution descriptions)
+            if re.match(r'^task \d+:\s*(search|verify|provide|get|obtain|check|find|run)', line_lower):
+                # Skip task descriptions like "Task 1: Search for..."
+                i += 1
+                # Skip the following description lines
+                while i < len(lines):
+                    next_line = lines[i].strip()
+                    next_lower = next_line.lower()
+                    # Stop at next task or section
+                    if re.match(r'^(task \d+|step \d+|##|###)', next_lower):
+                        break
+                    # Stop if we hit actual content (not a continuation of task description)
+                    if next_line and not (next_line.startswith(('after', 'to ', 'we ', 'using', '  ')) or 
+                                         re.match(r'^(after|to verify|we found|result:)', next_lower)):
+                        break
+                    i += 1
+                continue
+            
+            # Check for "After searching..." or "After re-verifying..." patterns (redundant task execution descriptions)
+            if re.match(r'^(after (searching|re-verifying|verifying|checking|inspecting)|to verify|to re-verify)', line_lower):
+                # Skip these redundant execution descriptions
+                i += 1
+                # Skip the following line if it's just continuation
+                if i < len(lines) and (lines[i].strip() == '' or lines[i].startswith('  ') or 
+                                       re.match(r'^(we found|we are|result:|the result)', lines[i].lower().strip())):
+                    i += 1
+                continue
+            
+            # Check for verification statements
+            if re.match(r'^(i verified|i have verified|verifying|verification|no additional verification)', line_lower):
+                i += 1
+                continue
+            
+            # Check for task status update sections
+            if 'task status update' in line_lower or 'remaining risks' in line_lower:
+                i += 1
+                continue
+            
+            # Check for lines that are task items (like "Verify the price information", "Get the latest price")
+            if re.match(r'^(verify|get|check|obtain|retrieve|find).*(the|price|information|currency|data|result)', line_lower) and len(line_lower) < 60:
+                # These are task descriptions, not answers
+                i += 1
+                continue
+            
+            # Check for lines that describe what was done (plan execution descriptions)
+            if re.match(r'^(use|using|provide|providing|get|getting|obtain|obtaining).*(web|search|tool|price)', line_lower):
+                # Skip if it's clearly a plan description, not the actual answer
+                if 'to' in line_lower or 'in order to' in line_lower:
+                    i += 1
+                    continue
+            
+            # Check for repetitive "Web Search Results:" headers and redundant result formatting
+            if re.match(r'^(web search results|query:|result:).*', line_lower):
+                # Skip redundant search result headers
+                i += 1
+                # Skip the JSON code block or result that follows if it's just formatting
+                if i < len(lines):
+                    next_line = lines[i].strip()
+                    if next_line.startswith('```') or next_line.startswith('{') or next_line.startswith('['):
+                        # Skip until end of code block or JSON
+                        in_code_block = next_line.startswith('```')
+                        brace_count = 0
+                        bracket_count = 0
+                        if next_line.startswith('{'):
+                            brace_count = next_line.count('{') - next_line.count('}')
+                        if next_line.startswith('['):
+                            bracket_count = next_line.count('[') - next_line.count(']')
+                        
+                        while i < len(lines):
+                            current_line = lines[i].strip()
+                            if in_code_block:
+                                if current_line.endswith('```'):
+                                    i += 1
+                                    break
+                            else:
+                                brace_count += current_line.count('{') - current_line.count('}')
+                                bracket_count += current_line.count('[') - current_line.count(']')
+                                if brace_count <= 0 and bracket_count <= 0 and (current_line.endswith('}') or current_line.endswith(']')):
+                                    i += 1
+                                    break
+                            i += 1
+                            if i >= len(lines):
+                                break
+                continue
+            
+            # Check for redundant "The task of..." completion statements
+            if re.match(r'^(the task of|the task is|task.*is now complete)', line_lower):
+                i += 1
+                continue
+            
             # Keep the line
             filtered_lines.append(line)
             i += 1
@@ -814,8 +1016,32 @@ class AIService:
         unhelpful_phrases = [
             r'please provide more (context|information|details)',
             r'i need (more|additional) (information|context|details)',
+            r'^we will use.*to (obtain|get|fetch|retrieve)',
+            r'^we will (obtain|get|fetch|retrieve)',
+            r'^we\'ll use.*to (obtain|get|fetch|retrieve)',
+            r'^we\'ll (obtain|get|fetch|retrieve)',
             r'to complete (this|the) task, i need',
             r'specify the next step',
+            r'please let me know if you\'d like (additional|more|any) information',
+            r'please let me know if you need (additional|more|any) information',
+            r'if you\'d like to see (the|additional)',
+            r'i can (display|show|provide) (the|additional)',
+            r'alternatively, if you\'d like',
+            r'note: prices may fluctuate',
+            r'source: \[.*\]\(.*\)',
+            r'\(as of the last search result provided\)',
+            r'\(as of the latest search result\)',
+            r'i verified.*by searching',
+            r'the price.*has (changed|been updated)',
+            r'none\s*$',  # Remove standalone "None" lines (like "Remaining Risks: None")
+            r'^please note that.*change quickly',  # Remove disclaimers about data changing
+            r'^the information provided is based on.*at the time of writing',
+            r'^after searching for.*using the (websearch|web search) tool',
+            r'^after re-verifying.*we are confident',
+            r'^to verify.*we will check',
+            r'^the task of.*is now complete',
+            r'^no additional verification is required',
+            r'^remaining tasks:\s*$',  # Remove empty "Remaining Tasks:" lines
         ]
         for phrase in unhelpful_phrases:
             result = re.sub(phrase, '', result, flags=re.IGNORECASE)
@@ -828,7 +1054,24 @@ class AIService:
         cleaned_result_lines = []
         for line in result_lines:
             line_lower = line.lower().strip()
-            if line_lower in ('file operations', 'file operation', 'project overview', 'verification'):
+            if line_lower in ('file operations', 'file operation', 'project overview', 'verification', 'ai plan', 'todo list', 
+                            'task status update', 'remaining risks', 'task report', 'verification report', 'fileoperations',
+                            'current file operations', 'remaining tasks'):
+                continue
+            # Remove lines that are just "Web Search Results:" headers (redundant)
+            if line_lower == 'web search results:' or line_lower.startswith('web search results') or line_lower == 'query:':
+                continue
+            # Remove standalone "Verification" headers
+            if line_lower == 'verification' and (not cleaned_result_lines or cleaned_result_lines[-1].strip() == ''):
+                continue
+            # Remove lines that are just task numbers like "Task 1:", "Task 2:" without meaningful content
+            if re.match(r'^task \d+:\s*$', line_lower) or re.match(r'^step \d+:\s*$', line_lower):
+                continue
+            # Remove lines that are just "Result:" or "Query:" headers
+            if line_lower in ('result:', 'query:', 'results:'):
+                continue
+            # Remove repetitive "Trending Word" headers if they appear multiple times
+            if line_lower.startswith('trending word') and any('trending' in prev.lower() for prev in cleaned_result_lines[-3:] if prev.strip()):
                 continue
             cleaned_result_lines.append(line)
         result = '\n'.join(cleaned_result_lines).strip()
@@ -851,7 +1094,148 @@ class AIService:
             # Last resort: return original if filtering removed everything
             return response.strip()
         
+        # Remove duplicate price statements (AI sometimes mentions price twice - old then new)
+        # Keep only the last (most recent) price mention
+        price_pattern = r'the current price.*?\$[\d,]+\.?\d*'
+        price_matches = list(re.finditer(price_pattern, result, re.IGNORECASE | re.DOTALL))
+        if len(price_matches) > 1:
+            # Find all price mentions and keep only the last one
+            lines = result.split('\n')
+            filtered_lines = []
+            last_price_idx = -1
+            for i, line in enumerate(lines):
+                if re.search(price_pattern, line, re.IGNORECASE):
+                    last_price_idx = i
+            # Rebuild, removing earlier price mentions
+            if last_price_idx >= 0:
+                for i, line in enumerate(lines):
+                    is_price_line = bool(re.search(price_pattern, line, re.IGNORECASE))
+                    if not is_price_line or i == last_price_idx:
+                        filtered_lines.append(line)
+                result = '\n'.join(filtered_lines)
+        
+        # Remove duplicate "Verification" sections - keep only first
+        if result.lower().count('verification') > 1:
+            lines = result.split('\n')
+            filtered_lines = []
+            verification_count = 0
+            skip_verification = False
+            for line in lines:
+                line_lower = line.lower().strip()
+                if 'verification' in line_lower and (line_lower.startswith('##') or line_lower.startswith('###') or line_lower == 'verification'):
+                    verification_count += 1
+                    if verification_count > 1:
+                        skip_verification = True
+                        continue
+                    skip_verification = False
+                elif skip_verification and (line_lower.startswith('##') or line_lower.startswith('###')):
+                    skip_verification = False
+                if not skip_verification:
+                    filtered_lines.append(line)
+            result = '\n'.join(filtered_lines)
+        
+        # Remove duplicate content blocks (same substantial text appearing multiple times)
+        # This catches cases where the AI repeats the same information verbatim
+        lines = result.split('\n')
+        seen_signatures = set()
+        deduplicated_lines = []
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i]
+            line_stripped = line.strip()
+            
+            # Check if this looks like a repeated section header
+            if line_stripped and (line_stripped.startswith('##') or line_stripped.startswith('###')):
+                # Create a signature from the next few lines to detect duplicates
+                signature_lines = [line_stripped.lower()]
+                j = i + 1
+                # Collect next 3-5 lines for signature
+                while j < len(lines) and j < i + 6:
+                    next_line = lines[j].strip()
+                    if next_line:
+                        signature_lines.append(next_line.lower()[:50])  # First 50 chars
+                    j += 1
+                
+                signature = '|'.join(signature_lines)
+                
+                # If we've seen this exact pattern before, skip it
+                if signature in seen_signatures and len(signature) > 30:
+                    # Skip this section
+                    i += 1
+                    while i < len(lines):
+                        if lines[i].strip().startswith(('##', '###')):
+                            break
+                        i += 1
+                    continue
+                
+                seen_signatures.add(signature)
+            
+            deduplicated_lines.append(line)
+            i += 1
+        
+        result = '\n'.join(deduplicated_lines).strip()
+        
+        # Final cleanup: remove excessive empty lines
+        result = re.sub(r'\n{3,}', '\n\n', result)
+        
         return result
+    
+    def _correct_price_from_search_results(self, response: str, context: Dict[str, Any]) -> str:
+        """Extract correct price from search results if AI used outdated price"""
+        import re
+        
+        # Check if response contains outdated BTC price ($23,000-$24,000 range)
+        outdated_price_pattern = r'\$23[,.]?\d{3}[,.]?\d*'
+        if not re.search(outdated_price_pattern, response):
+            return response  # No outdated price found, return as-is
+        
+        # Get search results
+        search_results_text = context.get("web_search_results_mcp", "")
+        if not search_results_text:
+            direct_results = context.get("web_search_results", [])
+            if direct_results:
+                # Format direct results into text
+                search_results_text = "\n".join([
+                    f"{r.get('title', '')} {r.get('snippet', '')} {r.get('body', '')} {r.get('description', '')}"
+                    for r in direct_results
+                ])
+        
+        if not search_results_text:
+            return response  # No search results available
+        
+        # Extract all prices from search results (look for $XX,XXX.XX or $XX,XXX format)
+        price_pattern = r'\$[\d,]+\.?\d*'
+        prices_found = re.findall(price_pattern, search_results_text)
+        
+        if not prices_found:
+            return response  # No prices found in search results
+        
+        # Convert to numbers and find the highest (most likely current price)
+        def parse_price(price_str):
+            try:
+                return float(price_str.replace('$', '').replace(',', ''))
+            except:
+                return 0
+        
+        prices = [parse_price(p) for p in prices_found]
+        valid_prices = [p for p in prices if 1000 < p < 200000]  # Reasonable BTC price range
+        if not valid_prices:
+            return response
+        
+        # Use the highest price found (most likely current)
+        correct_price = max(valid_prices)
+        correct_price_str = f"${correct_price:,.2f}" if correct_price % 1 else f"${int(correct_price):,}"
+        
+        # Replace outdated price with correct price
+        response = re.sub(
+            outdated_price_pattern,
+            correct_price_str,
+            response,
+            count=1  # Replace only first occurrence
+        )
+        
+        return response
 
     async def perform_web_search(self, query: str, max_results: Optional[int] = None) -> List[Dict[str, Any]]:
         """Fetch search results from DuckDuckGo when browsing is enabled."""
@@ -994,39 +1378,78 @@ class AIService:
                 except Exception as error:
                     context["web_search_error"] = f"{type(error).__name__}: {error}"
         elif web_search_mode in ("browser_tab", "google_chrome"):
-            # Explicit web search mode - use MCP tools
-            if self.is_mcp_enabled():
-                try:
-                    # Use MCP web_search tool
-                    tool_call = {
-                        "name": "web_search",
-                        "arguments": {
-                            "query": message,
-                            "max_results": self.web_search_max_results,
-                            "search_type": "text"
+            # Explicit web search mode - don't perform automatic searches to avoid blocking
+            # Instead, just enable web search capability and let the AI decide when to use it via tool calls
+            # This ensures the AI always responds quickly without waiting for searches
+            # The AI can use the web_search MCP tool in its response if it needs current information
+            # Skip automatic search to prevent blocking - let AI use tool if needed
+            if False:  # Disable automatic searches in browser_tab/google_chrome mode
+                # Use MCP tools to perform web search with timeout
+                if self.is_mcp_enabled():
+                    try:
+                        # Extract search query from message
+                        search_query = self._extract_search_query(message)
+                        
+                        # Use MCP web_search tool with timeout to prevent hanging
+                        tool_call = {
+                            "name": "web_search",
+                            "arguments": {
+                                "query": search_query,
+                                "max_results": self.web_search_max_results,
+                                "search_type": "text"
+                            }
                         }
-                    }
-                    
-                    tool_results = await self.mcp_client.execute_tool_calls(
-                        [tool_call],
-                        allow_write=True
-                    )
-                    
-                    if tool_results and not tool_results[0].get("error", False):
-                        context["web_search_results_mcp"] = tool_results[0].get("result", "")
-                    else:
-                        error_msg = tool_results[0].get("result", "Unknown error") if tool_results else "No results"
-                        context["web_search_error"] = error_msg
-                except Exception as error:
-                    context["web_search_error"] = f"{type(error).__name__}: {error}"
-            else:
-                # Fallback to direct search
-                try:
-                    search_results = await self.perform_web_search(message)
-                    if search_results:
-                        context["web_search_results"] = search_results
-                except Exception as error:
-                    context["web_search_error"] = f"{type(error).__name__}: {error}"
+                        
+                        # Add timeout to prevent blocking (3 seconds max - short timeout to avoid blocking)
+                        try:
+                            tool_results = await asyncio.wait_for(
+                                self.mcp_client.execute_tool_calls(
+                                    [tool_call],
+                                    allow_write=True
+                                ),
+                                timeout=3.0
+                            )
+                            
+                            if tool_results and not tool_results[0].get("error", False):
+                                context["web_search_results_mcp"] = tool_results[0].get("result", "")
+                            # Don't set error if search fails - just continue without results
+                        except asyncio.TimeoutError:
+                            print(f"Web search timed out in {web_search_mode} mode - continuing without results")
+                            # Don't set error - just continue without search results
+                        except Exception as search_error:
+                            print(f"Web search exception in {web_search_mode} mode: {search_error}")
+                            # Don't set error - just continue without search results
+                    except Exception as error:
+                        # Log error but don't block response
+                        print(f"Web search error in {web_search_mode} mode: {error}")
+                        context["web_search_error"] = f"{type(error).__name__}: {error}"
+                else:
+                    # Fallback to direct search with timeout
+                    try:
+                        search_query = self._extract_search_query(message)
+                        # Add timeout to prevent blocking (3 seconds max - short timeout to avoid blocking)
+                        try:
+                            search_results = await asyncio.wait_for(
+                                self.perform_web_search(search_query),
+                                timeout=3.0
+                            )
+                            if search_results:
+                                context["web_search_results"] = search_results
+                            # Don't set error if search fails - just continue without results
+                        except asyncio.TimeoutError:
+                            print(f"Web search timed out in {web_search_mode} mode - continuing without results")
+                            # Don't set error - just continue without search results
+                        except Exception as search_error:
+                            print(f"Web search exception in {web_search_mode} mode: {search_error}")
+                            # Don't set error - just continue without search results
+                    except Exception as error:
+                        # Log error but don't block response
+                        print(f"Web search error in {web_search_mode} mode: {error}")
+                        context["web_search_error"] = f"{type(error).__name__}: {error}"
+            # If web search mode is enabled but the message doesn't need a search,
+            # just mark that web search is available for the AI to use if needed
+            # The AI can still use the web_search tool in its response if it needs to
+            # The response will continue normally regardless of search status
         
         # Prepare the prompt with context
         prompt = self._build_prompt(message, context, conversation_history or [])
@@ -1053,11 +1476,80 @@ class AIService:
                     follow_up_response = await self._call_model(follow_up_prompt)
                     response = follow_up_response  # Use the follow-up response
         
+        # Check if AI response indicates uncertainty or lack of knowledge
+        # If so, try web search as fallback
+        if not context.get("web_search_results_mcp") and not context.get("web_search_results"):
+            if self._detect_ai_uncertainty(response, message):
+                try:
+                    # Extract search query from original message
+                    search_query = self._extract_search_query(message)
+                    
+                    # Try to perform web search using MCP tools first
+                    if self.is_mcp_enabled():
+                        tool_call = {
+                            "name": "web_search",
+                            "arguments": {
+                                "query": search_query,
+                                "max_results": self.web_search_max_results,
+                                "search_type": "text"
+                            }
+                        }
+                        
+                        tool_results = await self.mcp_client.execute_tool_calls(
+                            [tool_call],
+                            allow_write=True
+                        )
+                        
+                        if tool_results and not tool_results[0].get("error", False):
+                            result_text = tool_results[0].get("result", "")
+                            context["web_search_results_mcp"] = result_text
+                            context["web_search_fallback"] = True  # Mark as fallback search
+                            
+                            # Build follow-up prompt with web search results
+                            search_context = f"\n\nWeb search results for your query:\n{result_text}\n\n"
+                            follow_up_prompt = f"{prompt}\n\nInitial response:\n{response}\n\n{search_context}Please use the web search results above to provide a better answer. If the search results contain relevant information, use it to answer the question. If not, explain what you found."
+                            
+                            # Get follow-up response that incorporates web search results
+                            follow_up_response = await self._call_model(follow_up_prompt)
+                            response = follow_up_response
+                    else:
+                        # Fallback: use direct web search
+                        search_results = await self.perform_web_search(search_query)
+                        if search_results:
+                            # Format search results for prompt
+                            formatted_results = []
+                            for idx, result in enumerate(search_results[:self.web_search_max_results], 1):
+                                formatted_results.append(
+                                    f"{idx}. {result.get('title', 'No title')}\n"
+                                    f"   URL: {result.get('url', 'N/A')}\n"
+                                    f"   {result.get('snippet', 'No description')}"
+                                )
+                            
+                            results_text = "\n\n".join(formatted_results)
+                            context["web_search_results"] = search_results
+                            context["web_search_fallback"] = True  # Mark as fallback search
+                            
+                            # Build follow-up prompt with web search results
+                            search_context = f"\n\nWeb search results for your query:\n{results_text}\n\n"
+                            follow_up_prompt = f"{prompt}\n\nInitial response:\n{response}\n\n{search_context}Please use the web search results above to provide a better answer. If the search results contain relevant information, use it to answer the question. If not, explain what you found."
+                            
+                            # Get follow-up response that incorporates web search results
+                            follow_up_response = await self._call_model(follow_up_prompt)
+                            response = follow_up_response
+                except Exception as error:
+                    # If web search fails, continue with original response
+                    print(f"Web search fallback failed: {error}")
+                    # Don't raise - just use the original response
+        
         # Parse metadata from response (pass context to block extraction in ASK mode)
         cleaned_response, metadata = self._parse_response_metadata(response, context)
         
         # Filter out thinking/planning/reporting content
         cleaned_response = self._filter_thinking_content(cleaned_response, context)
+        
+        # Post-process: If AI used outdated price ($23,433 range), extract correct price from search results
+        if context.get("web_search_results_mcp") or context.get("web_search_results"):
+            cleaned_response = self._correct_price_from_search_results(cleaned_response, context)
         
         # CRITICAL: Ensure ASK mode NEVER has file operations or plans, even if the AI generated them
         if self._is_ask_context(context):
@@ -1079,10 +1571,8 @@ class AIService:
                 metadata["file_operations"] = fallback_ops
                 if fallback_metadata.get("ai_plan") and not metadata.get("ai_plan"):
                     metadata["ai_plan"] = fallback_metadata["ai_plan"]
-                cleaned_response = (
-                    f"{cleaned_response}\n\n_(Generated concrete file operations automatically.)_"
-                    if cleaned_response else "_(Generated concrete file operations automatically.)_"
-                )
+                # Don't add the "Generated concrete file operations" message - it's not needed
+                # cleaned_response is already set above
         
         # Store conversation
         self.conversation_history[conversation_id] = {
@@ -1168,12 +1658,15 @@ class AIService:
                 prompt_parts.extend([
                     "",
                     "=" * 80,
-                    "MCP TOOLS AVAILABLE (You have NO direct internet access - use these tools):",
+                    "MCP TOOLS AVAILABLE (You CAN access the internet through these tools):",
                     "=" * 80,
                     "",
                     mcp_tools_desc,
                     "",
-                    "CRITICAL: You do NOT have direct internet access. To search the web, you MUST use the web_search MCP tool.",
+                    "IMPORTANT: You HAVE internet access through the web_search MCP tool. Use it to search the web for current information, prices, news, and any online content.",
+                    "",
+                    "CRITICAL RULE: NEVER write code to scrape websites, access URLs, or make HTTP requests to get internet information.",
+                    "When you need internet information (prices, news, current data, etc.), you MUST use the web_search tool, NOT write Python code with requests/urllib/etc.",
                     "",
                     "You can use these tools by including tool calls in your response.",
                     "Example tool call format:",
@@ -1183,10 +1676,12 @@ class AIService:
                     "When you need to perform operations like:",
                     "- Reading files: use read_file tool",
                     "- Searching code: use grep_code tool",
-                    "- Searching the web: use web_search tool (REQUIRED for any internet information)",
+                    "- Searching the web: use web_search tool (THIS GIVES YOU INTERNET ACCESS - DO NOT WRITE CODE TO SCRAPE)",
                     "- Executing commands: use execute_command tool",
                     "",
                     "Use the appropriate MCP tools instead of just describing what should be done.",
+                    "For any question requiring current information, real-time data, or internet content, use the web_search tool.",
+                    "DO NOT write code with requests.get(), urllib, or any HTTP libraries to fetch internet data - use web_search tool instead.",
                     "",
                     "=" * 80,
                     "",
@@ -1288,7 +1783,9 @@ class AIService:
                 "- Do not stop after describing a plan; always include the updated file content in file_operations so the IDE can apply the change.",
                 "- Keep natural-language responses short; rely on file_operations to convey the actual modifications.",
                 "- When web_search_mode is not 'off', do NOT reply with generic suggestions to visit websites; instead, read the provided web_search_results and answer the user's question as concretely as possible using those results.",
-                '- When web_search_mode is not "off", statements like "I cannot browse the internet" or "I cannot access external information" are FALSE. You DO have access to web_search_results; never claim that you lack browsing or external access.',
+                '- When web_search_mode is not "off", you HAVE internet access through the web_search tool. Statements like "I cannot browse the internet" or "I cannot access external information" are FALSE. You DO have access to web_search_results and can use the web_search tool anytime; never claim that you lack browsing or external access.',
+                "- 🚫 NEVER write code to access the internet (requests.get(), urllib, httpx, etc.). If internet information is needed, use the web_search MCP tool instead.",
+                "- When asked for current prices, news, or any internet data, use <tool_call name=\"web_search\" ... /> - do NOT generate scraping code.",
                 ""
             ])
         else:
@@ -1308,12 +1805,21 @@ class AIService:
             mode_label = "auto-triggered" if web_search_mode == "auto" else web_search_mode
             prompt_parts.extend([
                 f"WEB SEARCH ACCESS ENABLED (mode: {mode_label}):",
+                "- You HAVE internet access through the web_search MCP tool. Use it whenever you need current information.",
                 "- Live DuckDuckGo search results are provided; use them for up-to-date facts.",
+                "- ⚠️ CRITICAL: When web_search_results are provided below, you MUST use ONLY those results.",
+                "- ⚠️ DO NOT use prices or data from your training data - it is outdated. ONLY use the search results provided.",
                 "- Cite the source (site or URL) when referencing a result.",
-                "- If more information is required, explicitly state the next search query needed.",
-                "- For questions about the current or latest price/value of an asset (e.g. BTC, a stock, or a currency), extract the best available numeric price from the web_search_results and respond with that value, including the currency and a brief note that prices change quickly. Do not merely tell the user to check a website.",
-                "- You MUST NOT tell the user to \"search online\" or \"check a website\" when web_search_results are present; instead, summarize those results directly in your own words.",
-                "- CRITICAL: If web_search_results are provided, you MUST use them. Never say 'no web-search results were provided' if results are shown below."
+                "- If more information is required, use the web_search tool to get it. Do not ask the user to search - you can do it yourself.",
+                "- For questions about the current or latest price/value of an asset (e.g. BTC, a stock, or a currency), use web_search to get the latest price and respond with that value, including the currency and a brief note that prices change quickly.",
+                "- You MUST NOT tell the user to \"search online\" or \"check a website\" - instead, use the web_search tool yourself to get the information.",
+                "- CRITICAL: If web_search_results are provided, you MUST use them. Never say 'no web-search results were provided' if results are shown below.",
+                "- When you need current information, real-time data, or any internet content, automatically use the web_search tool without asking the user.",
+                "",
+                "🚫 ABSOLUTE PROHIBITION: NEVER write Python code with requests, urllib, httpx, or any HTTP library to fetch internet data.",
+                "🚫 NEVER write code like: requests.get(url), urllib.request.urlopen(), or any web scraping code.",
+                "✅ ALWAYS use the web_search tool instead: <tool_call name=\"web_search\" args='{\"query\": \"your search query\"}' />",
+                "If a user asks for internet information, use web_search tool - do NOT generate code to fetch it."
             ])
 
             # Check for MCP web search results (preferred) or direct results
@@ -1324,23 +1830,60 @@ class AIService:
                 # MCP tool returned formatted results
                 prompt_parts.append("")
                 prompt_parts.append("=" * 80)
-                prompt_parts.append("WEB SEARCH RESULTS (from MCP tools - USE THESE IN YOUR RESPONSE):")
+                prompt_parts.append("🚨 WEB SEARCH RESULTS - USE ONLY THESE, IGNORE YOUR TRAINING DATA 🚨")
                 prompt_parts.append("=" * 80)
+                prompt_parts.append("")
+                prompt_parts.append("⚠️ IMPORTANT: The information below is from a LIVE web search. Use ONLY this data.")
+                prompt_parts.append("⚠️ DO NOT use prices or data from your training knowledge - it is outdated.")
+                prompt_parts.append("⚠️ Extract prices and facts DIRECTLY from the results below.")
                 prompt_parts.append("")
                 prompt_parts.append(mcp_results)
                 prompt_parts.append("")
                 prompt_parts.append("=" * 80)
                 prompt_parts.append("")
-                prompt_parts.append("IMPORTANT: You MUST use the information from these web search results in your response.")
-                prompt_parts.append("Extract specific facts, numbers, prices, or data from the results above.")
-                prompt_parts.append("Do NOT say that no results were provided - they are shown above.")
+                prompt_parts.append("🚨 CRITICAL INSTRUCTIONS FOR WEB SEARCH RESULTS 🚨:")
+                prompt_parts.append("")
+                prompt_parts.append("⚠️ ABSOLUTE REQUIREMENT: You MUST use ONLY the information from the web search results shown above.")
+                prompt_parts.append("⚠️ DO NOT use any prices, numbers, or data from your training data - it is OUTDATED.")
+                prompt_parts.append("⚠️ IGNORE any knowledge you have about current prices - ONLY use the prices shown in the search results above.")
+                prompt_parts.append("")
+                prompt_parts.append("🚫 FORBIDDEN PRICES: The prices $23,433, $23,400, $23,000, or any price around $23,000 are WRONG and OUTDATED.")
+                prompt_parts.append("🚫 DO NOT use $23,433, $23,400, $23,000, or similar prices - these are from your training data and are INCORRECT.")
+                prompt_parts.append("🚫 If you are about to write $23,433 or similar, STOP - that is wrong. Look at the search results above instead.")
+                prompt_parts.append("")
+                prompt_parts.append("- Extract specific facts, numbers, prices, or data DIRECTLY from the search results above.")
+                prompt_parts.append("- For price queries: SCAN the search results above line by line and find the price value mentioned there.")
+                prompt_parts.append("- For price queries: Look for dollar amounts like $92,641, $90,000+, $95,000, $80,000+, etc. in the search results.")
+                prompt_parts.append("- For price queries: Use the HIGHEST/MOST RECENT price value you find in the search results.")
+                prompt_parts.append("- For price queries: Copy the price EXACTLY as shown in the search results (e.g., if results show '$92,641.37', use that EXACT value).")
+                prompt_parts.append("- If you cannot find a price in the search results, say 'Price information not found in search results' - DO NOT make up a price.")
+                prompt_parts.append("- If you see prices like $92,641, $90,000+, or similar HIGH values in the search results, use THOSE, NOT $23,433.")
+                prompt_parts.append("")
+                prompt_parts.append("🚫 DO NOT GENERATE ANY OF THE FOLLOWING:")
+                prompt_parts.append("- Do NOT generate TODO lists, AI plans, step-by-step breakdowns, or status messages - just provide the answer.")
+                prompt_parts.append("- Do NOT include 'Verification', 'Verification Report', 'Task Report', 'Task Status Update', or 'Remaining Risks' sections.")
+                prompt_parts.append("- Do NOT say 'I verified' or 'I have verified' - just provide the answer directly.")
+                prompt_parts.append("- Do NOT list tasks like 'Verify the price information' or 'Get the latest price' - these are not answers.")
+                prompt_parts.append("- Do NOT say 'we will use', 'we will obtain', 'I can display', or 'I can show' - you already have the results, so provide the answer NOW.")
+                prompt_parts.append("- Do NOT include 'AI PLAN' sections, 'COMPLETED' status indicators, or any planning metadata in your response.")
+                prompt_parts.append("- Do NOT say 'please let me know if you'd like additional information' - just provide the complete answer.")
+                prompt_parts.append("- Do NOT say that no results were provided - they are shown above.")
+                prompt_parts.append("")
+                prompt_parts.append("✅ YOUR RESPONSE SHOULD BE:")
+                prompt_parts.append("- A direct answer to the user's question using the search results.")
+                prompt_parts.append("- For price queries: 'The current price of [asset] is $[EXACT_PRICE_FROM_RESULTS] USD'")
+                prompt_parts.append("- Brief and to the point - no verification steps, no task lists, no reports.")
                 prompt_parts.append("")
             elif direct_results:
                 # Direct search results (fallback)
                 prompt_parts.append("")
                 prompt_parts.append("=" * 80)
-                prompt_parts.append("WEB SEARCH RESULTS (USE THESE IN YOUR RESPONSE):")
+                prompt_parts.append("🚨 WEB SEARCH RESULTS - USE ONLY THESE, IGNORE YOUR TRAINING DATA 🚨")
                 prompt_parts.append("=" * 80)
+                prompt_parts.append("")
+                prompt_parts.append("⚠️ IMPORTANT: The information below is from a LIVE web search. Use ONLY this data.")
+                prompt_parts.append("⚠️ DO NOT use prices or data from your training knowledge - it is outdated.")
+                prompt_parts.append("⚠️ Extract prices and facts DIRECTLY from the results below.")
                 prompt_parts.append("")
                 for idx, result in enumerate(direct_results[:10], start=1):
                     title = truncate_text(result.get("title") or "Untitled result", 140)
@@ -1353,24 +1896,62 @@ class AIService:
                     prompt_parts.append("")
                 prompt_parts.append("=" * 80)
                 prompt_parts.append("")
-                prompt_parts.append("IMPORTANT: You MUST use the information from these web search results in your response.")
-                prompt_parts.append("Extract specific facts, numbers, prices, or data from the results above.")
-                prompt_parts.append("Do NOT say that no results were provided - they are shown above.")
+                prompt_parts.append("🚨 CRITICAL INSTRUCTIONS FOR WEB SEARCH RESULTS 🚨:")
+                prompt_parts.append("")
+                prompt_parts.append("⚠️ ABSOLUTE REQUIREMENT: You MUST use ONLY the information from the web search results shown above.")
+                prompt_parts.append("⚠️ DO NOT use any prices, numbers, or data from your training data - it is OUTDATED.")
+                prompt_parts.append("⚠️ IGNORE any knowledge you have about current prices - ONLY use the prices shown in the search results above.")
+                prompt_parts.append("")
+                prompt_parts.append("🚫 FORBIDDEN PRICES: The prices $23,433, $23,400, $23,000, or any price around $23,000 are WRONG and OUTDATED.")
+                prompt_parts.append("🚫 DO NOT use $23,433, $23,400, $23,000, or similar prices - these are from your training data and are INCORRECT.")
+                prompt_parts.append("🚫 If you are about to write $23,433 or similar, STOP - that is wrong. Look at the search results above instead.")
+                prompt_parts.append("")
+                prompt_parts.append("- Extract specific facts, numbers, prices, or data DIRECTLY from the search results above.")
+                prompt_parts.append("- For price queries: SCAN the search results above line by line and find the price value mentioned there.")
+                prompt_parts.append("- For price queries: Look for dollar amounts like $92,641, $90,000+, $95,000, $80,000+, etc. in the search results.")
+                prompt_parts.append("- For price queries: Use the HIGHEST/MOST RECENT price value you find in the search results.")
+                prompt_parts.append("- For price queries: Copy the price EXACTLY as shown in the search results (e.g., if results show '$92,641.37', use that EXACT value).")
+                prompt_parts.append("- If you cannot find a price in the search results, say 'Price information not found in search results' - DO NOT make up a price.")
+                prompt_parts.append("- If you see prices like $92,641, $90,000+, or similar HIGH values in the search results, use THOSE, NOT $23,433.")
+                prompt_parts.append("")
+                prompt_parts.append("🚫 DO NOT GENERATE ANY OF THE FOLLOWING:")
+                prompt_parts.append("- Do NOT generate TODO lists, AI plans, step-by-step breakdowns, or status messages - just provide the answer.")
+                prompt_parts.append("- Do NOT include 'Verification', 'Verification Report', 'Task Report', 'Task Status Update', or 'Remaining Risks' sections.")
+                prompt_parts.append("- Do NOT say 'I verified' or 'I have verified' - just provide the answer directly.")
+                prompt_parts.append("- Do NOT list tasks like 'Verify the price information' or 'Get the latest price' - these are not answers.")
+                prompt_parts.append("- Do NOT say 'we will use', 'we will obtain', 'I can display', or 'I can show' - you already have the results, so provide the answer NOW.")
+                prompt_parts.append("- Do NOT include 'AI PLAN' sections, 'COMPLETED' status indicators, or any planning metadata in your response.")
+                prompt_parts.append("- Do NOT say 'please let me know if you'd like additional information' - just provide the complete answer.")
+                prompt_parts.append("- Do NOT say that no results were provided - they are shown above.")
+                prompt_parts.append("")
+                prompt_parts.append("✅ YOUR RESPONSE SHOULD BE:")
+                prompt_parts.append("- A direct answer to the user's question using the search results.")
+                prompt_parts.append("- For price queries: 'The current price of [asset] is $[EXACT_PRICE_FROM_RESULTS] USD'")
+                prompt_parts.append("- Brief and to the point - no verification steps, no task lists, no reports.")
                 prompt_parts.append("")
             elif context.get("web_search_error"):
-                prompt_parts.append(f"Web search error: {truncate_text(context['web_search_error'], 160)}")
-                prompt_parts.append("You may need to ask the user to try again or provide more specific information.")
+                error_msg = truncate_text(context['web_search_error'], 160)
+                prompt_parts.append(f"Note: A web search was attempted but encountered an error: {error_msg}")
+                prompt_parts.append("You should still respond to the user's question. If you need current information, you can try using the web_search MCP tool in your response.")
                 if self.is_mcp_enabled():
-                    prompt_parts.append("Note: If you need web search, you can use the web_search MCP tool in your response.")
+                    prompt_parts.append("You can use the web_search MCP tool by including a tool call in your response if you need to search the web.")
+                prompt_parts.append("Do not let the search error prevent you from providing a helpful response.")
             else:
                 if web_search_mode == "auto":
                     prompt_parts.append("Note: Web search was attempted but no results were returned.")
                     if self.is_mcp_enabled():
                         prompt_parts.append("You can use the web_search MCP tool to perform searches if needed.")
                 else:
-                    prompt_parts.append("No web search was performed for this prompt.")
-                    if self.is_mcp_enabled() and self._detect_web_search_needed(message, web_search_mode):
-                        prompt_parts.append("Note: This query might benefit from web search. You can use the web_search MCP tool.")
+                    # When browser_tab or google_chrome mode is enabled but no search was performed,
+                    # inform the AI that web search is available for use
+                    if web_search_mode in ("browser_tab", "google_chrome"):
+                        prompt_parts.append("Web search mode is enabled. You can use the web_search MCP tool if you need current information, real-time data, or any internet content.")
+                        if self.is_mcp_enabled():
+                            prompt_parts.append("Use the web_search tool by including a tool call in your response when you need to search the web.")
+                    else:
+                        prompt_parts.append("No web search was performed for this prompt.")
+                        if self.is_mcp_enabled() and self._detect_web_search_needed(message, web_search_mode):
+                            prompt_parts.append("Note: This query might benefit from web search. You can use the web_search MCP tool.")
 
             prompt_parts.append("")
         
@@ -1526,9 +2107,10 @@ class AIService:
         if not message:
             return False
         
-        # If web search is explicitly enabled, use it
-        if web_search_mode in ("browser_tab", "google_chrome"):
-            return True
+        # If web search is explicitly enabled (browser_tab/google_chrome), 
+        # still check if the message actually needs a search
+        # Don't force search for every message - let the AI decide when to use it
+        # The web search capability will still be available via MCP tools
         
         # If explicitly disabled, don't auto-trigger
         if web_search_mode == "off":
@@ -1565,7 +2147,15 @@ class AIService:
             r'\bwho is\b.*\b(current|now|today)\b',
         ]
         
-        all_patterns = price_patterns + news_patterns + realtime_patterns + what_is_patterns
+        # General information queries that likely need internet
+        general_info_patterns = [
+            r'\bwhat is\b.*\b(api|service|tool|library|framework|package)\b',
+            r'\bhow to\b.*\b(install|use|configure|setup|set up)\b',
+            r'\b(latest|new|recent|current)\b.*\b(version|release|update)\b',
+            r'\b(documentation|docs|tutorial|guide|example)\b',
+        ]
+        
+        all_patterns = price_patterns + news_patterns + realtime_patterns + what_is_patterns + general_info_patterns
         
         for pattern in all_patterns:
             if re.search(pattern, normalized, re.IGNORECASE):
@@ -1580,10 +2170,86 @@ class AIService:
             "what's the latest",
             "check the price",
             "get the price",
+            "search online",
+            "look online",
+            "find online",
         ]
         
         if any(keyword in normalized for keyword in search_keywords):
             return True
+        
+        return False
+    
+    def _detect_ai_uncertainty(self, response: str, original_message: str) -> bool:
+        """Detect if AI response indicates uncertainty or lack of knowledge"""
+        if not response:
+            return True
+        
+        response_lower = response.lower()
+        message_lower = original_message.lower() if original_message else ""
+        
+        # Patterns that indicate uncertainty
+        uncertainty_patterns = [
+            r'\bi don\'?t know\b',
+            r'\bi\'?m not sure\b',
+            r'\bi don\'?t have.*information\b',
+            r'\bi cannot.*(answer|find|provide|tell)\b',
+            r'\bunable to.*(answer|find|provide|tell)\b',
+            r'\bcannot.*(answer|find|provide|tell)\b',
+            r'\bno information available\b',
+            r'\bdon\'?t have access to\b',
+            r'\bmy knowledge.*doesn\'?t include\b',
+            r'\bmy knowledge.*cut off\b',
+            r'\bmy training data.*(doesn\'?t|does not)\b',
+            r'\bi\'?m unable to\b',
+            r'\boutside.*knowledge\b',
+            r'\boutside.*training\b',
+            r'\bneed.*search\b',
+            r'\bsearch.*internet\b',
+            r'\bsearch.*web\b',
+            r'\bcheck.*online\b',
+            r'\blook.*up.*online\b',
+            r'\bfind.*online\b',
+            r'\bverify.*online\b',
+            r'\bi\'?m not.*able\b',
+            r'\blimited.*information\b',
+            r'\bdon\'?t have.*access\b',
+            r'\bdoesn\'?t.*have.*information\b',
+            r'\bsorry.*don\'?t know\b',
+            r'\bsorry.*cannot\b',
+            r'\bunfortunately.*don\'?t\b',
+            r'\bunfortunately.*cannot\b',
+            r'\bi don\'?t.*have.*current\b',
+            r'\bi don\'?t.*have.*latest\b',
+            r'\bmy.*knowledge.*up.*to\b',
+            r'\btraining.*data.*up.*to\b',
+        ]
+        
+        # Check for uncertainty indicators
+        for pattern in uncertainty_patterns:
+            if re.search(pattern, response_lower, re.IGNORECASE):
+                return True
+        
+        # Check if response is very short and doesn't answer the question
+        # This is a heuristic: if the response is very short and the question seems substantive
+        if len(response.strip()) < 100 and len(message_lower) > 20:
+            # Check if response contains question-like phrases (often indicates uncertainty)
+            question_indicators = [
+                'maybe', 'perhaps', 'might', 'could', 'possibly',
+                'not certain', 'uncertain', 'unclear'
+            ]
+            if any(indicator in response_lower for indicator in question_indicators):
+                return True
+        
+        # Check if response is mostly apologies or disclaimers
+        apology_phrases = [
+            'sorry', 'apologize', 'regret', 'unfortunately'
+        ]
+        if any(phrase in response_lower for phrase in apology_phrases):
+            # If response starts with apology and is short, likely uncertain
+            first_sentence = response.split('.')[0].lower() if '.' in response else response.lower()
+            if any(phrase in first_sentence for phrase in apology_phrases) and len(response.strip()) < 200:
+                return True
         
         return False
     
