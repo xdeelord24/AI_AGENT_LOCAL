@@ -876,13 +876,39 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     initializeCopyCodeListeners();
   }, []);
 
+  const normalizeOperationContent = useCallback((value) => {
+    if (typeof value !== 'string' || value.length === 0) {
+      return value || '';
+    }
+    const hasRealNewlines = value.includes('\n');
+    const hasEscapedSequences = /\\[nrt]/.test(value);
+    if (!hasEscapedSequences || hasRealNewlines) {
+      return value;
+    }
+    try {
+      const jsonReady = `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+      return JSON.parse(jsonReady);
+    } catch (error) {
+      return value
+        .replace(/\\r\\n/g, '\n')
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\n')
+        .replace(/\\t/g, '\t');
+    }
+  }, []);
+
   const buildFileOperationPreviews = useCallback(
     async (operations = []) => {
       const enhanced = [];
 
       for (const op of operations) {
-        const opType = (op.type || '').toLowerCase();
-        const targetPath = op.path;
+        const normalizedOp = {
+          ...op,
+          content: normalizeOperationContent(op.content || ''),
+        };
+
+        const opType = (normalizedOp.type || '').toLowerCase();
+        const targetPath = normalizedOp.path;
 
         let beforeContent = '';
         let afterContent = '';
@@ -890,7 +916,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         try {
           if (opType === 'create_file') {
             beforeContent = '';
-            afterContent = op.content || '';
+            afterContent = normalizedOp.content || '';
           } else if (opType === 'edit_file') {
             // Prefer current in-memory content if the file is already open
             const openMatch = openFiles.find((f) => f.path === targetPath);
@@ -900,7 +926,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
               const existing = await ApiService.readFile(targetPath);
               beforeContent = existing?.content || '';
             }
-            afterContent = op.content || '';
+            afterContent = normalizedOp.content || '';
           } else if (opType === 'delete_file') {
             const openMatch = openFiles.find((f) => f.path === targetPath);
             if (openMatch && typeof openMatch.content === 'string') {
@@ -911,7 +937,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             }
             afterContent = '';
           } else {
-            afterContent = op.content || '';
+            afterContent = normalizedOp.content || '';
           }
         } catch (error) {
           // If we fail to load the original content, fall back to whatever we have
@@ -926,7 +952,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         const diff = computeLineDiff(beforeContent, afterContent);
 
         enhanced.push({
-          ...op,
+          ...normalizedOp,
           beforeContent,
           afterContent,
           diff,
@@ -935,7 +961,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
       return enhanced;
     },
-    [openFiles]
+    [openFiles, normalizeOperationContent]
   );
 
   const focusSearchInput = useCallback(() => {
@@ -4832,11 +4858,14 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
     // Update the file content
     setOpenFiles((prev) => {
       const next = [...prev];
-      next[fileIndex] = {
-        ...next[fileIndex],
-        content: newContent,
-        modified: true, // Mark as modified since user made changes
-      };
+      if (next[fileIndex]) {
+        next[fileIndex] = {
+          ...next[fileIndex],
+          content: newContent,
+          modified: false,
+          aiPreview: false,
+        };
+      }
       return next;
     });
     
@@ -4844,84 +4873,189 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
     if (activeTab && normalizeEditorPath(activeTab) === targetPath) {
       setEditorContent(newContent);
     }
+
+    ApiService.writeFile(targetPath, newContent).catch((error) => {
+      console.error('Failed to auto-save accepted changes:', error);
+      toast.error('Failed to auto-save accepted changes');
+      setOpenFiles((prev) => {
+        const next = [...prev];
+        if (next[fileIndex]) {
+          next[fileIndex] = {
+            ...next[fileIndex],
+            modified: true,
+          };
+        }
+        return next;
+      });
+    });
   }, [pendingFileOperations, openFiles, activeTab]);
 
-  const handleAcceptLine = useCallback((opIndex, lineNumber, lineType) => {
+  const handleAcceptLines = useCallback((opIndex, lineNumbers, lineType = 'added') => {
+    if (!Array.isArray(lineNumbers) || lineNumbers.length === 0) {
+      return;
+    }
+    let nextAcceptedMap = null;
     setAcceptedLines((prev) => {
       const newMap = new Map(prev);
-      const key = `${opIndex}-${lineNumber}`;
-      newMap.set(key, { lineNumber, lineType });
+      lineNumbers.forEach((lineNumber) => {
+        const key = `${opIndex}-${lineNumber}`;
+        newMap.set(key, { lineNumber, lineType });
+      });
+      nextAcceptedMap = newMap;
       return newMap;
     });
     setDeclinedLines((prev) => {
       const newMap = new Map(prev);
-      const key = `${opIndex}-${lineNumber}`;
-      newMap.delete(key);
-      
-      // Apply changes immediately with updated maps
-      setTimeout(() => {
-        setAcceptedLines((acceptedMap) => {
-          applyLineChangesToFile(opIndex, acceptedMap, newMap);
-          return acceptedMap;
-        });
-      }, 0);
-      
+      lineNumbers.forEach((lineNumber) => {
+        const key = `${opIndex}-${lineNumber}`;
+        newMap.delete(key);
+      });
+      applyLineChangesToFile(opIndex, nextAcceptedMap || prev, newMap);
       return newMap;
     });
-    
-    // Mark operation as reviewed when user interacts with lines
+    setReviewedOperations((prev) => new Set([...prev, opIndex]));
+  }, [applyLineChangesToFile]);
+
+  const handleAcceptLine = useCallback((opIndex, lineNumber, lineType) => {
+    handleAcceptLines(opIndex, [lineNumber], lineType);
+  }, [handleAcceptLines]);
+
+  const handleUndoAcceptedLine = useCallback((opIndex, lineNumber) => {
+    let nextAcceptedMap = null;
+    const key = `${opIndex}-${lineNumber}`;
+    setAcceptedLines((prev) => {
+      const newMap = new Map(prev);
+      newMap.delete(key);
+      nextAcceptedMap = newMap;
+      return newMap;
+    });
+    setDeclinedLines((prev) => {
+      const newMap = new Map(prev);
+      applyLineChangesToFile(opIndex, nextAcceptedMap || prev, newMap);
+      return newMap;
+    });
+    setReviewedOperations((prev) => {
+      const next = new Set(prev);
+      next.delete(opIndex);
+      return next;
+    });
+  }, [applyLineChangesToFile]);
+
+  const handleDeclineLines = useCallback((opIndex, lineNumbers, lineType = 'added') => {
+    if (!Array.isArray(lineNumbers) || lineNumbers.length === 0) {
+      return;
+    }
+    let nextDeclinedMap = null;
+    setDeclinedLines((prev) => {
+      const newMap = new Map(prev);
+      lineNumbers.forEach((lineNumber) => {
+        const key = `${opIndex}-${lineNumber}`;
+        newMap.set(key, { lineNumber, lineType });
+      });
+      nextDeclinedMap = newMap;
+      return newMap;
+    });
+    setAcceptedLines((prev) => {
+      const newMap = new Map(prev);
+      lineNumbers.forEach((lineNumber) => {
+        const key = `${opIndex}-${lineNumber}`;
+        newMap.delete(key);
+      });
+      applyLineChangesToFile(opIndex, newMap, nextDeclinedMap || prev);
+      return newMap;
+    });
     setReviewedOperations((prev) => new Set([...prev, opIndex]));
   }, [applyLineChangesToFile]);
 
   const handleDeclineLine = useCallback((opIndex, lineNumber, lineType) => {
-    setDeclinedLines((prev) => {
-      const newMap = new Map(prev);
-      const key = `${opIndex}-${lineNumber}`;
-      newMap.set(key, { lineNumber, lineType });
-      return newMap;
+    handleDeclineLines(opIndex, [lineNumber], lineType);
+  }, [handleDeclineLines]);
+
+  const pendingOperationSummary = useMemo(() => {
+    if (!pendingFileOperations?.operations?.length) {
+      return { pendingIndices: [], pendingCount: 0 };
+    }
+    const operations = pendingFileOperations.operations;
+    const pendingIndices = [];
+    operations.forEach((op, index) => {
+      const diffLines = Array.isArray(op?.diff) ? op.diff : [];
+      const hasPendingAddedLines = diffLines.some((line) => {
+        if (line?.type !== 'added' || typeof line.newNumber !== 'number') {
+          return false;
+        }
+        const lineKey = `${index}-${line.newNumber}`;
+        return !acceptedLines.has(lineKey) && !declinedLines.has(lineKey);
+      });
+      if (hasPendingAddedLines) {
+        pendingIndices.push(index);
+      }
     });
+    return {
+      pendingIndices,
+      pendingCount: pendingIndices.length,
+    };
+  }, [pendingFileOperations, acceptedLines, declinedLines]);
+
+  const resetAcceptedStateForOperation = useCallback((opIndex) => {
+    if (opIndex == null) {
+      return;
+    }
     setAcceptedLines((prev) => {
-      const newMap = new Map(prev);
-      const key = `${opIndex}-${lineNumber}`;
-      newMap.delete(key);
-      
-      // Apply changes immediately with updated maps
-      setTimeout(() => {
-        setDeclinedLines((declinedMap) => {
-          applyLineChangesToFile(opIndex, newMap, declinedMap);
-          return declinedMap;
-        });
-      }, 0);
-      
-      return newMap;
+      const next = new Map(prev);
+      Array.from(next.keys()).forEach((key) => {
+        if (key.startsWith(`${opIndex}-`)) {
+          next.delete(key);
+        }
+      });
+      return next;
     });
-    
-    // Mark operation as reviewed when user interacts with lines
-    setReviewedOperations((prev) => new Set([...prev, opIndex]));
-  }, [applyLineChangesToFile]);
+    setDeclinedLines((prev) => {
+      const next = new Map(prev);
+      Array.from(next.keys()).forEach((key) => {
+        if (key.startsWith(`${opIndex}-`)) {
+          next.delete(key);
+        }
+      });
+      return next;
+    });
+    setReviewedOperations((prev) => {
+      const next = new Set(prev);
+      next.delete(opIndex);
+      return next;
+    });
+  }, []);
 
   // Refs to always get latest versions of handlers for event listeners
+  const handleAcceptLinesRef = useRef(handleAcceptLines);
   const handleAcceptLineRef = useRef(handleAcceptLine);
+  const handleUndoAcceptedLineRef = useRef(handleUndoAcceptedLine);
+  const handleDeclineLinesRef = useRef(handleDeclineLines);
   const handleDeclineLineRef = useRef(handleDeclineLine);
+  const resetAcceptedStateForOperationRef = useRef(resetAcceptedStateForOperation);
 
   // Update refs when handlers change
   useEffect(() => {
+    handleAcceptLinesRef.current = handleAcceptLines;
     handleAcceptLineRef.current = handleAcceptLine;
+    handleDeclineLinesRef.current = handleDeclineLines;
     handleDeclineLineRef.current = handleDeclineLine;
-  }, [handleAcceptLine, handleDeclineLine]);
+    handleUndoAcceptedLineRef.current = handleUndoAcceptedLine;
+    resetAcceptedStateForOperationRef.current = resetAcceptedStateForOperation;
+  }, [handleAcceptLines, handleAcceptLine, handleDeclineLines, handleDeclineLine, handleUndoAcceptedLine, resetAcceptedStateForOperation]);
 
   const handleReviewNextFile = useCallback(() => {
     if (!pendingFileOperations) return;
-    const operations = pendingFileOperations.operations || [];
-    const nextIndex = activeFileOperationIndex + 1;
-    if (nextIndex < operations.length) {
-      setActiveFileOperationIndex(nextIndex);
-      setReviewedOperations((prev) => new Set([...prev, activeFileOperationIndex]));
-    } else {
-      // All files reviewed, show apply/discard options
-      setReviewedOperations((prev) => new Set([...prev, activeFileOperationIndex]));
+    const pendingIndices = pendingOperationSummary.pendingIndices;
+    if (!pendingIndices.length) {
+      return;
     }
-  }, [pendingFileOperations, activeFileOperationIndex]);
+    const currentPosition = pendingIndices.indexOf(activeFileOperationIndex);
+    const nextPosition = currentPosition >= 0 ? currentPosition + 1 : 0;
+    setReviewedOperations((prev) => new Set([...prev, activeFileOperationIndex]));
+    if (nextPosition < pendingIndices.length) {
+      setActiveFileOperationIndex(pendingIndices[nextPosition]);
+    }
+  }, [pendingFileOperations, pendingOperationSummary, activeFileOperationIndex]);
 
   const handleStartReview = useCallback(() => {
     if (!pendingFileOperations) return;
@@ -4933,6 +5067,74 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
       openOperationPreview(firstOp);
     }
   }, [pendingFileOperations, openOperationPreview]);
+
+  useEffect(() => {
+    if (!pendingFileOperations?.operations?.length) {
+      return;
+    }
+    const { pendingIndices, pendingCount } = pendingOperationSummary;
+    if (pendingCount === 0 || pendingIndices.length === 0) {
+      return;
+    }
+    if (!pendingIndices.includes(activeFileOperationIndex)) {
+      setActiveFileOperationIndex(pendingIndices[0]);
+    }
+  }, [pendingFileOperations, pendingOperationSummary, activeFileOperationIndex]);
+
+  useEffect(() => {
+    if (!pendingFileOperations?.operations?.length || !activeTab) {
+      return;
+    }
+    const normalizedActive = normalizeEditorPath(activeTab);
+    const operations = pendingFileOperations.operations;
+    const matchedIndex = operations.findIndex(
+      (op) => normalizeEditorPath(op.path) === normalizedActive
+    );
+    if (matchedIndex === -1) {
+      return;
+    }
+    if (showReviewButton) {
+      setShowReviewButton(false);
+    }
+    if (activeFileOperationIndex !== matchedIndex) {
+      setActiveFileOperationIndex(matchedIndex);
+    }
+  }, [
+    pendingFileOperations,
+    activeTab,
+    activeFileOperationIndex,
+    showReviewButton,
+  ]);
+
+  useEffect(() => {
+    const handleUndoHotkey = (event) => {
+      if (!event || !(event.ctrlKey || event.metaKey)) {
+        return;
+      }
+      if (event.key && event.key.toLowerCase() !== 'z') {
+        return;
+      }
+      if (!pendingFileOperations?.operations?.length) {
+        return;
+      }
+      const operations = pendingFileOperations.operations;
+      const activeOp = operations[activeFileOperationIndex];
+      if (!activeOp) {
+        return;
+      }
+      if (!activeTab) {
+        return;
+      }
+      const normalizedActive = normalizeEditorPath(activeTab);
+      if (normalizeEditorPath(activeOp.path) !== normalizedActive) {
+        return;
+      }
+      resetAcceptedStateForOperationRef.current?.(activeFileOperationIndex);
+    };
+
+    window.addEventListener('keydown', handleUndoHotkey, true);
+    return () => window.removeEventListener('keydown', handleUndoHotkey, true);
+  }, [pendingFileOperations, activeFileOperationIndex, activeTab]);
 
   const handleDiscardPendingFileOperations = async () => {
     if (!pendingFileOperations || !pendingFileOperations.operations) {
@@ -5123,31 +5325,55 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
       let anchorLine = typeof nextLineNumber === 'number' ? nextLineNumber : lineCount + 1;
       anchorLine = Math.min(Math.max(anchorLine, 1), lineCount + 1);
       removedBlocks.push({
-        lines: pendingRemoved,
+        id: `${currentOpIndex}-${Math.max(anchorLine - 1, 0)}-${pendingRemoved[0]?.oldNumber ?? 0}-${pendingRemoved[pendingRemoved.length - 1]?.oldNumber ?? 0}`,
+        lines: pendingRemoved.map((line) => ({
+          ...line,
+          lineKey: `${currentOpIndex}-${line.oldNumber}`,
+        })),
         afterLineNumber: Math.max(anchorLine - 1, 0),
       });
       pendingRemoved = [];
     };
 
+    const currentOpIndex = activeFileOperationIndex;
     const addedLines = [];
     op.diff.forEach((line) => {
+      const addedLineNumber =
+        line.type === 'added' && typeof line.newNumber === 'number'
+          ? line.newNumber
+          : null;
+      const removedLineNumber =
+        line.type === 'removed' && typeof line.oldNumber === 'number'
+          ? line.oldNumber
+          : null;
+      const addedLineKey =
+        addedLineNumber !== null ? `${currentOpIndex}-${addedLineNumber}` : null;
+      const removedLineKey =
+        removedLineNumber !== null ? `${currentOpIndex}-${removedLineNumber}` : null;
+      const isAddedAccepted = addedLineKey ? acceptedLines.has(addedLineKey) : false;
+      const isAddedDeclined = addedLineKey ? declinedLines.has(addedLineKey) : false;
+      const isRemovedAccepted = removedLineKey ? acceptedLines.has(removedLineKey) : false;
+      const isRemovedDeclined = removedLineKey ? declinedLines.has(removedLineKey) : false;
+
       if (line.type === 'added' && typeof line.newNumber === 'number') {
         if (line.newNumber >= 1 && line.newNumber <= lineCount) {
           addedLines.push({ lineNumber: line.newNumber, line });
-          decorations.push({
-            range: new monaco.Range(
-              line.newNumber,
-              1,
-              line.newNumber,
-              model.getLineMaxColumn(line.newNumber) || 1
-            ),
-            options: {
-              isWholeLine: true,
-              className: 'ai-editor-line-added',
-              glyphMarginClassName: 'ai-editor-glyph-added',
-              glyphMarginHoverMessage: { value: 'AI: added line' },
-            },
-          });
+          if (!isAddedAccepted && !isAddedDeclined) {
+            decorations.push({
+              range: new monaco.Range(
+                line.newNumber,
+                1,
+                line.newNumber,
+                model.getLineMaxColumn(line.newNumber) || 1
+              ),
+              options: {
+                isWholeLine: true,
+                className: 'ai-editor-line-added',
+                glyphMarginClassName: 'ai-editor-glyph-added',
+                glyphMarginHoverMessage: { value: 'AI: added line' },
+              },
+            });
+          }
         }
         flushRemovedBlock(line.newNumber);
         return;
@@ -5178,81 +5404,32 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
         editor.getOption(monaco.editor.EditorOption.lineHeight) || 18;
 
       removedBlocks.forEach((block) => {
+        const blockHasPendingLines = block.lines.some((line) => {
+          const key = line.lineKey;
+          return key ? !acceptedLines.has(key) && !declinedLines.has(key) : true;
+        });
+        if (!blockHasPendingLines) {
+          return;
+        }
         const domNode = document.createElement('div');
         domNode.className = 'ai-editor-removed-zone';
         domNode.style.height = `${block.lines.length * lineHeight}px`;
-        const currentOpIndex = activeFileOperationIndex;
-        domNode.innerHTML = block.lines
-          .map(
-            (line, lineIdx) => {
-              const lineKey = `${currentOpIndex}-${line.oldNumber}`;
-              const isAccepted = acceptedLines.has(lineKey);
-              const isDeclined = declinedLines.has(lineKey);
-              return `
-              <div class="ai-editor-removed-line" data-line-key="${lineKey}" data-line-number="${line.oldNumber}">
-                <span class="ai-editor-removed-marker">−</span>
-                <span class="ai-editor-removed-text">${
-                  escapeHtml(line.text === '' ? ' ' : line.text)
-                }</span>
-                <div class="ai-editor-line-actions">
-                  <button 
-                    class="ai-line-undo-btn ${isDeclined ? 'active' : ''}" 
-                    data-action="decline" 
-                    data-line-key="${lineKey}"
-                    style="padding: 4px 10px; border: 1px solid ${isDeclined ? '#475569' : '#374151'}; background: ${isDeclined ? '#1e293b' : '#0f172a'}; color: ${isDeclined ? '#e2e8f0' : '#94a3b8'}; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 500; transition: all 0.2s; white-space: nowrap;"
-                    title="Undo this line"
-                  >
-                    Undo
-                  </button>
-                  <button 
-                    class="ai-line-keep-btn ${isAccepted ? 'active' : ''}" 
-                    data-action="accept" 
-                    data-line-key="${lineKey}"
-                    style="padding: 4px 10px; border: 1px solid ${isAccepted ? '#22c55e' : '#22c55e'}; background: ${isAccepted ? '#22c55e' : '#22c55e'}; color: white; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 500; transition: all 0.2s; white-space: nowrap;"
-                    title="Keep this line"
-                  >
-                    Keep
-                  </button>
-                </div>
-              </div>
-            `;
-            }
-          )
-          .join('');
-        
-        // Add event listeners for accept/decline buttons
-        domNode.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const btn = e.target.closest('[data-action]');
-          if (!btn) return;
-          const action = btn.dataset.action;
-          const lineKey = btn.dataset.lineKey;
-          if (!lineKey) return;
-          
-          const parts = lineKey.split('-');
-          if (parts.length < 2) return;
-          
-          const opIndex = parseInt(parts[0]);
-          const lineNumber = parseInt(parts[1]);
-          
-          if (isNaN(opIndex) || isNaN(lineNumber)) return;
-          
-          const line = block.lines.find(l => l.oldNumber === lineNumber);
-          if (line) {
-            if (action === 'accept') {
-              if (e.stopImmediatePropagation) {
-                e.stopImmediatePropagation();
-              }
-              handleAcceptLineRef.current(opIndex, lineNumber, 'removed');
-            } else if (action === 'decline') {
-              if (e.stopImmediatePropagation) {
-                e.stopImmediatePropagation();
-              }
-              handleDeclineLineRef.current(opIndex, lineNumber, 'removed');
-            }
-          }
-        }, true);
+        domNode.innerHTML = `
+          <div class="ai-editor-removed-lines">
+            ${block.lines
+              .map(
+                (line) => `
+                  <div class="ai-editor-removed-line" data-line-key="${currentOpIndex}-${line.oldNumber}" data-line-number="${line.oldNumber}">
+                    <span class="ai-editor-removed-marker">−</span>
+                    <span class="ai-editor-removed-text">${escapeHtml(
+                      line.text === '' ? ' ' : line.text
+                    )}</span>
+                  </div>
+                `
+              )
+              .join('')}
+          </div>
+        `;
 
         const marginDomNode = document.createElement('div');
         marginDomNode.className = 'ai-editor-removed-margin';
@@ -5272,7 +5449,6 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
   });
 
       // Add content widgets for added lines with accept/decline buttons
-      const currentOpIndex = activeFileOperationIndex;
       const monacoInstance = monacoRef.current;
     
     // Remove existing content widgets
@@ -5289,6 +5465,8 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
     // Group consecutive added lines together (within 2 lines of each other)
     const MAX_GAP = 2; // Maximum gap between lines to consider them a group
     const lineGroups = [];
+    // Clean up processed keys that no longer have any lines (e.g., operation changed)
+    const activeGroupKeys = new Set();
     
     if (addedLines.length > 0) {
       // Sort added lines by line number
@@ -5323,6 +5501,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
       const lastLine = group[group.length - 1];
       const groupLineNumbers = group.map(({ lineNumber }) => lineNumber);
       const groupKey = `${currentOpIndex}-${firstLine.lineNumber}-${lastLine.lineNumber}`;
+      activeGroupKeys.add(groupKey);
       
       // Check if all lines in the group are accepted/declined
       const allAccepted = groupLineNumbers.every(lineNum => {
@@ -5334,6 +5513,10 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
         return declinedLines.has(lineKey);
       });
       
+      if (allAccepted || allDeclined) {
+        return;
+      }
+
       // Determine button states
       const isAccepted = allAccepted;
       const isDeclined = allDeclined;
@@ -5411,11 +5594,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
               }
             }
             // Decline all lines in the group
-            console.log('Calling handleDeclineLine for lines:', lineNums);
-            lineNums.forEach(lineNum => {
-              handleDeclineLineRef.current(opIndex, lineNum, 'added');
-            });
-            console.log('handleDeclineLine calls completed');
+            handleDeclineLinesRef.current?.(opIndex, lineNums, 'added');
           } catch (error) {
             console.error('Error in undo handler:', error);
           }
@@ -5449,8 +5628,8 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
       keepBtn.setAttribute('data-line-numbers', groupLineNumbers.join(','));
       keepBtn.style.cssText = `
         padding: 4px 10px;
-        border: 1px solid ${isAccepted ? '#22c55e' : '#22c55e'};
-        background: ${isAccepted ? '#22c55e' : '#22c55e'};
+        border: 1px solid #22c55e;
+        background: #22c55e;
         color: white;
         border-radius: 4px;
         cursor: pointer;
@@ -5486,11 +5665,9 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
               }
             }
             // Accept all lines in the group
-            console.log('Calling handleAcceptLine for lines:', lineNums);
-            lineNums.forEach(lineNum => {
-              handleAcceptLineRef.current(opIndex, lineNum, 'added');
-            });
-            console.log('handleAcceptLine calls completed');
+            console.log('Calling handleAcceptLines for lines:', lineNums);
+            handleAcceptLinesRef.current?.(opIndex, lineNums, 'added');
+            domNode.style.display = 'none';
           } catch (error) {
             console.error('Error in keep handler:', error);
           }
@@ -6169,30 +6346,50 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
             )}
 
             {/* Floating "Review AI changes" panel - center bottom */}
-            {pendingFileOperations && !showReviewButton && (() => {
+            {pendingFileOperations && !showReviewButton && pendingOperationSummary.pendingCount > 0 && (() => {
               const operations = pendingFileOperations.operations || [];
-              const totalOps = operations.length;
-              if (totalOps === 0) return null;
+              if (operations.length === 0) return null;
 
-              const clampedIndex = Math.min(
-                Math.max(activeFileOperationIndex, 0),
-                Math.max(totalOps - 1, 0)
+              const { pendingIndices, pendingCount } = pendingOperationSummary;
+              if (pendingCount === 0) return null;
+
+              const activeIndex = pendingIndices.includes(activeFileOperationIndex)
+                ? activeFileOperationIndex
+                : pendingIndices[0];
+              const totalChangesInFiles = operations.length;
+              const displayPosition = totalChangesInFiles > 0
+                ? Math.min(Math.max(activeIndex, 0), totalChangesInFiles - 1) + 1
+                : 0;
+              const currentPendingPosition = Math.max(
+                pendingIndices.indexOf(activeIndex),
+                0
               );
-              const op = operations[clampedIndex];
+              const op = operations[activeIndex];
+              if (!op) return null;
               const normalizedPath = normalizeEditorPath(op.path);
 
               const goPrev = () => {
-                setActiveFileOperationIndex((prev) => (prev > 0 ? prev - 1 : prev));
+                setActiveFileOperationIndex((prev) => {
+                  const position = pendingIndices.indexOf(prev);
+                  if (position <= 0) {
+                    return prev;
+                  }
+                  return pendingIndices[position - 1];
+                });
               };
 
               const goNext = () => {
-                setActiveFileOperationIndex((prev) =>
-                  prev < totalOps - 1 ? prev + 1 : prev
-                );
+                setActiveFileOperationIndex((prev) => {
+                  const position = pendingIndices.indexOf(prev);
+                  if (position === -1 || position >= pendingIndices.length - 1) {
+                    return prev;
+                  }
+                  return pendingIndices[position + 1];
+                });
               };
 
               const isOperationFileOpen = openFiles.some(
-                (file) => file.path === normalizedPath
+                (file) => normalizeEditorPath(file.path) === normalizedPath
               );
 
               const handleReviewClick = () => {
@@ -6208,7 +6405,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                       <div className="space-y-1">
                         <h4 className="text-dark-100 font-semibold">Review AI changes</h4>
                         <p className="text-xs text-dark-300">
-                          Change {clampedIndex + 1} of {totalOps} •{' '}
+                          Change {displayPosition} of {totalChangesInFiles} •{' '}
                           {pendingFileOperations.mode?.toUpperCase() || 'AI'}
                         </p>
                       </div>
@@ -6217,19 +6414,19 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                           <button
                             type="button"
                             onClick={goPrev}
-                            disabled={clampedIndex === 0}
+                            disabled={currentPendingPosition === 0}
                             className="p-1 rounded border border-dark-600 hover:bg-dark-800 disabled:opacity-40"
                             aria-label="Previous change"
                           >
                             <ChevronLeft className="w-3 h-3" />
                           </button>
                           <span className="min-w-[42px] text-center">
-                            {clampedIndex + 1} / {totalOps}
+                            {currentPendingPosition + 1} / {pendingCount}
                           </span>
                           <button
                             type="button"
                             onClick={goNext}
-                            disabled={clampedIndex >= totalOps - 1}
+                            disabled={currentPendingPosition >= pendingCount - 1}
                             className="p-1 rounded border border-dark-600 hover:bg-dark-800 disabled:opacity-40"
                             aria-label="Next change"
                           >
@@ -6281,7 +6478,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                       </span>
                     </div>
                     {/* Show "Review the next file" button if current file is reviewed */}
-                    {reviewedOperations.has(activeFileOperationIndex) && clampedIndex < totalOps - 1 && (
+                    {reviewedOperations.has(activeFileOperationIndex) && currentPendingPosition < pendingCount - 1 && (
                       <div className="pt-2 border-t border-dark-700">
                         <button
                           type="button"

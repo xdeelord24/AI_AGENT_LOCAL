@@ -89,14 +89,19 @@ code {
   color: #fecaca;
 }
 
+.ai-editor-removed-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .ai-editor-removed-line {
   display: flex;
   gap: 6px;
-  align-items: center;
+  align-items: flex-start;
   white-space: pre-wrap;
   word-break: break-word;
   width: 100%;
-  justify-content: space-between;
 }
 
 .ai-editor-removed-marker {
@@ -107,15 +112,6 @@ code {
 }
 
 /* Line action buttons */
-.ai-editor-line-actions {
-  display: flex;
-  flex-direction: row;
-  gap: 6px;
-  align-items: center;
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
 /* Position AI line widgets on the right side */
 .ai-editor-line-widget {
   pointer-events: auto !important;
@@ -149,6 +145,35 @@ code {
 .ai-line-keep-btn {
   white-space: nowrap;
   flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.ai-line-undo-btn {
+  border-color: #374151;
+  color: #94a3b8;
+}
+
+.ai-line-undo-btn.active {
+  border-color: #475569;
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+.ai-line-keep-btn {
+  border-color: #22c55e;
+  background: #22c55e;
+  color: #ffffff;
+}
+
+.ai-line-keep-btn.active {
+  filter: brightness(0.9);
 }
 
 .ai-line-undo-btn:hover {
