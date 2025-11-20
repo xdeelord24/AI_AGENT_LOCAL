@@ -1478,6 +1478,7 @@ class AIService:
         
         # Check if AI response indicates uncertainty or lack of knowledge
         # If so, try web search as fallback (only if web search mode is not off)
+        # When web search mode is "off", rely only on model knowledge
         if (web_search_mode != "off" and 
             not context.get("web_search_results_mcp") and 
             not context.get("web_search_results")):

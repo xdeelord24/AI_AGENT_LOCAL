@@ -3989,62 +3989,136 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
     return null;
   }
 
-  const displaySteps = steps.slice(-5);
-  const activeStep = [...displaySteps].reverse().find((step) => step.status === 'active') || displaySteps[displaySteps.length - 1];
+  const activeStep = steps.find((step) => step.status === 'active');
+  const completedSteps = steps.filter((step) => step.status === 'done');
+  const pendingSteps = steps.filter((step) => !step.status || step.status === 'pending');
 
   return (
-    <div className="rounded-xl border border-primary-800/40 bg-dark-900/70 p-3 space-y-3">
+    <div className="rounded-xl border border-primary-800/40 bg-dark-900/70 p-4 space-y-4">
       <div className="flex items-center justify-between text-xs text-dark-400 uppercase tracking-wide">
         <div className="flex items-center gap-2 text-primary-200">
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>Live thinking</span>
+          <Activity className="w-4 h-4" />
+          <span>Detailed Processes</span>
         </div>
         <span>{Math.max(1, Math.round(Math.max(elapsedMs, 1000) / 1000))}s</span>
       </div>
-      <ol className="space-y-2">
-        {displaySteps.map((step) => {
-          const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
-          const isActive = step === activeStep;
-          const now = Date.now();
-          const duration =
-            step.status === 'done' && step.durationMs
-              ? formatDuration(step.durationMs)
-              : isActive && step.activatedAt
-              ? formatDuration(Math.max(0, now - step.activatedAt))
-              : null;
-          const toneClass = toneClasses[step.tone] || toneClasses.primary;
+      
+      {activeStep && (
+        <div className="space-y-2">
+          <div className="text-[10px] uppercase tracking-wide text-primary-400 font-semibold mb-1">Current Step</div>
+          <ol className="space-y-2">
+            {[activeStep].map((step) => {
+              const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
+              const now = Date.now();
+              const duration = step.activatedAt ? formatDuration(Math.max(0, now - step.activatedAt)) : null;
+              const toneClass = toneClasses[step.tone] || toneClasses.primary;
+              const meta = THINKING_PHASE_META[step.phase] || {};
 
-          return (
-            <li
-              key={step.key}
-              className={`rounded-lg border px-2.5 py-2 text-sm transition-all ${
-                isActive ? 'border-primary-600/60 bg-primary-900/15' : 'border-dark-700 bg-dark-800/30'
-              }`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass} ${
-                      isActive ? 'animate-pulse' : ''
-                    }`}
-                  >
-                    <Icon className="w-3.5 h-3.5" />
+              return (
+                <li
+                  key={step.key}
+                  className="rounded-lg border border-primary-600/60 bg-primary-900/20 px-3 py-2.5 text-sm transition-all"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-1">
+                      <div
+                        className={`w-7 h-7 rounded-md border flex items-center justify-center ${toneClass} animate-pulse`}
+                      >
+                        <Icon className="w-4 h-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className={`font-medium ${'text-primary-100'}`}>{step.label}</div>
+                        {(step.description || meta.description) && (
+                          <p className="text-xs text-dark-300 mt-0.5">
+                            {step.description || meta.description}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <span className="text-[11px] text-primary-400 font-mono uppercase whitespace-nowrap">
+                      {duration ? `${duration} ago` : 'now'}
+                    </span>
                   </div>
-                  <span className={`text-sm ${isActive ? 'text-primary-100' : 'text-dark-200'}`}>{step.label}</span>
-                </div>
-                <span className="text-[11px] text-dark-500 font-mono uppercase">
-                  {isActive ? 'now' : duration || '—'}
-                </span>
-              </div>
-              {isActive && (
-                <p className="text-xs text-dark-300 mt-1">
-                  {step.description || THINKING_PHASE_META[step.phase]?.description || 'Working…'}
-                </p>
-              )}
-            </li>
-          );
-        })}
-      </ol>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
+
+      {completedSteps.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-[10px] uppercase tracking-wide text-dark-500 font-semibold mb-1">
+            Completed ({completedSteps.length})
+          </div>
+          <ol className="space-y-1.5 max-h-64 overflow-y-auto">
+            {completedSteps.slice(-10).reverse().map((step) => {
+              const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
+              const duration = step.durationMs ? formatDuration(step.durationMs) : null;
+              const toneClass = toneClasses[step.tone] || toneClasses.muted;
+              const meta = THINKING_PHASE_META[step.phase] || {};
+
+              return (
+                <li
+                  key={step.key}
+                  className="rounded-lg border border-dark-700 bg-dark-800/40 px-2.5 py-2 text-sm transition-all"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <div
+                        className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass}`}
+                      >
+                        <Icon className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-dark-200 truncate">{step.label}</div>
+                        {(step.description || meta.description) && (
+                          <p className="text-xs text-dark-400 mt-0.5 truncate">
+                            {step.description || meta.description}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-dark-500 font-mono uppercase whitespace-nowrap">
+                      {duration || '—'}
+                    </span>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
+
+      {pendingSteps.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-[10px] uppercase tracking-wide text-dark-500 font-semibold mb-1">
+            Pending ({pendingSteps.length})
+          </div>
+          <ol className="space-y-1.5">
+            {pendingSteps.map((step) => {
+              const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
+              const toneClass = toneClasses.muted;
+
+              return (
+                <li
+                  key={step.key}
+                  className="rounded-lg border border-dark-700 bg-dark-800/20 px-2.5 py-2 text-sm opacity-60"
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass}`}
+                    >
+                      <Icon className="w-3.5 h-3.5" />
+                    </div>
+                    <span className="text-sm text-dark-400">{step.label}</span>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
     </div>
   );
 };
@@ -6687,8 +6761,62 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                             }}
                           />
                           {message.plan &&
-                            message.role === 'assistant' &&
-                            renderAiPlan(message.plan)}
+                            message.role === 'assistant' && (
+                              <div className="mt-3">
+                                {renderAiPlan(message.plan)}
+                              </div>
+                            )}
+                          {message.activityLog &&
+                            Array.isArray(message.activityLog) &&
+                            message.activityLog.length > 0 &&
+                            message.role === 'assistant' && (
+                              <div className={`mt-3 ${message.plan ? '' : ''}`}>
+                                <div className="rounded-xl border border-primary-800/40 bg-dark-900/70 p-4 space-y-3">
+                                  <div className="flex items-center gap-2 text-xs text-dark-400 uppercase tracking-wide">
+                                    <Activity className="w-4 h-4" />
+                                    <span>Process Steps</span>
+                                  </div>
+                                  <ol className="space-y-2">
+                                    {message.activityLog.map((log, logIdx) => {
+                                      const stepPhase = log.phase || 'unknown';
+                                      const Icon = PHASE_ICON_MAP[stepPhase] || Sparkles;
+                                      const meta = THINKING_PHASE_META[stepPhase] || {};
+                                      const toneClass = toneClasses[log.tone] || toneClasses.primary;
+                                      
+                                      return (
+                                        <li
+                                          key={logIdx}
+                                          className="rounded-lg border border-dark-700 bg-dark-800/40 px-3 py-2.5 text-sm"
+                                        >
+                                          <div className="flex items-center gap-2">
+                                            <div
+                                              className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass}`}
+                                            >
+                                              <Icon className="w-3.5 h-3.5" />
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                              <div className="text-sm text-dark-200">
+                                                {log.label || log.description || meta.label || stepPhase}
+                                              </div>
+                                              {(log.description || meta.description) && log.label !== log.description && (
+                                                <p className="text-xs text-dark-400 mt-0.5">
+                                                  {log.description || meta.description}
+                                                </p>
+                                              )}
+                                              {log.durationMs && (
+                                                <span className="text-[10px] text-dark-500 font-mono mt-1 inline-block">
+                                                  {formatDuration(log.durationMs)}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </li>
+                                      );
+                                    })}
+                                  </ol>
+                                </div>
+                              </div>
+                            )}
                         </div>
                       );
                     })()}
@@ -6707,12 +6835,14 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                             AI is thinking… {Math.max(1, Math.round(Math.max(thinkingElapsed, 1000) / 1000))}s elapsed
                           </span>
                         </div>
-                        {agentStatuses.length > 0 && (
-                          <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
-                        )}
                         {thinkingAiPlan && (
                           <div className="border-t border-dark-600 pt-3">
                             {renderAiPlan(thinkingAiPlan)}
+                          </div>
+                        )}
+                        {agentStatuses.length > 0 && (
+                          <div className={thinkingAiPlan ? 'border-t border-dark-600 pt-3' : ''}>
+                            <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
                           </div>
                         )}
                       </div>
