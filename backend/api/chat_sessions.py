@@ -159,6 +159,28 @@ async def list_chat_sessions():
         raise HTTPException(status_code=500, detail=f"Error listing chat sessions: {str(e)}")
 
 
+@router.get("/sessions/by-conversation/{conversation_id}", response_model=ChatSession)
+async def get_chat_session_by_conversation_id(conversation_id: str):
+    """Get a chat session by conversation_id"""
+    try:
+        # Search through all session files to find one with matching conversation_id
+        for session_file in CHAT_SESSIONS_DIR.glob("*.json"):
+            try:
+                with open(session_file, "r", encoding="utf-8") as f:
+                    session_data = json.load(f)
+                    if session_data.get("conversation_id") == conversation_id:
+                        return ChatSession(**session_data)
+            except Exception as e:
+                print(f"Error reading session file {session_file}: {e}")
+                continue
+        
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting chat session: {str(e)}")
+
+
 @router.get("/sessions/{session_id}", response_model=ChatSession)
 async def get_chat_session(session_id: str):
     """Get a specific chat session"""

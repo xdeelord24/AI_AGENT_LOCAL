@@ -568,7 +568,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   
   // Panel size states
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(256); // 64 * 4 = 256px (w-64)
-  const [rightSidebarWidth, setRightSidebarWidth] = useState(320); // 80 * 4 = 320px (w-80)
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(600); // Maximum width for chat panel (50% of typical 1920px screen)
   const [bottomPanelHeight, setBottomPanelHeight] = useState(256); // 64 * 4 = 256px (h-64)
   
   // Resize states
@@ -1183,7 +1183,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
   };
   const [pastChats, setPastChats] = useState([]);
-  const [showPastChats, setShowPastChats] = useState(true);
+  const [showPastChats, setShowPastChats] = useState(false); // Collapsed by default
   const [currentChatSessionId, setCurrentChatSessionId] = useState(null);
   const [isLoadingPastChats, setIsLoadingPastChats] = useState(false);
   const [showChatHistoryDialog, setShowChatHistoryDialog] = useState(false);
@@ -1198,6 +1198,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerSelectedPath, setPickerSelectedPath] = useState('');
   const [pickerMode, setPickerMode] = useState('folder'); // 'folder' or 'file'
+  
+  // Inline editing for new file/folder creation
+  const [creatingItem, setCreatingItem] = useState(null); // { parentPath, type: 'file' | 'folder', tempId }
+  const [creatingItemName, setCreatingItemName] = useState('');
+  const creatingItemInputRef = useRef(null);
   
   // Terminal states
   const [terminalSessionId, setTerminalSessionId] = useState(() => {
@@ -1602,42 +1607,93 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     loadPastChats();
   }, [loadPastChats]);
 
-  // Save chat session
-  const saveChatSession = useCallback(async (conversationId = null) => {
-    if (chatMessages.length === 0) return;
+  // Save chat session - accepts messages parameter to use latest state
+  // Use a ref to prevent duplicate saves per conversation
+  const saveChatSessionRef = useRef(new Map());
+  const saveChatSession = useCallback(async (conversationId = null, messagesOverride = null) => {
+    // Use provided messages or get latest from state
+    const messagesToCheck = messagesOverride || chatMessages;
+    
+    // Only save if there are messages and at least one user message
+    if (messagesToCheck.length === 0) return;
+    
+    const userMessages = messagesToCheck.filter(msg => msg.role === 'user');
+    const assistantMessages = messagesToCheck.filter(msg => msg.role === 'assistant');
+    
+    // Only save if there's at least one user message and one assistant message (complete exchange)
+    if (userMessages.length === 0 || assistantMessages.length === 0) return;
+    
+    // Create a unique key for this save operation to prevent duplicates
+    // Use conversation_id + message count for better reliability
+    const saveKey = `${conversationId || 'no-id'}-${messagesToCheck.length}`;
+    
+    // Prevent duplicate saves for the same conversation and message count
+    if (saveChatSessionRef.current.has(saveKey)) {
+      return;
+    }
+    saveChatSessionRef.current.set(saveKey, true);
     
     try {
-      const messagesToSave = chatMessages.map(msg => ({
+      const messagesToSave = messagesToCheck.map(msg => ({
         role: msg.role,
         content: msg.content,
         timestamp: msg.timestamp,
         rawContent: msg.rawContent,
-        plan: msg.plan,
-        activityLog: msg.activityLog
+        plan: msg.plan || null,  // Ensure plan is included
+        activityLog: msg.activityLog || null  // Ensure activityLog is included
       }));
 
+      // First, try to update existing session by currentChatSessionId
       if (currentChatSessionId) {
-        // Update existing session
-        await ApiService.updateChatSession(currentChatSessionId, null, messagesToSave);
-        // Reload past chats to update the time display
-        const sessions = await ApiService.listChatSessions();
-        setPastChats(sessions || []);
-      } else {
-        // Create new session
-        const firstUserMessage = chatMessages.find(msg => msg.role === 'user');
-        const title = firstUserMessage 
-          ? (firstUserMessage.content.substring(0, 60).trim() + (firstUserMessage.content.length > 60 ? '…' : '')) || 'Untitled Chat'
-          : 'Untitled Chat';
-        
-        const session = await ApiService.createChatSession(title, messagesToSave, conversationId);
-        setCurrentChatSessionId(session.id);
-        
-        // Reload past chats to show the new one
-        const sessions = await ApiService.listChatSessions();
-        setPastChats(sessions || []);
+        try {
+          // Verify the session still exists
+          await ApiService.getChatSession(currentChatSessionId);
+          // Session exists, update it
+          await ApiService.updateChatSession(currentChatSessionId, null, messagesToSave);
+          // Reload past chats to update the time display
+          const sessions = await ApiService.listChatSessions();
+          setPastChats(sessions || []);
+          return; // Successfully updated, exit early
+        } catch (error) {
+          // Session doesn't exist or was deleted, will check by conversation_id next
+          console.warn('Session not found by ID, checking by conversation_id:', error);
+        }
       }
+
+      // If we have a conversation_id, check if a session with that conversation_id already exists
+      // This prevents creating duplicate sessions for the same conversation
+      if (conversationId) {
+        try {
+          const existingSession = await ApiService.getChatSessionByConversationId(conversationId);
+          // Session exists with this conversation_id, update it instead of creating a new one
+          await ApiService.updateChatSession(existingSession.id, null, messagesToSave);
+          setCurrentChatSessionId(existingSession.id);
+          // Reload past chats to update the time display
+          const sessions = await ApiService.listChatSessions();
+          setPastChats(sessions || []);
+          return; // Successfully updated, exit early
+        } catch (error) {
+          // No session found with this conversation_id, will create a new one
+          console.log('No existing session found for conversation_id, creating new session');
+        }
+      }
+
+      // Create new session only if no existing session was found
+      const firstUserMessage = userMessages[0];
+      const title = firstUserMessage 
+        ? (firstUserMessage.content.substring(0, 60).trim() + (firstUserMessage.content.length > 60 ? '…' : '')) || 'Untitled Chat'
+        : 'Untitled Chat';
+      
+      const session = await ApiService.createChatSession(title, messagesToSave, conversationId);
+      setCurrentChatSessionId(session.id);
+      
+      // Reload past chats to show the new one
+      const sessions = await ApiService.listChatSessions();
+      setPastChats(sessions || []);
     } catch (error) {
       console.error('Failed to save chat session:', error);
+      // Remove the key from the ref on error so we can retry
+      saveChatSessionRef.current.delete(saveKey);
     }
   }, [chatMessages, currentChatSessionId]);
 
@@ -1659,6 +1715,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         
         setChatMessages(restoredMessages);
         setCurrentChatSessionId(session.id);
+        
+        // Clear save ref entries for this conversation_id to allow fresh saves
+        if (session.conversation_id) {
+          // Remove all entries that start with this conversation_id
+          for (const key of saveChatSessionRef.current.keys()) {
+            if (key.startsWith(`${session.conversation_id}-`)) {
+              saveChatSessionRef.current.delete(key);
+            }
+          }
+        }
+        
         toast.success(`Restored chat: ${session.title}`);
       }
     } catch (error) {
@@ -1677,6 +1744,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setFollowUpInput('');
     setPendingFileOperations(null);
     setThinkingAiPlan(null);
+    // Clear the save ref map to allow new saves for new conversations
+    saveChatSessionRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -2581,13 +2650,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       toast.error('Open a workspace first');
       return;
     }
-    const targetBase = basePath || currentPath || projectRootPath || '.';
-    setPickerMode('file');
-    setPickerPath(targetBase);
-    setPickerSelectedPath('');
-    setShowFilePicker(true);
-    await loadPickerTree(targetBase);
-  }, [currentPath, loadPickerTree, projectRootPath]);
+    const targetBase = normalizeEditorPath(basePath || currentPath || projectRootPath || '.');
+    const tempId = `new-file-${Date.now()}`;
+    setCreatingItem({ parentPath: targetBase, type: 'file', tempId });
+    setCreatingItemName('');
+  }, [currentPath, projectRootPath]);
 
   const handleFilePickerConfirm = async () => {
     const inputPath = pickerSelectedPath || '';
@@ -2625,13 +2692,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       toast.error('Open a workspace first');
       return;
     }
-    const targetBase = basePath || currentPath || projectRootPath || '.';
-    setPickerMode('folder');
-    setPickerPath(targetBase);
-    setPickerSelectedPath('');
-    setShowFilePicker(true);
-    await loadPickerTree(targetBase);
-  }, [currentPath, loadPickerTree, projectRootPath]);
+    const targetBase = normalizeEditorPath(basePath || currentPath || projectRootPath || '.');
+    const tempId = `new-folder-${Date.now()}`;
+    setCreatingItem({ parentPath: targetBase, type: 'folder', tempId });
+    setCreatingItemName('');
+  }, [currentPath, projectRootPath]);
 
   const handleFolderPickerConfirm = async () => {
     const inputPath = pickerSelectedPath || '';
@@ -2651,6 +2716,75 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       toast.error(`Failed to create folder: ${error.response?.data?.detail || error.message}`);
     }
   };
+
+  const handleCancelCreating = useCallback(() => {
+    setCreatingItem(null);
+    setCreatingItemName('');
+  }, []);
+
+  const handleConfirmCreating = useCallback(async () => {
+    if (!creatingItem) return;
+    
+    const name = creatingItemName.trim();
+    if (!name) {
+      toast.error('Please enter a name');
+      return;
+    }
+
+    // Validate name (no invalid characters)
+    if (/[<>:"|?*]/.test(name)) {
+      toast.error('Invalid characters in name. Cannot contain: < > : " | ? *');
+      return;
+    }
+
+    const fullPath = joinPaths(creatingItem.parentPath, name);
+    
+    try {
+      if (creatingItem.type === 'file') {
+        await ApiService.writeFile(fullPath, '');
+        const language = getLanguageFromPath(fullPath);
+        const fileInfo = {
+          path: fullPath,
+          name: name,
+          content: '',
+          language,
+          modified: false
+        };
+        upsertOpenFile(fileInfo);
+        setActiveTab(fullPath);
+        setEditorContent('');
+        setEditorLanguage(language);
+        toast.success(`Created ${name}`);
+      } else {
+        await ApiService.createDirectory(fullPath);
+        toast.success(`Created folder ${name}`);
+      }
+      
+      await refreshFileTree();
+      setCreatingItem(null);
+      setCreatingItemName('');
+    } catch (error) {
+      console.error(`Error creating ${creatingItem.type}:`, error);
+      toast.error(`Failed to create ${creatingItem.type}: ${error.response?.data?.detail || error.message}`);
+    }
+  }, [creatingItem, creatingItemName, joinPaths, getLanguageFromPath, upsertOpenFile, setActiveTab, setEditorContent, setEditorLanguage, refreshFileTree]);
+
+  // Focus input when creating item
+  useEffect(() => {
+    if (creatingItem && creatingItemInputRef.current) {
+      creatingItemInputRef.current.focus();
+      creatingItemInputRef.current.select();
+      
+      // If creating in a folder, ensure it's expanded
+      if (creatingItem.parentPath && creatingItem.parentPath !== (projectRootPath || currentPath || '.')) {
+        setExpandedFolders(prev => {
+          const next = new Set(prev);
+          next.add(creatingItem.parentPath);
+          return next;
+        });
+      }
+    }
+  }, [creatingItem, projectRootPath, currentPath]);
 
   useEffect(() => {
     if (!fileContextMenu.visible) {
@@ -3584,7 +3718,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setRightSidebarVisible(true);
     setBottomPanelVisible(true);
     setLeftSidebarWidth(256);
-    setRightSidebarWidth(320);
+    setRightSidebarWidth(600);
     setBottomPanelHeight(256);
     setBottomPanelTab('terminal');
   };
@@ -4177,13 +4311,19 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
         content: assistantContent,
         rawContent: assistantContent,
         timestamp: response.timestamp,
-        plan: assistantPlan
+        plan: assistantPlan,
+        activityLog: response.activity_log || null
       };
 
-      setChatMessages(prev => [...prev, assistantMessage]);
-
-      // Save chat session after assistant response
-      saveChatSession(response.conversation_id);
+      setChatMessages(prev => {
+        const updated = [...prev, assistantMessage];
+        // Save chat session after assistant response with the updated messages
+        // Use the updated array that includes both user and assistant messages
+        setTimeout(() => {
+          saveChatSession(response.conversation_id, updated);
+        }, 100);
+        return updated;
+      });
 
       // CRITICAL: In ASK mode, NEVER process file operations, even if the backend sends them
       // This is a redundant safety check in case anything slips through
@@ -5419,8 +5559,50 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
     handleDeclineLine,
   ]);
 
-  const renderFileTree = (fileList, depth = 0) => {
-    if (!fileList || fileList.length === 0) return null;
+  const renderFileTree = (fileList, depth = 0, parentPath = null) => {
+    if (!fileList || fileList.length === 0) {
+      // Show input field if creating item in this folder
+      const normalizedParentPath = parentPath ? normalizeEditorPath(parentPath) : null;
+      const normalizedCreatingParentPath = creatingItem?.parentPath ? normalizeEditorPath(creatingItem.parentPath) : null;
+      if (creatingItem && normalizedParentPath === normalizedCreatingParentPath) {
+        return (
+          <div
+            className="flex items-center px-2 py-1 text-sm"
+            style={{ paddingLeft: `${8 + depth * 16}px` }}
+          >
+            <div className="w-4 h-4 mr-1 flex-shrink-0" />
+            {creatingItem.type === 'folder' ? (
+              <Folder className="w-4 h-4 mr-1 text-blue-400 flex-shrink-0" />
+            ) : (
+              <File className="w-4 h-4 mr-1 text-dark-400 flex-shrink-0" />
+            )}
+            <input
+              ref={creatingItemInputRef}
+              type="text"
+              value={creatingItemName}
+              onChange={(e) => setCreatingItemName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleConfirmCreating();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  handleCancelCreating();
+                }
+              }}
+              onBlur={() => {
+                // Don't cancel on blur - let user click outside or press Escape
+                // This allows clicking the confirm button
+              }}
+              className="flex-1 bg-dark-700 border border-primary-500 rounded px-2 py-0.5 text-dark-100 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
+              placeholder={creatingItem.type === 'folder' ? 'Folder name' : 'File name (e.g., sample.txt)'}
+              autoFocus
+            />
+          </div>
+        );
+      }
+      return null;
+    }
 
     return (
       <>
@@ -5429,6 +5611,9 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
             const isExpanded = expandedFolders.has(file.path);
             const hasChildren = file.children && file.children.length > 0;
             const canExpand = hasChildren || file.has_more_children;
+            const normalizedFilePath = normalizeEditorPath(file.path);
+            const normalizedCreatingParentPath = creatingItem?.parentPath ? normalizeEditorPath(creatingItem.parentPath) : null;
+            const isCreatingInThisFolder = creatingItem && normalizedFilePath === normalizedCreatingParentPath;
             
             return (
               <div key={file.path}>
@@ -5453,7 +5638,42 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                     <span className="ml-2 text-[10px] uppercase tracking-wide text-dark-500">partial</span>
                   )}
                 </div>
-                {isExpanded && hasChildren && renderFileTree(file.children, depth + 1)}
+                {isExpanded && hasChildren && renderFileTree(file.children, depth + 1, file.path)}
+                {isExpanded && isCreatingInThisFolder && (
+                  <div
+                    className="flex items-center px-2 py-1 text-sm"
+                    style={{ paddingLeft: `${8 + (depth + 1) * 16}px` }}
+                  >
+                    <div className="w-4 h-4 mr-1 flex-shrink-0" />
+                    {creatingItem.type === 'folder' ? (
+                      <Folder className="w-4 h-4 mr-1 text-blue-400 flex-shrink-0" />
+                    ) : (
+                      <File className="w-4 h-4 mr-1 text-dark-400 flex-shrink-0" />
+                    )}
+                    <input
+                      ref={creatingItemInputRef}
+                      type="text"
+                      value={creatingItemName}
+                      onChange={(e) => setCreatingItemName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleConfirmCreating();
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault();
+                          handleCancelCreating();
+                        }
+                      }}
+                      onBlur={() => {
+                        // Don't cancel on blur - let user click outside or press Escape
+                        // This allows clicking the confirm button
+                      }}
+                      className="flex-1 bg-dark-700 border border-primary-500 rounded px-2 py-0.5 text-dark-100 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      placeholder={creatingItem.type === 'folder' ? 'Folder name' : 'File name (e.g., sample.txt)'}
+                      autoFocus
+                    />
+                  </div>
+                )}
               </div>
             );
           } else {
@@ -5474,6 +5694,46 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
             );
           }
         })}
+        {/* Show input field at the end if creating item in this parent folder */}
+        {(() => {
+          const normalizedParentPath = parentPath ? normalizeEditorPath(parentPath) : null;
+          const normalizedCreatingParentPath = creatingItem?.parentPath ? normalizeEditorPath(creatingItem.parentPath) : null;
+          return creatingItem && normalizedParentPath === normalizedCreatingParentPath;
+        })() && (
+          <div
+            className="flex items-center px-2 py-1 text-sm"
+            style={{ paddingLeft: `${8 + depth * 16}px` }}
+          >
+            <div className="w-4 h-4 mr-1 flex-shrink-0" />
+            {creatingItem.type === 'folder' ? (
+              <Folder className="w-4 h-4 mr-1 text-blue-400 flex-shrink-0" />
+            ) : (
+              <File className="w-4 h-4 mr-1 text-dark-400 flex-shrink-0" />
+            )}
+            <input
+              ref={creatingItemInputRef}
+              type="text"
+              value={creatingItemName}
+              onChange={(e) => setCreatingItemName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleConfirmCreating();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  handleCancelCreating();
+                }
+              }}
+              onBlur={() => {
+                // Don't cancel on blur - let user click outside or press Escape
+                // This allows clicking the confirm button
+              }}
+              className="flex-1 bg-dark-700 border border-primary-500 rounded px-2 py-0.5 text-dark-100 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
+              placeholder={creatingItem.type === 'folder' ? 'Folder name' : 'File name (e.g., sample.txt)'}
+              autoFocus
+            />
+          </div>
+        )}
       </>
     );
   };
@@ -5609,9 +5869,48 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                 <div className="text-xs text-dark-400 p-2">Loading files...</div>
               ) : workspaceReady ? (
                 fileTree.length > 0 ? (
-                  renderFileTree(fileTree)
+                  renderFileTree(fileTree, 0, projectRootPath || currentPath || '.')
                 ) : (
-                  <div className="text-xs text-dark-400 p-2">Folder is empty</div>
+                  <div className="text-xs text-dark-400 p-2">
+                    {(() => {
+                      const rootPath = projectRootPath || currentPath || '.';
+                      const normalizedRootPath = normalizeEditorPath(rootPath);
+                      const normalizedCreatingParentPath = creatingItem?.parentPath ? normalizeEditorPath(creatingItem.parentPath) : null;
+                      return creatingItem && normalizedRootPath === normalizedCreatingParentPath;
+                    })() ? (
+                      <div
+                        className="flex items-center px-2 py-1 text-sm"
+                        style={{ paddingLeft: '8px' }}
+                      >
+                        <div className="w-4 h-4 mr-1 flex-shrink-0" />
+                        {creatingItem.type === 'folder' ? (
+                          <Folder className="w-4 h-4 mr-1 text-blue-400 flex-shrink-0" />
+                        ) : (
+                          <File className="w-4 h-4 mr-1 text-dark-400 flex-shrink-0" />
+                        )}
+                        <input
+                          ref={creatingItemInputRef}
+                          type="text"
+                          value={creatingItemName}
+                          onChange={(e) => setCreatingItemName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleConfirmCreating();
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault();
+                              handleCancelCreating();
+                            }
+                          }}
+                          className="flex-1 bg-dark-700 border border-primary-500 rounded px-2 py-0.5 text-dark-100 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
+                          placeholder={creatingItem.type === 'folder' ? 'Folder name' : 'File name (e.g., sample.txt)'}
+                          autoFocus
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-xs text-dark-400 p-2">Folder is empty</div>
+                    )}
+                  </div>
                 )
               ) : (
                 <div className="text-xs text-dark-400 p-2 space-y-3">
@@ -6029,7 +6328,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
               style={{
                 width: `var(--right-sidebar-width, ${rightSidebarWidth}px)`,
                 minWidth: '200px',
-                maxWidth: '600px',
+                maxWidth: '50vw', // Allow up to 50% of viewport width for maximum size
               }}
             >
             {/* Chat Tabs */}

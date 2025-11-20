@@ -113,6 +113,10 @@ class ApiService {
     return this.get(`/api/chat/sessions/${sessionId}`);
   }
 
+  static async getChatSessionByConversationId(conversationId) {
+    return this.get(`/api/chat/sessions/by-conversation/${conversationId}`);
+  }
+
   static async updateChatSession(sessionId, title = null, messages = null) {
     return this.put(`/api/chat/sessions/${sessionId}`, {
       title,
