@@ -1669,8 +1669,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   // Clear chat and start new session
   const startNewChat = useCallback(() => {
-    setChatMessages([]);
+    // Clear the session ID first - this ensures the next message creates a new session instead of updating an existing one
     setCurrentChatSessionId(null);
+    setChatMessages([]);
     setChatInput('');
     setComposerInput('');
     setFollowUpInput('');
@@ -2774,7 +2775,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       const newId = Math.max(...chatTabs.map(t => t.id), 0) + 1;
       setChatTabs(prev => prev.map(tab => ({ ...tab, isActive: false })).concat([{ id: newId, title: 'New Chat', isActive: true }]));
       setActiveChatTab(newId);
-      setChatMessages([]);
+      startNewChat();
       setComposerInput(mention);
     } else {
       setComposerInput(prev => (prev ? `${prev.trim()} ${mention}` : mention));
@@ -2782,7 +2783,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
     toast.success('Path added to chat input');
     closeFileContextMenu();
-  }, [chatTabs, closeFileContextMenu, composerInputRef, getRelativePath]);
+  }, [chatTabs, closeFileContextMenu, composerInputRef, getRelativePath, startNewChat]);
 
   const handleFindInFolder = useCallback(async (target) => {
     if (!target) return;
@@ -6074,7 +6075,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                     const newId = Math.max(...chatTabs.map(t => t.id), 0) + 1;
                     setChatTabs(prev => prev.map(t => ({ ...t, isActive: false })).concat([{ id: newId, title: 'New Chat', isActive: true }]));
                     setActiveChatTab(newId);
-                    setChatMessages([]);
+                    startNewChat();
                   }}
                   className="p-1.5 hover:bg-dark-700 rounded transition-colors"
                   title="New Chat"
@@ -6083,10 +6084,11 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                 </button>
                 <button
                   type="button"
+                  onClick={handleChatHistoryDialogToggle}
                   className="p-1.5 hover:bg-dark-700 rounded transition-colors"
-                  title="History"
+                  title="Chat History"
                 >
-                  <Clock className="w-4 h-4 text-dark-400" />
+                  <History className="w-4 h-4 text-dark-400" />
                 </button>
                 <button
                   type="button"
