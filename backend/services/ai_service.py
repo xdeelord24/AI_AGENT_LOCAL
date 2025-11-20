@@ -136,6 +136,16 @@ class AIService:
         self.mcp_client = None
         self._enable_mcp = os.getenv("ENABLE_MCP", "true").lower() in ("true", "1", "yes")
         
+        # Enhanced web search service
+        try:
+            from .web_search_service import WebSearchService
+            self._web_search_service = WebSearchService(
+                cache_size=int(os.getenv("WEB_SEARCH_CACHE_SIZE", "100")),
+                cache_ttl_seconds=int(os.getenv("WEB_SEARCH_CACHE_TTL", "3600"))
+            )
+        except ImportError:
+            self._web_search_service = None
+        
         self._load_persisted_settings()
 
         if self.provider == "huggingface":
@@ -838,6 +848,27 @@ class AIService:
 
     async def perform_web_search(self, query: str, max_results: Optional[int] = None) -> List[Dict[str, Any]]:
         """Fetch search results from DuckDuckGo when browsing is enabled."""
+        # Use enhanced web search service if available
+        if hasattr(self, '_web_search_service'):
+            results, metadata = await self._web_search_service.search(
+                query=query,
+                max_results=max_results or self.web_search_max_results,
+                search_type="text",
+                use_cache=True,
+                optimize_query=True
+            )
+            # Convert to expected format
+            formatted_results = []
+            for result in results:
+                formatted_results.append({
+                    "title": result.get("title") or "",
+                    "url": result.get("href") or result.get("url") or "",
+                    "snippet": result.get("body") or result.get("description") or "",
+                    "source": result.get("source") or result.get("hostname") or ""
+                })
+            return formatted_results
+        
+        # Fallback to original implementation
         if not query or DDGS is None:
             return []
 
@@ -902,13 +933,93 @@ class AIService:
             context.setdefault("new_script_prompt", message)
             context["disable_active_file_context"] = True
 
-        if web_search_mode in ("browser_tab", "google_chrome"):
-            try:
-                search_results = await self.perform_web_search(message)
-                if search_results:
-                    context["web_search_results"] = search_results
-            except Exception as error:
-                context["web_search_error"] = f"{type(error).__name__}: {error}"
+        # Detect if query needs web search and use MCP tools to perform it
+        needs_web_search = self._detect_web_search_needed(message, web_search_mode)
+        if needs_web_search:
+            # Use MCP tools to perform web search instead of direct internet access
+            if self.is_mcp_enabled():
+                try:
+                    # Extract search query from message
+                    search_query = self._extract_search_query(message)
+                    
+                    # Use MCP web_search tool to perform the search
+                    tool_call = {
+                        "name": "web_search",
+                        "arguments": {
+                            "query": search_query,
+                            "max_results": self.web_search_max_results,
+                            "search_type": "text"
+                        }
+                    }
+                    
+                    # Execute web search via MCP
+                    tool_results = await self.mcp_client.execute_tool_calls(
+                        [tool_call],
+                        allow_write=True  # Web search doesn't modify files
+                    )
+                    
+                    # Extract results from MCP tool execution
+                    if tool_results and not tool_results[0].get("error", False):
+                        result_text = tool_results[0].get("result", "")
+                        # Parse the formatted result back to structured data
+                        # The MCP tool returns formatted text, so we store it for the prompt
+                        context["web_search_results_mcp"] = result_text
+                        context["web_search_mode"] = "auto"  # Mark as auto-triggered
+                        if web_search_mode == "off":
+                            web_search_mode = "auto"
+                            context["web_search_mode"] = "auto"
+                    else:
+                        error_msg = tool_results[0].get("result", "Unknown error") if tool_results else "No results"
+                        context["web_search_error"] = error_msg
+                except Exception as error:
+                    context["web_search_error"] = f"{type(error).__name__}: {error}"
+            else:
+                # Fallback: if MCP not available, use direct search (shouldn't happen in production)
+                try:
+                    search_query = self._extract_search_query(message)
+                    search_results = await self.perform_web_search(search_query)
+                    if search_results:
+                        context["web_search_results"] = search_results
+                        context["web_search_mode"] = "auto"
+                        if web_search_mode == "off":
+                            web_search_mode = "auto"
+                            context["web_search_mode"] = "auto"
+                except Exception as error:
+                    context["web_search_error"] = f"{type(error).__name__}: {error}"
+        elif web_search_mode in ("browser_tab", "google_chrome"):
+            # Explicit web search mode - use MCP tools
+            if self.is_mcp_enabled():
+                try:
+                    # Use MCP web_search tool
+                    tool_call = {
+                        "name": "web_search",
+                        "arguments": {
+                            "query": message,
+                            "max_results": self.web_search_max_results,
+                            "search_type": "text"
+                        }
+                    }
+                    
+                    tool_results = await self.mcp_client.execute_tool_calls(
+                        [tool_call],
+                        allow_write=True
+                    )
+                    
+                    if tool_results and not tool_results[0].get("error", False):
+                        context["web_search_results_mcp"] = tool_results[0].get("result", "")
+                    else:
+                        error_msg = tool_results[0].get("result", "Unknown error") if tool_results else "No results"
+                        context["web_search_error"] = error_msg
+                except Exception as error:
+                    context["web_search_error"] = f"{type(error).__name__}: {error}"
+            else:
+                # Fallback to direct search
+                try:
+                    search_results = await self.perform_web_search(message)
+                    if search_results:
+                        context["web_search_results"] = search_results
+                except Exception as error:
+                    context["web_search_error"] = f"{type(error).__name__}: {error}"
         
         # Prepare the prompt with context
         prompt = self._build_prompt(message, context, conversation_history or [])
@@ -1050,17 +1161,25 @@ class AIService:
                 prompt_parts.extend([
                     "",
                     "=" * 80,
-                    "MCP TOOLS AVAILABLE:",
+                    "MCP TOOLS AVAILABLE (You have NO direct internet access - use these tools):",
                     "=" * 80,
                     "",
                     mcp_tools_desc,
                     "",
+                    "CRITICAL: You do NOT have direct internet access. To search the web, you MUST use the web_search MCP tool.",
+                    "",
                     "You can use these tools by including tool calls in your response.",
                     "Example tool call format:",
                     '<tool_call name="read_file" args=\'{"path": "example.py"}\' />',
+                    '<tool_call name="web_search" args=\'{"query": "current bitcoin price", "max_results": 5}\' />',
                     "",
-                    "When you need to perform operations like reading files, searching code, or executing commands,",
-                    "use the appropriate MCP tools instead of just describing what should be done.",
+                    "When you need to perform operations like:",
+                    "- Reading files: use read_file tool",
+                    "- Searching code: use grep_code tool",
+                    "- Searching the web: use web_search tool (REQUIRED for any internet information)",
+                    "- Executing commands: use execute_command tool",
+                    "",
+                    "Use the appropriate MCP tools instead of just describing what should be done.",
                     "",
                     "=" * 80,
                     "",
@@ -1178,28 +1297,73 @@ class AIService:
 
 
         web_search_mode = (context.get("web_search_mode") or "off").lower()
-        if web_search_mode in ("browser_tab", "google_chrome"):
+        if web_search_mode in ("browser_tab", "google_chrome", "auto"):
+            mode_label = "auto-triggered" if web_search_mode == "auto" else web_search_mode
             prompt_parts.extend([
-                f"WEB SEARCH ACCESS ENABLED (mode: {web_search_mode}):",
+                f"WEB SEARCH ACCESS ENABLED (mode: {mode_label}):",
                 "- Live DuckDuckGo search results are provided; use them for up-to-date facts.",
                 "- Cite the source (site or URL) when referencing a result.",
                 "- If more information is required, explicitly state the next search query needed.",
                 "- For questions about the current or latest price/value of an asset (e.g. BTC, a stock, or a currency), extract the best available numeric price from the web_search_results and respond with that value, including the currency and a brief note that prices change quickly. Do not merely tell the user to check a website.",
-                "- You MUST NOT tell the user to \"search online\" or \"check a website\" when web_search_results are present; instead, summarize those results directly in your own words."
+                "- You MUST NOT tell the user to \"search online\" or \"check a website\" when web_search_results are present; instead, summarize those results directly in your own words.",
+                "- CRITICAL: If web_search_results are provided, you MUST use them. Never say 'no web-search results were provided' if results are shown below."
             ])
 
-            results = context.get("web_search_results") or []
-            if results:
-                prompt_parts.append("Newest web results:")
-                for idx, result in enumerate(results[:5], start=1):
+            # Check for MCP web search results (preferred) or direct results
+            mcp_results = context.get("web_search_results_mcp")
+            direct_results = context.get("web_search_results") or []
+            
+            if mcp_results:
+                # MCP tool returned formatted results
+                prompt_parts.append("")
+                prompt_parts.append("=" * 80)
+                prompt_parts.append("WEB SEARCH RESULTS (from MCP tools - USE THESE IN YOUR RESPONSE):")
+                prompt_parts.append("=" * 80)
+                prompt_parts.append("")
+                prompt_parts.append(mcp_results)
+                prompt_parts.append("")
+                prompt_parts.append("=" * 80)
+                prompt_parts.append("")
+                prompt_parts.append("IMPORTANT: You MUST use the information from these web search results in your response.")
+                prompt_parts.append("Extract specific facts, numbers, prices, or data from the results above.")
+                prompt_parts.append("Do NOT say that no results were provided - they are shown above.")
+                prompt_parts.append("")
+            elif direct_results:
+                # Direct search results (fallback)
+                prompt_parts.append("")
+                prompt_parts.append("=" * 80)
+                prompt_parts.append("WEB SEARCH RESULTS (USE THESE IN YOUR RESPONSE):")
+                prompt_parts.append("=" * 80)
+                prompt_parts.append("")
+                for idx, result in enumerate(direct_results[:10], start=1):
                     title = truncate_text(result.get("title") or "Untitled result", 140)
-                    snippet = truncate_text(result.get("snippet") or "", 220)
-                    url = truncate_text(result.get("url") or result.get("source") or "", 180)
-                    prompt_parts.append(f"{idx}. {title} — {snippet} (source: {url})")
+                    snippet = truncate_text(result.get("snippet") or result.get("body") or result.get("description") or "", 300)
+                    url = truncate_text(result.get("url") or result.get("href") or result.get("source") or "", 180)
+                    prompt_parts.append(f"Result {idx}:")
+                    prompt_parts.append(f"  Title: {title}")
+                    prompt_parts.append(f"  URL: {url}")
+                    prompt_parts.append(f"  Content: {snippet}")
+                    prompt_parts.append("")
+                prompt_parts.append("=" * 80)
+                prompt_parts.append("")
+                prompt_parts.append("IMPORTANT: You MUST use the information from these web search results in your response.")
+                prompt_parts.append("Extract specific facts, numbers, prices, or data from the results above.")
+                prompt_parts.append("Do NOT say that no results were provided - they are shown above.")
+                prompt_parts.append("")
             elif context.get("web_search_error"):
                 prompt_parts.append(f"Web search error: {truncate_text(context['web_search_error'], 160)}")
+                prompt_parts.append("You may need to ask the user to try again or provide more specific information.")
+                if self.is_mcp_enabled():
+                    prompt_parts.append("Note: If you need web search, you can use the web_search MCP tool in your response.")
             else:
-                prompt_parts.append("No web search results were available for this prompt.")
+                if web_search_mode == "auto":
+                    prompt_parts.append("Note: Web search was attempted but no results were returned.")
+                    if self.is_mcp_enabled():
+                        prompt_parts.append("You can use the web_search MCP tool to perform searches if needed.")
+                else:
+                    prompt_parts.append("No web search was performed for this prompt.")
+                    if self.is_mcp_enabled() and self._detect_web_search_needed(message, web_search_mode):
+                        prompt_parts.append("Note: This query might benefit from web search. You can use the web_search MCP tool.")
 
             prompt_parts.append("")
         
@@ -1349,6 +1513,102 @@ class AIService:
             "understand",
         ]
         return any(keyword in normalized for keyword in analysis_keywords)
+    
+    def _detect_web_search_needed(self, message: str, web_search_mode: str) -> bool:
+        """Detect if a query needs web search based on content"""
+        if not message:
+            return False
+        
+        # If web search is explicitly enabled, use it
+        if web_search_mode in ("browser_tab", "google_chrome"):
+            return True
+        
+        # If explicitly disabled, don't auto-trigger
+        if web_search_mode == "off":
+            # But still check if it's clearly needed (user can override)
+            pass
+        
+        normalized = message.lower()
+        
+        # Price/Value queries
+        price_patterns = [
+            r'\b(price|cost|value|worth|rate|exchange rate)\b.*\b(bitcoin|btc|ethereum|eth|crypto|stock|currency|usd|eur|gbp|jpy)\b',
+            r'\b(bitcoin|btc|ethereum|eth)\b.*\b(price|cost|value|worth|rate)\b',
+            r'\b(current|latest|today|now)\b.*\b(price|value|rate)\b',
+            r'\bhow much.*\b(bitcoin|btc|ethereum|eth|stock|currency)\b',
+            r'\bwhat.*\b(bitcoin|btc|ethereum|eth)\b.*\b(price|worth|value)\b',
+        ]
+        
+        # Current events/news queries
+        news_patterns = [
+            r'\b(latest|recent|current|today|now|breaking)\b.*\b(news|update|event|happening|trend)\b',
+            r'\bwhat.*\b(happening|going on|new|latest)\b',
+            r'\b(when|where|who)\b.*\b(happened|occurred|announced)\b',
+        ]
+        
+        # Real-time data queries
+        realtime_patterns = [
+            r'\b(weather|temperature|forecast)\b',
+            r'\b(current|live|real-time|real time)\b.*\b(data|information|status)\b',
+        ]
+        
+        # "What is X" queries that might need current info
+        what_is_patterns = [
+            r'\bwhat is\b.*\b(bitcoin|btc|ethereum|eth|stock|company|ceo|president)\b',
+            r'\bwho is\b.*\b(current|now|today)\b',
+        ]
+        
+        all_patterns = price_patterns + news_patterns + realtime_patterns + what_is_patterns
+        
+        for pattern in all_patterns:
+            if re.search(pattern, normalized, re.IGNORECASE):
+                return True
+        
+        # Check for explicit search requests
+        search_keywords = [
+            "search for",
+            "look up",
+            "find information about",
+            "what's the current",
+            "what's the latest",
+            "check the price",
+            "get the price",
+        ]
+        
+        if any(keyword in normalized for keyword in search_keywords):
+            return True
+        
+        return False
+    
+    def _extract_search_query(self, message: str) -> str:
+        """Extract or optimize search query from user message"""
+        # Remove common prefixes that don't help search
+        normalized = message.strip()
+        
+        # Remove question words at start
+        question_prefixes = [
+            "what is the",
+            "what's the",
+            "what is",
+            "what's",
+            "tell me the",
+            "show me the",
+            "get me the",
+            "find the",
+            "search for",
+            "look up",
+        ]
+        
+        for prefix in question_prefixes:
+            if normalized.lower().startswith(prefix):
+                normalized = normalized[len(prefix):].strip()
+                break
+        
+        # Remove trailing question marks and common phrases
+        normalized = normalized.rstrip("?")
+        normalized = re.sub(r'\b(please|can you|could you|would you)\b', '', normalized, flags=re.IGNORECASE)
+        
+        return normalized.strip() or message.strip()
     
     def _is_agent_context(self, context: Dict[str, Any]) -> bool:
         if not context:

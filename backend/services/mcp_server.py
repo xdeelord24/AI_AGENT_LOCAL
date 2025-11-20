@@ -41,11 +41,12 @@ except ImportError:
 class MCPServerTools:
     """MCP Server Tools for AI Agent operations"""
     
-    def __init__(self, file_service=None, code_analyzer=None, web_search_enabled=True):
+    def __init__(self, file_service=None, code_analyzer=None, web_search_enabled=True, web_search_service=None):
         self.file_service = file_service
         self.code_analyzer = code_analyzer
         self.web_search_enabled = web_search_enabled
         self.workspace_root = os.getcwd()
+        self._web_search_service = web_search_service  # Shared web search service instance
     
     def get_tools(self) -> List[Tool]:
         """Get list of available MCP tools"""
@@ -198,25 +199,35 @@ class MCPServerTools:
         
         if self.web_search_enabled:
             tools.append(
+            tools.append(
                 Tool(
                     name="web_search",
-                    description="Search the web using DuckDuckGo. Returns search results with titles, URLs, and snippets.",
+                    description="Search the web using DuckDuckGo with enhanced features: result caching, relevance scoring, and query optimization. Returns search results with titles, URLs, and snippets.",
                     inputSchema={
                         "type": "object",
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "Search query"
+                                "description": "Search query (will be optimized automatically for better results)"
                             },
                             "max_results": {
                                 "type": "integer",
-                                "description": "Maximum number of results to return (default: 5)",
-                                "default": 5
+                                "description": "Maximum number of results to return (default: 5, max: 20)",
+                                "default": 5,
+                                "minimum": 1,
+                                "maximum": 20
+                            },
+                            "search_type": {
+                                "type": "string",
+                                "description": "Type of search: 'text' (default), 'news', or 'images'",
+                                "enum": ["text", "news", "images"],
+                                "default": "text"
                             }
                         },
                         "required": ["query"]
                     }
                 )
+            )
             )
         
         return tools
@@ -269,7 +280,8 @@ class MCPServerTools:
             elif tool_name == "web_search":
                 return await self._web_search(
                     arguments.get("query", ""),
-                    arguments.get("max_results", 5)
+                    arguments.get("max_results", 5),
+                    arguments.get("search_type", "text")
                 )
             else:
                 return [TextContent(
@@ -473,22 +485,39 @@ class MCPServerTools:
         except Exception as e:
             return [TextContent(type="text", text=f"Error executing command: {str(e)}")]
     
-    async def _web_search(self, query: str, max_results: int) -> List[TextContent]:
-        """Perform web search"""
+    async def _web_search(self, query: str, max_results: int, search_type: str = "text") -> List[TextContent]:
+        """Perform web search using enhanced web search service"""
         try:
-            from duckduckgo_search import DDGS
+            from .web_search_service import WebSearchService
             
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=max_results))
+            # Use shared web search service instance if available, otherwise create new one
+            if hasattr(self, '_web_search_service') and self._web_search_service:
+                web_service = self._web_search_service
+            else:
+                web_service = WebSearchService()
+                self._web_search_service = web_service
             
-            result_lines = [f"Web search results for '{query}':\n"]
-            for idx, r in enumerate(results, 1):
-                result_lines.append(f"{idx}. {r.get('title', 'No title')}")
-                result_lines.append(f"   URL: {r.get('href', r.get('url', 'N/A'))}")
-                result_lines.append(f"   {r.get('body', r.get('description', 'No description'))}")
-                result_lines.append("")
+            # Perform search with enhanced features
+            results, metadata = await web_service.search(
+                query=query,
+                max_results=max_results,
+                search_type=search_type,
+                use_cache=True,
+                optimize_query=True
+            )
             
-            return [TextContent(type="text", text="\n".join(result_lines))]
+            if metadata.get("error"):
+                return [TextContent(type="text", text=f"Search error: {metadata['error']}")]
+            
+            # Format results
+            formatted = web_service.format_results(results, query, include_metadata=True)
+            
+            # Add metadata info if cached
+            if metadata.get("cached"):
+                cache_age = metadata.get("cache_age_seconds", 0)
+                formatted += f"\n\n[Note: Results from cache, age: {cache_age}s]"
+            
+            return [TextContent(type="text", text=formatted)]
         except ImportError:
             return [TextContent(type="text", text="Web search not available. Install duckduckgo-search package.")]
         except Exception as e:

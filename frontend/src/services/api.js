@@ -96,6 +96,34 @@ class ApiService {
     });
   }
 
+  // Chat Sessions API
+  static async createChatSession(title, messages, conversationId = null) {
+    return this.post('/api/chat/sessions', {
+      title,
+      messages,
+      conversation_id: conversationId
+    });
+  }
+
+  static async listChatSessions() {
+    return this.get('/api/chat/sessions');
+  }
+
+  static async getChatSession(sessionId) {
+    return this.get(`/api/chat/sessions/${sessionId}`);
+  }
+
+  static async updateChatSession(sessionId, title = null, messages = null) {
+    return this.put(`/api/chat/sessions/${sessionId}`, {
+      title,
+      messages
+    });
+  }
+
+  static async deleteChatSession(sessionId) {
+    return this.delete(`/api/chat/sessions/${sessionId}`);
+  }
+
   // File API
   static async listDirectory(path = '.') {
     const encodedPath = this.encodePath(path);

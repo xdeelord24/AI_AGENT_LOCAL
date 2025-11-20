@@ -25,8 +25,14 @@ The Model Context Protocol (MCP) is a standardized interface that allows AI mode
    - `analyze_code`: Analyze code structure (functions, classes, imports)
    - `grep_code`: Search for patterns in code files
 
-3. **Web Search** (if enabled)
-   - `web_search`: Perform web searches using DuckDuckGo
+3. **Web Search** (if enabled) - **Enhanced with caching and optimization**
+   - `web_search`: Perform web searches using DuckDuckGo with:
+     - Result caching (1 hour TTL by default)
+     - Query optimization for better results
+     - Relevance scoring and ranking
+     - Support for text, news, and image searches
+     - Rate limiting to prevent API abuse
+     - Better error handling and retries
 
 4. **Command Execution**
    - `execute_command`: Execute shell commands (disabled in ASK mode)

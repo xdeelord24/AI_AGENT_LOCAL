@@ -46,6 +46,21 @@ async def lifespan(app: FastAPI):
     app.state.code_analyzer = CodeAnalyzer()
     app.state.terminal_service = TerminalService(base_path=os.getcwd())
     
+    # Initialize enhanced web search service
+    try:
+        from backend.services.web_search_service import WebSearchService
+        web_search_service = WebSearchService(
+            cache_size=int(os.getenv("WEB_SEARCH_CACHE_SIZE", "100")),
+            cache_ttl_seconds=int(os.getenv("WEB_SEARCH_CACHE_TTL", "3600"))
+        )
+        # Share web search service with AI service
+        if hasattr(app.state.ai_service, '_web_search_service'):
+            app.state.ai_service._web_search_service = web_search_service
+        print("✅ Enhanced web search service initialized")
+    except Exception as e:
+        print(f"⚠️  Warning: Enhanced web search not available: {e}")
+        web_search_service = None
+    
     # Initialize MCP tools if available
     if MCP_AVAILABLE and MCPServerTools:
         try:
@@ -53,7 +68,8 @@ async def lifespan(app: FastAPI):
             mcp_tools = MCPServerTools(
                 file_service=app.state.file_service,
                 code_analyzer=app.state.code_analyzer,
-                web_search_enabled=web_search_enabled
+                web_search_enabled=web_search_enabled,
+                web_search_service=web_search_service  # Share web search service instance
             )
             app.state.ai_service.set_mcp_tools(mcp_tools)
             print("✅ MCP tools enabled and available")

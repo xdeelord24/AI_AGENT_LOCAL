@@ -1182,13 +1182,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       toast.error(`Failed to select model: ${error.response?.data?.detail || error.message}`);
     }
   };
-  const pastChats = [
-    { id: 1, title: 'Show available AI models in settings', time: 'Now' },
-    { id: 2, title: 'Fix copy code function issue', time: '7m' },
-    { id: 3, title: 'Improve system functionality and fix issues', time: '25m' }
-  ];
-  
+  const [pastChats, setPastChats] = useState([]);
   const [showPastChats, setShowPastChats] = useState(true);
+  const [currentChatSessionId, setCurrentChatSessionId] = useState(null);
+  const [isLoadingPastChats, setIsLoadingPastChats] = useState(false);
   
   // File/Folder picker states
   const [showFolderPicker, setShowFolderPicker] = useState(false);
@@ -1575,6 +1572,98 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       chatContainer.scrollTop = chatContainer.scrollHeight;
     }
   }, [chatMessages]);
+
+  // Load past chats on mount
+  useEffect(() => {
+    const loadPastChats = async () => {
+      setIsLoadingPastChats(true);
+      try {
+        const sessions = await ApiService.listChatSessions();
+        setPastChats(sessions || []);
+      } catch (error) {
+        console.error('Failed to load past chats:', error);
+      } finally {
+        setIsLoadingPastChats(false);
+      }
+    };
+    loadPastChats();
+  }, []);
+
+  // Save chat session
+  const saveChatSession = useCallback(async (conversationId = null) => {
+    if (chatMessages.length === 0) return;
+    
+    try {
+      const messagesToSave = chatMessages.map(msg => ({
+        role: msg.role,
+        content: msg.content,
+        timestamp: msg.timestamp,
+        rawContent: msg.rawContent,
+        plan: msg.plan,
+        activityLog: msg.activityLog
+      }));
+
+      if (currentChatSessionId) {
+        // Update existing session
+        await ApiService.updateChatSession(currentChatSessionId, null, messagesToSave);
+        // Reload past chats to update the time display
+        const sessions = await ApiService.listChatSessions();
+        setPastChats(sessions || []);
+      } else {
+        // Create new session
+        const firstUserMessage = chatMessages.find(msg => msg.role === 'user');
+        const title = firstUserMessage 
+          ? (firstUserMessage.content.substring(0, 60).trim() + (firstUserMessage.content.length > 60 ? '…' : '')) || 'Untitled Chat'
+          : 'Untitled Chat';
+        
+        const session = await ApiService.createChatSession(title, messagesToSave, conversationId);
+        setCurrentChatSessionId(session.id);
+        
+        // Reload past chats to show the new one
+        const sessions = await ApiService.listChatSessions();
+        setPastChats(sessions || []);
+      }
+    } catch (error) {
+      console.error('Failed to save chat session:', error);
+    }
+  }, [chatMessages, currentChatSessionId]);
+
+  // Restore chat session
+  const restoreChatSession = useCallback(async (sessionId) => {
+    try {
+      const session = await ApiService.getChatSession(sessionId);
+      if (session && session.messages) {
+        // Convert session messages to chat message format
+        const restoredMessages = session.messages.map(msg => ({
+          id: Date.now() + Math.random(),
+          role: msg.role,
+          content: msg.content,
+          rawContent: msg.rawContent || msg.content,
+          timestamp: msg.timestamp,
+          plan: msg.plan,
+          activityLog: msg.activityLog
+        }));
+        
+        setChatMessages(restoredMessages);
+        setCurrentChatSessionId(session.id);
+        toast.success(`Restored chat: ${session.title}`);
+      }
+    } catch (error) {
+      console.error('Failed to restore chat session:', error);
+      toast.error('Failed to restore chat session');
+    }
+  }, []);
+
+  // Clear chat and start new session
+  const startNewChat = useCallback(() => {
+    setChatMessages([]);
+    setCurrentChatSessionId(null);
+    setChatInput('');
+    setComposerInput('');
+    setFollowUpInput('');
+    setPendingFileOperations(null);
+    setThinkingAiPlan(null);
+  }, []);
 
   useEffect(() => {
     if (bottomPanelTab !== 'terminal') return;
@@ -3960,6 +4049,9 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
 
       setChatMessages(prev => [...prev, assistantMessage]);
 
+      // Save chat session after assistant response
+      saveChatSession(response.conversation_id);
+
       // CRITICAL: In ASK mode, NEVER process file operations, even if the backend sends them
       // This is a redundant safety check in case anything slips through
       const isAskMode = (modePayload || '').toLowerCase() === 'ask';
@@ -6239,32 +6331,50 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                   <ChevronDown 
                     className={`w-4 h-4 text-dark-400 transition-transform ${showPastChats ? '' : '-rotate-90'}`}
                   />
+                  <History className="w-4 h-4 text-dark-400" />
                   <h4 className="text-xs font-semibold text-dark-400">Past Chats</h4>
                 </div>
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    // Handle View All action
+                    startNewChat();
                   }}
                   className="text-xs text-dark-500 hover:text-dark-300 transition-colors"
+                  title="Start new chat"
                 >
-                  View All
+                  New Chat
                 </button>
               </div>
               {showPastChats && (
-                <div className="px-3 pb-3 space-y-1">
-                  {pastChats.map((chat) => (
-                    <div
-                      key={chat.id}
-                      className="text-xs text-dark-400 hover:text-dark-200 cursor-pointer py-1 px-2 hover:bg-dark-700 rounded transition-colors"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="truncate flex-1">{chat.title}</span>
-                        <span className="ml-2 text-dark-500 text-[10px] whitespace-nowrap">{chat.time}</span>
-                      </div>
+                <div className="px-3 pb-3 space-y-1 max-h-64 overflow-y-auto">
+                  {isLoadingPastChats ? (
+                    <div className="text-xs text-dark-500 py-2 text-center">
+                      <Loader2 className="w-4 h-4 animate-spin inline-block mr-2" />
+                      Loading past chats...
                     </div>
-                  ))}
+                  ) : pastChats.length === 0 ? (
+                    <div className="text-xs text-dark-500 py-2 text-center">
+                      No past chats yet
+                    </div>
+                  ) : (
+                    pastChats.map((chat) => (
+                      <div
+                        key={chat.id}
+                        onClick={() => restoreChatSession(chat.id)}
+                        className={`text-xs cursor-pointer py-1.5 px-2 rounded transition-colors ${
+                          currentChatSessionId === chat.id
+                            ? 'bg-primary-600/20 text-primary-200 border border-primary-700/40'
+                            : 'text-dark-400 hover:text-dark-200 hover:bg-dark-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="truncate flex-1">{chat.title}</span>
+                          <span className="ml-2 text-dark-500 text-[10px] whitespace-nowrap">{chat.time}</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               )}
             </div>
