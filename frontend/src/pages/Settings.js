@@ -160,7 +160,7 @@ const Settings = () => {
     }
   };
   
-  const saveProviderSettings = async () => {
+  const saveProviderSettings = async ({ skipTest = false, silent = false } = {}) => {
     setIsSaving(true);
     try {
       const payload = {
@@ -190,15 +190,30 @@ const Settings = () => {
         setHfApiKeyInput('');
       }
 
-      toast.success('Provider settings saved successfully!');
-      // Test connection after saving
-      await testProviderConnection();
+      if (!silent) {
+        toast.success('Provider settings saved successfully!');
+      }
+
+      if (!skipTest) {
+        await testProviderConnection();
+      }
+
+      return true;
     } catch (error) {
       console.error('Error saving provider settings:', error);
       toast.error(error.response?.data?.detail || 'Failed to save provider settings');
+      return false;
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleTestConnection = async () => {
+    const saved = await saveProviderSettings({ skipTest: true, silent: true });
+    if (!saved) {
+      return;
+    }
+    await testProviderConnection();
   };
 
   const selectModel = async (modelName) => {
@@ -503,7 +518,7 @@ const Settings = () => {
                   )}
                 </button>
                 <button
-                  onClick={testProviderConnection}
+                  onClick={handleTestConnection}
                   disabled={isTestingConnection}
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50 flex items-center space-x-2"
                 >
