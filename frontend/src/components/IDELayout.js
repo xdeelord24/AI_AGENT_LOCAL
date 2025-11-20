@@ -8,7 +8,7 @@ import {
   Infinity, AtSign, Globe, Image, Mic, Square, Plus, Clock, History, MoreVertical,
   RefreshCw, Minimize2, Workflow, Trash2,
   Sparkles, Brain, ListChecks, FileSearch, Milestone, PenTool,
-  Activity, ShieldCheck, Megaphone, AlertTriangle, Check, X as XIcon
+  Activity, ShieldCheck, Megaphone, AlertTriangle
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
@@ -2197,23 +2197,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setHistoryFilter(event.target.value);
   }, []);
 
-  const handleChatHistoryDialogToggle = useCallback(() => {
-    setShowChatHistoryDialog((prev) => {
-      const newValue = !prev;
-      if (newValue) {
-        // When opening dialog, refresh past chats and load details
-        loadPastChats().then(() => {
-          // Load full details for all chats to show plans/processes
-          loadChatHistoryDetails();
-        });
-      } else {
-        // Clear details when closing
-        setChatHistoryDetails({});
-      }
-      return newValue;
-    });
-  }, [loadPastChats]);
-
   const loadChatHistoryDetails = useCallback(async () => {
     try {
       const sessions = await ApiService.listChatSessions();
@@ -2238,6 +2221,23 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       console.error('Failed to load chat history details:', error);
     }
   }, []);
+
+  const handleChatHistoryDialogToggle = useCallback(() => {
+    setShowChatHistoryDialog((prev) => {
+      const newValue = !prev;
+      if (newValue) {
+        // When opening dialog, refresh past chats and load details
+        loadPastChats().then(() => {
+          // Load full details for all chats to show plans/processes
+          loadChatHistoryDetails();
+        });
+      } else {
+        // Clear details when closing
+        setChatHistoryDetails({});
+      }
+      return newValue;
+    });
+  }, [loadPastChats, loadChatHistoryDetails]);
 
   const handleChatHistoryFilterChange = useCallback((event) => {
     setChatHistoryFilter(event.target.value);
@@ -5325,10 +5325,6 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
       
       // Position the widget at the far right after it's rendered
       requestAnimationFrame(() => {
-        // Store references in closure for use in updatePosition
-        const storedOpIndex = opIndex;
-        const storedLineNums = [...lineNums];
-        
         const updatePosition = () => {
           const editorContainer = editor.getContainerDomNode();
           if (!editorContainer || !domNode || !domNode.parentElement) return;
