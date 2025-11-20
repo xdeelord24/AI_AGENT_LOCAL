@@ -1477,8 +1477,10 @@ class AIService:
                     response = follow_up_response  # Use the follow-up response
         
         # Check if AI response indicates uncertainty or lack of knowledge
-        # If so, try web search as fallback
-        if not context.get("web_search_results_mcp") and not context.get("web_search_results"):
+        # If so, try web search as fallback (only if web search mode is not off)
+        if (web_search_mode != "off" and 
+            not context.get("web_search_results_mcp") and 
+            not context.get("web_search_results")):
             if self._detect_ai_uncertainty(response, message):
                 try:
                     # Extract search query from original message
