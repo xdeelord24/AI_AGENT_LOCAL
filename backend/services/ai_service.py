@@ -23,6 +23,15 @@ try:
 except ImportError:
     InferenceClient = None
 
+try:
+    from .mcp_client import MCPClient
+    from .mcp_server import MCPServerTools
+    MCP_AVAILABLE = True
+except ImportError:
+    MCPClient = None
+    MCPServerTools = None
+    MCP_AVAILABLE = False
+
 
 def truncate_text(text: Optional[str], limit: int = 220) -> str:
     if not text:
@@ -122,10 +131,27 @@ class AIService:
         self._hf_client = None
         self._hf_client_cache_key: Optional[Tuple[str, str, str]] = None
         
+        # MCP integration
+        self.mcp_tools = None
+        self.mcp_client = None
+        self._enable_mcp = os.getenv("ENABLE_MCP", "true").lower() in ("true", "1", "yes")
+        
         self._load_persisted_settings()
 
         if self.provider == "huggingface":
             self.current_model = self.hf_model
+    
+    def set_mcp_tools(self, mcp_tools: Optional[MCPServerTools]):
+        """Set MCP tools for the AI service"""
+        self.mcp_tools = mcp_tools
+        if mcp_tools and MCP_AVAILABLE:
+            self.mcp_client = MCPClient(mcp_tools)
+        else:
+            self.mcp_client = None
+    
+    def is_mcp_enabled(self) -> bool:
+        """Check if MCP is enabled and available"""
+        return self._enable_mcp and self.mcp_client is not None and self.mcp_client.is_available()
     
     def _load_persisted_settings(self) -> None:
         """Load saved connectivity settings from disk if they exist."""
@@ -887,8 +913,27 @@ class AIService:
         # Prepare the prompt with context
         prompt = self._build_prompt(message, context, conversation_history or [])
         
-        # Get response from configured provider
+        # Get initial response from configured provider
         response = await self._call_model(prompt)
+        
+        # Handle MCP tool calls if enabled
+        if self.is_mcp_enabled():
+            tool_calls = self.mcp_client.parse_tool_calls_from_response(response)
+            if tool_calls:
+                # Execute tool calls
+                allow_write = self._can_modify_files(context)
+                tool_results = await self.mcp_client.execute_tool_calls(tool_calls, allow_write=allow_write)
+                
+                # If tools were executed, get a follow-up response with results
+                if tool_results and not all(r.get("error", False) for r in tool_results):
+                    tool_results_text = self.mcp_client.format_tool_results_for_prompt(tool_results)
+                    
+                    # Build follow-up prompt with tool results
+                    follow_up_prompt = f"{prompt}\n\n{response}\n\n{tool_results_text}\n\nPlease use the tool execution results above to provide a complete answer."
+                    
+                    # Get follow-up response that incorporates tool results
+                    follow_up_response = await self._call_model(follow_up_prompt)
+                    response = follow_up_response  # Use the follow-up response
         
         # Parse metadata from response (pass context to block extraction in ASK mode)
         cleaned_response, metadata = self._parse_response_metadata(response, context)
@@ -997,6 +1042,29 @@ class AIService:
             "- Best practices and patterns",
             "",
         ]
+        
+        # Add MCP tools description if enabled
+        if self.is_mcp_enabled():
+            mcp_tools_desc = self.mcp_client.get_tools_description()
+            if mcp_tools_desc:
+                prompt_parts.extend([
+                    "",
+                    "=" * 80,
+                    "MCP TOOLS AVAILABLE:",
+                    "=" * 80,
+                    "",
+                    mcp_tools_desc,
+                    "",
+                    "You can use these tools by including tool calls in your response.",
+                    "Example tool call format:",
+                    '<tool_call name="read_file" args=\'{"path": "example.py"}\' />',
+                    "",
+                    "When you need to perform operations like reading files, searching code, or executing commands,",
+                    "use the appropriate MCP tools instead of just describing what should be done.",
+                    "",
+                    "=" * 80,
+                    "",
+                ])
 
         if is_ask_mode:
             prompt_parts.extend([

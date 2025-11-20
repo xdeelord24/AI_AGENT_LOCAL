@@ -16,4 +16,5 @@ flask==2.3.3
 flask-cors==4.0.0
 duckduckgo-search==4.1.1
 huggingface-hub==0.23.4
-mcp>=0.1.0
+# MCP (Model Context Protocol) - if not available, install from: https://github.com/modelcontextprotocol/python-sdk
+# mcp>=0.1.0  # Uncomment when MCP SDK is available via pip

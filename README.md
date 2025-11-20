@@ -11,6 +11,7 @@ A fully offline AI coding assistant that provides intelligent code completion, a
 - **File Operations**: Read, write, and manage files via structured metadata.
 - **Agent Mode & Planning**: Produces short TODO-style plans for complex tasks.
 - **Context Awareness**: Maintains context across conversations and open files.
+- **MCP Integration**: Model Context Protocol support for enhanced tool access and performance.
 - **Privacy First**: All data stays on your local machine.
 
 ### Architecture

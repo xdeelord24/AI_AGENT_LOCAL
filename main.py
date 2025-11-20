@@ -21,6 +21,13 @@ from backend.services.file_service import FileService
 from backend.services.code_analyzer import CodeAnalyzer
 from backend.services.terminal_service import TerminalService
 
+try:
+    from backend.services.mcp_server import MCPServerTools
+    MCP_AVAILABLE = True
+except ImportError:
+    MCPServerTools = None
+    MCP_AVAILABLE = False
+
 
 # Ensure Windows event loop supports subprocess operations (required for terminal)
 if os.name == "nt":
@@ -38,6 +45,23 @@ async def lifespan(app: FastAPI):
     app.state.file_service = FileService()
     app.state.code_analyzer = CodeAnalyzer()
     app.state.terminal_service = TerminalService(base_path=os.getcwd())
+    
+    # Initialize MCP tools if available
+    if MCP_AVAILABLE and MCPServerTools:
+        try:
+            web_search_enabled = os.getenv("ENABLE_WEB_SEARCH", "true").lower() in ("true", "1", "yes")
+            mcp_tools = MCPServerTools(
+                file_service=app.state.file_service,
+                code_analyzer=app.state.code_analyzer,
+                web_search_enabled=web_search_enabled
+            )
+            app.state.ai_service.set_mcp_tools(mcp_tools)
+            print("✅ MCP tools enabled and available")
+        except Exception as e:
+            print(f"⚠️  Warning: Failed to initialize MCP tools: {e}")
+            print("   Continuing without MCP tools...")
+    else:
+        print("ℹ️  MCP tools not available (install with: pip install mcp)")
     
     # Check if Ollama is running
     if not await app.state.ai_service.check_ollama_connection():
