@@ -424,11 +424,18 @@ class AIService:
             added_paths.add(active_file)
 
         for mention in mentioned_files[:4]:
-            path = mention.get("path") if isinstance(mention, dict) else mention
-            normalized = self._normalize_path(path)
-            if normalized and normalized not in added_paths:
-                add_status(f"grep:{normalized}", f"Grepping {normalized} for matches", 600)
-                added_paths.add(normalized)
+            if isinstance(mention, dict):
+                path = mention.get("path")
+            elif isinstance(mention, str):
+                path = mention
+            else:
+                path = None
+            
+            if path:
+                normalized = self._normalize_path(str(path))
+                if normalized and normalized not in added_paths:
+                    add_status(f"grep:{normalized}", f"Grepping {normalized} for matches", 600)
+                    added_paths.add(normalized)
 
         if not mentioned_files and not active_file:
             add_status("grep_workspace", "Grepping workspace for references", 650)
