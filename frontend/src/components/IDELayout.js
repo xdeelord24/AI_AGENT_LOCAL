@@ -481,25 +481,6 @@ const generateTerminalSessionId = () => {
   return `terminal-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 };
 
-const safeStringifyInput = (value, spacing = 2) => {
-  const seen = new WeakSet();
-  const serializer = (key, val) => {
-    if (typeof val === 'bigint') {
-      return val.toString();
-    }
-    if (typeof val === 'object' && val !== null) {
-      if (seen.has(val)) {
-        return '[Circular]';
-      }
-      seen.add(val);
-    }
-    if (typeof val === 'function') {
-      return `[Function ${val.name || 'anonymous'}]`;
-    }
-    return val;
-  };
-  return JSON.stringify(value, serializer, spacing);
-};
 
 const normalizeChatInput = (value) => {
   if (value == null) return '';
@@ -510,8 +491,8 @@ const normalizeChatInput = (value) => {
     // Remove patterns like: }, "fileoperations": [{...}], etc.
     str = str.replace(/\s*[,\s]*\}\s*,\s*"fileoperations?":\s*\[.*?\]\s*/gis, '');
     str = str.replace(/\s*[,\s]*\}\s*,\s*"file_operations?":\s*\[.*?\]\s*/gis, '');
-    str = str.replace(/\s*[,\s]*\}\s*,\s*"ai[_\-]?plan":\s*\{.*?\}\s*/gis, '');
-    str = str.replace(/\s*[,\s]*\}\s*,\s*"activity[_\-]?log":\s*\[.*?\]\s*/gis, '');
+    str = str.replace(/\s*[,\s]*\}\s*,\s*"ai[_-]?plan":\s*\{.*?\}\s*/gis, '');
+    str = str.replace(/\s*[,\s]*\}\s*,\s*"activity[_-]?log":\s*\[.*?\]\s*/gis, '');
     
     // Remove trailing JSON structure markers
     str = str.replace(/[,\s]*[\]}]+(\s*)$/m, '$1');
@@ -851,6 +832,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     lineNumbers: 'on',
     automaticLayout: true,
     glyphMargin: true,
+    suggestOnTriggerCharacters: true,
+    quickSuggestions: true,
   });
   const [isEditorReady, setIsEditorReady] = useState(false);
   
@@ -941,6 +924,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const editorDiffDecorationsRef = useRef([]);
   const editorDiffViewZonesRef = useRef([]);
   const editorContentWidgetsRef = useRef([]);
+  const completionProviderRef = useRef(null);
+  const completionDebounceTimerRef = useRef(null);
+  const lastCompletionRequestRef = useRef({ line: -1, column: -1, content: '' });
   const selectedChatMode = chatModeOptions.find(mode => mode.id === agentMode) || chatModeOptions[0];
   const selectedWebSearchMode = webSearchOptions.find(mode => mode.id === webSearchMode) || webSearchOptions[0];
 
@@ -1552,6 +1538,347 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setIsEditorReady(false);
     }
   }, [activeTab]);
+
+  // Re-register completion provider when language or active tab changes
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    const editor = editorRef.current;
+    
+    if (!monaco || !editor || !isEditorReady || !activeTab) {
+      return;
+    }
+
+    try {
+      // Check if inline completions API is available
+      if (!monaco.languages || typeof monaco.languages.registerInlineCompletionsProvider !== 'function') {
+        console.warn('Monaco inline completions API not available. Code completion feature disabled.');
+        return;
+      }
+
+      // Dispose existing provider
+      if (completionProviderRef.current) {
+        try {
+          completionProviderRef.current.dispose();
+        } catch (error) {
+          // Ignore disposal errors
+        }
+      }
+
+      // Capture current values
+      const currentTab = activeTab;
+      const currentLanguage = editorLanguage;
+
+      // Register new provider with current language/tab context
+      const provider = {
+        provideInlineCompletions: async (model, position, context, token) => {
+          try {
+            // Validate inputs - add extra safety checks
+            if (!model || !position || !monaco) {
+              return { items: [] };
+            }
+
+            // Check if model is still valid (might be disposed)
+            try {
+              model.getValue();
+            } catch (modelError) {
+              // Model is disposed or invalid
+              return { items: [] };
+            }
+
+            // Only trigger for code files, not for plain text
+            if (!currentTab || currentLanguage === 'plaintext') {
+              return { items: [] };
+            }
+
+            const line = position.lineNumber;
+            const column = position.column;
+            
+            // Validate line and column
+            if (!line || line < 1 || !column || column < 1) {
+              return { items: [] };
+            }
+
+            let content;
+            try {
+              content = model.getValue();
+            } catch (getValueError) {
+              // Model might be disposed
+              return { items: [] };
+            }
+            
+            // Validate content
+            if (typeof content !== 'string') {
+              return { items: [] };
+            }
+
+            // Skip if content is too short (user just started typing)
+            if (!content || content.trim().length < 3) {
+              return { items: [] };
+            }
+
+            // Check if we should skip this request (same position, recent request)
+            const lastRequest = lastCompletionRequestRef.current;
+            if (
+              lastRequest.line === line &&
+              lastRequest.column === column &&
+              lastRequest.content === content
+            ) {
+              return { items: [] };
+            }
+
+            // Debounce: clear previous timer
+            if (completionDebounceTimerRef.current) {
+              clearTimeout(completionDebounceTimerRef.current);
+            }
+
+            // Return a promise that resolves after debounce
+            return new Promise((resolve, reject) => {
+              // Set up error handler for the promise
+              const safeResolve = (value) => {
+                try {
+                  resolve(value);
+                } catch (resolveError) {
+                  // Ignore resolve errors (might happen if promise is already resolved)
+                  console.debug('Error resolving completion promise (ignored):', resolveError);
+                }
+              };
+
+              completionDebounceTimerRef.current = setTimeout(async () => {
+                try {
+                  // Check if model is still valid
+                  try {
+                    if (!model.getValue) {
+                      safeResolve({ items: [] });
+                      return;
+                    }
+                  } catch (modelCheckError) {
+                    safeResolve({ items: [] });
+                    return;
+                  }
+
+                  // Check cancellation before making request
+                  if (token && token.isCancellationRequested) {
+                    safeResolve({ items: [] });
+                    return;
+                  }
+
+                  // Update last request
+                  lastCompletionRequestRef.current = {
+                    line,
+                    column,
+                    content
+                  };
+
+                  // Call API for code completion
+                  let response;
+                  try {
+                    response = await ApiService.getCodeCompletion(
+                      currentTab,
+                      content,
+                      line - 1, // Monaco uses 1-based, API uses 0-based
+                      column - 1,
+                      currentLanguage
+                    );
+                  } catch (apiError) {
+                    // API error - return empty
+                    safeResolve({ items: [] });
+                    return;
+                  }
+
+                  if (token && token.isCancellationRequested) {
+                    safeResolve({ items: [] });
+                    return;
+                  }
+
+                  if (response && response.insert_text && response.insert_text.trim()) {
+                    try {
+                      // Sanitize insert text - remove any problematic characters
+                      let insertText = response.insert_text;
+                      
+                      // Ensure insertText is a valid string
+                      if (typeof insertText !== 'string') {
+                        console.warn('Invalid insert_text type:', typeof insertText);
+                        safeResolve({ items: [] });
+                        return;
+                      }
+
+                      // Validate range values - ensure they're within model bounds
+                      // Re-validate model state (it might have changed since the request)
+                      let currentModelContent;
+                      try {
+                        currentModelContent = model.getValue();
+                      } catch (getValueError) {
+                        // Model disposed
+                        safeResolve({ items: [] });
+                        return;
+                      }
+
+                      if (currentModelContent !== content) {
+                        // Model content changed, skip this completion
+                        console.warn('Model content changed, skipping completion');
+                        safeResolve({ items: [] });
+                        return;
+                      }
+
+                      let modelLineCount;
+                      try {
+                        modelLineCount = model.getLineCount();
+                      } catch (lineCountError) {
+                        safeResolve({ items: [] });
+                        return;
+                      }
+
+                      if (line > modelLineCount) {
+                        console.warn('Cursor line exceeds model line count');
+                        safeResolve({ items: [] });
+                        return;
+                      }
+
+                      const startLine = Math.max(1, Math.min(modelLineCount, (response.range_start_line || line - 1) + 1));
+                      const startColumn = Math.max(1, (response.range_start_column || column - 1) + 1);
+                      const endLine = Math.max(startLine, Math.min(modelLineCount, (response.range_end_line || line - 1) + 1));
+                      
+                      // Get the actual line length to validate column
+                      let endLineText;
+                      try {
+                        endLineText = model.getLineContent(endLine);
+                      } catch (lineError) {
+                        console.warn('Error getting line content:', lineError);
+                        safeResolve({ items: [] });
+                        return;
+                      }
+                      const maxEndColumn = endLineText.length + 1;
+                      const endColumn = Math.max(startColumn, Math.min(maxEndColumn, (response.range_end_column || column - 1) + 1));
+
+                      // Create inline completion item using captured monaco instance
+                      if (!monaco || !monaco.Range) {
+                        console.warn('Monaco Range not available');
+                        safeResolve({ items: [] });
+                        return;
+                      }
+
+                      let range;
+                      try {
+                        const Range = monaco.Range;
+                        range = new Range(
+                          startLine,
+                          startColumn,
+                          endLine,
+                          endColumn
+                        );
+                      } catch (rangeError) {
+                        console.warn('Error creating Range:', rangeError);
+                        safeResolve({ items: [] });
+                        return;
+                      }
+
+                      // Validate the range
+                      if (!range || 
+                          range.startLineNumber < 1 || range.startColumn < 1 ||
+                          range.endLineNumber < range.startLineNumber ||
+                          (range.endLineNumber === range.startLineNumber && range.endColumn < range.startColumn)) {
+                        console.warn('Invalid range for completion:', range);
+                        safeResolve({ items: [] });
+                        return;
+                      }
+
+                      // Validate range is within model bounds
+                      if (range.startLineNumber > modelLineCount || range.endLineNumber > modelLineCount) {
+                        console.warn('Range exceeds model line count:', range, 'Model lines:', modelLineCount);
+                        safeResolve({ items: [] });
+                        return;
+                      }
+
+                      // Create the completion item without command (Monaco handles acceptance automatically)
+                      const item = {
+                        insertText: insertText,
+                        range: range
+                      };
+
+                      safeResolve({ items: [item] });
+                    } catch (itemError) {
+                      console.warn('Error creating completion item:', itemError);
+                      safeResolve({ items: [] });
+                    }
+                  } else {
+                    safeResolve({ items: [] });
+                  }
+                } catch (error) {
+                  console.warn('Code completion error:', error);
+                  safeResolve({ items: [] });
+                }
+              }, 800); // 800ms debounce delay - wait for user to stop typing
+            });
+          } catch (error) {
+            // Catch any synchronous errors
+            console.warn('Error in provideInlineCompletions:', error);
+            return { items: [] };
+          }
+        },
+        freeInlineCompletions: (items) => {
+          // Cleanup if needed
+          try {
+            // Monaco may call this when completions are no longer needed
+            // This can happen when user switches windows (Alt+Tab) or editor loses focus
+            // Just ensure we don't throw errors
+            if (items && Array.isArray(items)) {
+              // Items are being freed, nothing to do
+            }
+          } catch (error) {
+            // Silently ignore errors during cleanup
+            // This prevents errors when Alt+Tab is pressed or window loses focus
+            console.debug('Error in freeInlineCompletions (ignored):', error);
+          }
+        }
+      };
+
+      try {
+        completionProviderRef.current = monaco.languages.registerInlineCompletionsProvider(
+          { pattern: '**' },
+          provider
+        );
+      } catch (registrationError) {
+        console.error('Error registering inline completions provider:', registrationError);
+        // Don't set completionProviderRef.current if registration failed
+        completionProviderRef.current = null;
+      }
+    } catch (error) {
+      console.error('Error setting up inline completions provider:', error);
+      // Ensure we don't leave a dangling reference
+      completionProviderRef.current = null;
+    }
+
+    // Cleanup on unmount or when dependencies change
+    return () => {
+      // Clear debounce timer first
+      if (completionDebounceTimerRef.current) {
+        try {
+          clearTimeout(completionDebounceTimerRef.current);
+        } catch (timerError) {
+          // Ignore timer errors
+        }
+        completionDebounceTimerRef.current = null;
+      }
+      
+      // Dispose provider with extra error handling
+      if (completionProviderRef.current) {
+        try {
+          // Check if dispose is a function before calling
+          if (typeof completionProviderRef.current.dispose === 'function') {
+            completionProviderRef.current.dispose();
+          }
+        } catch (error) {
+          // Silently ignore disposal errors
+          // This can happen when Alt+Tab is pressed or window loses focus
+          // The provider might already be disposed or in an invalid state
+          console.debug('Error disposing completion provider (ignored):', error);
+        } finally {
+          // Always clear the reference
+          completionProviderRef.current = null;
+        }
+      }
+    };
+  }, [activeTab, editorLanguage, isEditorReady]);
 
   useEffect(() => {
     const ensureSession = async () => {
@@ -5527,12 +5854,8 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
           : null;
       const addedLineKey =
         addedLineNumber !== null ? `${currentOpIndex}-${addedLineNumber}` : null;
-      const removedLineKey =
-        removedLineNumber !== null ? `${currentOpIndex}-${removedLineNumber}` : null;
       const isAddedAccepted = addedLineKey ? acceptedLines.has(addedLineKey) : false;
       const isAddedDeclined = addedLineKey ? declinedLines.has(addedLineKey) : false;
-      const isRemovedAccepted = removedLineKey ? acceptedLines.has(removedLineKey) : false;
-      const isRemovedDeclined = removedLineKey ? declinedLines.has(removedLineKey) : false;
 
       if (line.type === 'added' && typeof line.newNumber === 'number') {
         if (line.newNumber >= 1 && line.newNumber <= lineCount) {
@@ -5697,7 +6020,6 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
       }
 
       // Determine button states
-      const isAccepted = allAccepted;
       const isDeclined = allDeclined;
       
       const widgetId = `ai-line-widget-${groupKey}`;

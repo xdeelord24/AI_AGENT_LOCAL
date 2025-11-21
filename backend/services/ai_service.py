@@ -3016,3 +3016,697 @@ class AIService:
         debug_prompt = f"Debug this {language} code. Error: {error_message}\n\n```{language}\n{code}\n```"
         response = await self._call_model(debug_prompt)
         return response
+    
+    def _validate_suggestion_syntax(
+        self,
+        suggestion: str,
+        line_prefix: str,
+        line_suffix: str,
+        cursor_context: Dict[str, Any],
+        current_line: str,
+        cursor_column: int
+    ) -> bool:
+        """Validate that the suggestion won't create syntax errors"""
+        if not suggestion or not suggestion.strip():
+            return False
+        
+        # Check for balanced brackets, parentheses, and braces
+        # Count opening and closing brackets in the suggestion
+        open_parens = suggestion.count('(') - suggestion.count(')')
+        open_brackets = suggestion.count('[') - suggestion.count(']')
+        open_braces = suggestion.count('{') - suggestion.count('}')
+        
+        # Count quotes (simple check - not perfect but helps)
+        single_quotes = suggestion.count("'") - suggestion.count("\\'")
+        double_quotes = suggestion.count('"') - suggestion.count('\\"')
+        
+        # If we're in a string context, the suggestion should not add unbalanced quotes
+        if cursor_context.get('in_string'):
+            quote_char = '"' if cursor_context.get('string_type') in ['double', 'triple'] else "'"
+            # If we're in a string and there's a closing quote after cursor, 
+            # suggestion shouldn't add extra quotes
+            if line_suffix and quote_char in line_suffix:
+                # Check if suggestion has unmatched quotes of the same type
+                if quote_char == '"' and double_quotes % 2 != 0:
+                    # Unmatched double quotes - could break syntax
+                    return False
+                elif quote_char == "'" and single_quotes % 2 != 0:
+                    # Unmatched single quotes - could break syntax
+                    return False
+        
+        # Check if suggestion would create unbalanced brackets when combined with prefix
+        # Count brackets in prefix
+        prefix_open_parens = line_prefix.count('(') - line_prefix.count(')')
+        prefix_open_brackets = line_prefix.count('[') - line_prefix.count(']')
+        prefix_open_braces = line_prefix.count('{') - line_prefix.count('}')
+        
+        # Count brackets in suffix (what comes after cursor)
+        suffix_close_parens = line_suffix.count(')') - line_suffix.count('(')
+        suffix_close_brackets = line_suffix.count(']') - line_suffix.count('[')
+        suffix_close_braces = line_suffix.count('}') - line_suffix.count('{')
+        
+        # Check if suggestion would balance properly
+        total_parens = prefix_open_parens + open_parens - suffix_close_parens
+        total_brackets = prefix_open_brackets + open_brackets - suffix_close_brackets
+        total_braces = prefix_open_braces + open_braces - suffix_close_braces
+        
+        # If we're inside parentheses/brackets/braces, we should be closing them, not opening more
+        if cursor_context.get('in_parens') and open_parens > 0:
+            # Opening more parens when already inside - might be okay, but be cautious
+            # Only allow if we're not already very unbalanced
+            if prefix_open_parens > 3:
+                return False
+        
+        if cursor_context.get('in_brackets') and open_brackets > 0:
+            if prefix_open_brackets > 3:
+                return False
+        
+        if cursor_context.get('in_braces') and open_braces > 0:
+            if prefix_open_braces > 3:
+                return False
+        
+        # Check for common syntax errors
+        # Don't allow suggestions that start with operators (unless in specific contexts)
+        suggestion_stripped = suggestion.strip()
+        if suggestion_stripped and suggestion_stripped[0] in [',', ';', ':', '}', ']', ')']:
+            # Starting with closing bracket/operator - likely syntax error
+            return False
+        
+        # Check if suggestion contains incomplete statements that would break syntax
+        # For example, "def " without a name, "if " without condition, etc.
+        incomplete_patterns = [
+            r'\bdef\s+$',  # "def " at end
+            r'\bif\s+$',   # "if " at end
+            r'\bfor\s+$',  # "for " at end
+            r'\bwhile\s+$', # "while " at end
+            r'\bclass\s+$', # "class " at end
+        ]
+        for pattern in incomplete_patterns:
+            if re.search(pattern, suggestion_stripped, re.IGNORECASE):
+                return False
+        
+        # If suggestion is just whitespace or very short and doesn't make sense
+        if len(suggestion_stripped) < 2 and suggestion_stripped not in ['', ' ', '\n', '\t']:
+            # Very short suggestion - might be incomplete
+            pass  # Allow short suggestions, they might be valid
+        
+        return True
+    
+    async def generate_code_completion(
+        self,
+        file_path: str,
+        content: str,
+        cursor_line: int,
+        cursor_column: int,
+        language: str = "python"
+    ) -> Dict[str, Any]:
+        """Generate code completion suggestion based on current context"""
+        # Extract context around cursor (last 50 lines before cursor)
+        lines = content.split('\n')
+        context_start = max(0, cursor_line - 50)
+        context_lines = lines[context_start:cursor_line]
+        context_before = '\n'.join(context_lines)
+        
+        # Get the current line up to cursor and after cursor
+        current_line = lines[cursor_line] if cursor_line < len(lines) else ""
+        line_prefix = current_line[:cursor_column]
+        line_suffix = current_line[cursor_column:] if cursor_column < len(current_line) else ""
+        
+        # Analyze context around cursor for better suggestions
+        # Check if cursor is inside quotes, parentheses, brackets, etc.
+        cursor_context = {
+            'in_string': False,
+            'string_type': None,  # 'single', 'double', 'triple'
+            'in_parens': False,
+            'in_brackets': False,
+            'in_braces': False,
+            'after_colon': False,
+            'after_function': False,
+        }
+        
+        # Analyze line_prefix to understand context
+        prefix_stripped = line_prefix.strip()
+        if prefix_stripped:
+            # Check for string context
+            single_quotes = line_prefix.count("'") - line_prefix.count("\\'")
+            double_quotes = line_prefix.count('"') - line_prefix.count('\\"')
+            triple_single = line_prefix.count("'''")
+            triple_double = line_prefix.count('"""')
+            
+            if triple_single % 2 == 1 or (single_quotes % 2 == 1 and not triple_single):
+                cursor_context['in_string'] = True
+                cursor_context['string_type'] = 'triple' if triple_single else 'single'
+            elif triple_double % 2 == 1 or (double_quotes % 2 == 1 and not triple_double):
+                cursor_context['in_string'] = True
+                cursor_context['string_type'] = 'triple' if triple_double else 'double'
+            
+            # Check if after colon (function definition, if statement, etc.)
+            if prefix_stripped.endswith(':'):
+                cursor_context['after_colon'] = True
+                # Check if it's a function definition
+                if re.search(r'\b(def|function|class|if|elif|else|for|while|with|try|except|finally)\s+\w+\s*:\s*$', line_prefix, re.IGNORECASE):
+                    cursor_context['after_function'] = True
+            
+            # Check for parentheses, brackets, braces
+            open_parens = line_prefix.count('(') - line_prefix.count(')')
+            open_brackets = line_prefix.count('[') - line_prefix.count(']')
+            open_braces = line_prefix.count('{') - line_prefix.count('}')
+            cursor_context['in_parens'] = open_parens > 0
+            cursor_context['in_brackets'] = open_brackets > 0
+            cursor_context['in_braces'] = open_braces > 0
+        
+        # Calculate indentation of current line
+        current_indent = len(current_line) - len(current_line.lstrip())
+        # If cursor is after some text, use that line's indentation
+        # Otherwise, check previous non-empty line for indentation context
+        if cursor_column > 0 and current_line[:cursor_column].strip():
+            # Cursor is in the middle of a line, use current line's indent
+            base_indent = current_indent
+        else:
+            # Cursor is at start or after whitespace, check previous lines
+            base_indent = current_indent
+            # Look for the last non-empty line to determine indentation context
+            for i in range(cursor_line - 1, max(0, cursor_line - 10), -1):
+                if i < len(lines) and lines[i].strip():
+                    prev_indent = len(lines[i]) - len(lines[i].lstrip())
+                    # If previous line ends with colon or opening brace, increase indent
+                    prev_line = lines[i].rstrip()
+                    if prev_line.endswith(':') or prev_line.endswith('{') or prev_line.endswith('('):
+                        base_indent = prev_indent + 4  # Standard 4-space indent
+                    else:
+                        base_indent = prev_indent
+                    break
+        
+        # Get more context for better suggestions (last 100 lines, or entire file if small)
+        full_context = content
+        if len(lines) > 100:
+            context_start_full = max(0, cursor_line - 100)
+            context_end = min(len(lines), cursor_line + 5)  # Include a few lines after cursor
+            context_lines_full = lines[context_start_full:context_end]
+            full_context = '\n'.join(context_lines_full)
+        
+        # Build context-aware prompt
+        context_hints = []
+        if cursor_context['in_string']:
+            if cursor_context['string_type'] == 'triple':
+                context_hints.append("CURSOR IS INSIDE A TRIPLE-QUOTED STRING - suggest only the string content continuation")
+            else:
+                context_hints.append("CURSOR IS INSIDE A STRING - suggest only the string content (e.g., 'Hello World' if cursor is at print('|'))")
+        elif cursor_context['after_function']:
+            context_hints.append("CURSOR IS AFTER A FUNCTION DEFINITION - suggest only the function body (e.g., 'pass' or actual body), NOT the function signature again")
+        elif cursor_context['after_colon']:
+            context_hints.append("CURSOR IS AFTER A COLON - suggest only the block content, NOT the line with the colon")
+        elif cursor_context['in_parens']:
+            context_hints.append("CURSOR IS INSIDE PARENTHESES - suggest only the argument/parameter content")
+        elif cursor_context['in_brackets']:
+            context_hints.append("CURSOR IS INSIDE BRACKETS - suggest only the list/array element")
+        elif cursor_context['in_braces']:
+            context_hints.append("CURSOR IS INSIDE BRACES - suggest only the dictionary/object content")
+        
+        context_note = "\n".join(context_hints) if context_hints else "Analyze the cursor position carefully."
+        
+        # Build prompt for code completion with better context
+        completion_prompt = f"""You are a code completion assistant. Analyze the following {language} code and suggest ONLY the continuation that should come after the cursor position.
+
+FULL CODE CONTEXT (for understanding the file structure, patterns, and style):
+{full_context}
+
+CURSOR POSITION (the code ends here, suggest what comes next):
+{context_before}{line_prefix}|{line_suffix}
+
+NOTE: The | marks the cursor position. Code before | already exists. Code after | (if any) also exists and your suggestion should work with it, not break it.
+
+{context_note}
+
+CRITICAL INSTRUCTIONS:
+1. Analyze the FULL CODE CONTEXT to understand the codebase structure, patterns, naming conventions, and coding style
+2. The suggestion MUST be contextually relevant to the existing code patterns and style
+3. Provide ONLY the continuation code that should come AFTER the cursor position (marked with |)
+4. Do NOT repeat any code that already exists before the cursor
+5. Do NOT include code fences (```) or markdown formatting - return ONLY raw code
+6. Do NOT include backticks (`) anywhere in your response
+7. Do NOT include explanations, comments about the code, or meta-commentary
+8. The suggestion should match the coding style, patterns, and conventions used in the file
+9. Maintain proper indentation - the first line should continue from the cursor position
+10. Keep it concise (typically 1-10 lines)
+11. Return ONLY the raw code continuation, nothing else - no markdown, no code blocks, no explanations
+12. **CRITICAL: The suggestion MUST be syntactically correct and MUST NOT break existing code**
+13. **CRITICAL: Account for what comes after the cursor (if shown) - ensure your suggestion works with it**
+14. **CRITICAL: Do NOT create unbalanced brackets, parentheses, or quotes**
+15. **CRITICAL: If cursor is inside quotes/parens/brackets, ensure your suggestion properly closes them or continues correctly**
+
+EXAMPLES:
+- If cursor is at "def calculator:" → suggest "pass" or function body, NOT "def calculator: pass"
+- If cursor is at "print('|')" with suffix "')" → suggest "Hello World" (just the string content, closing quote already exists)
+- If cursor is at "function samplecode" → suggest "(){{\n\n}}" (just the signature continuation)
+- If cursor is at "if x > 5:" → suggest the if block content, NOT "if x > 5: ..."
+- If cursor is at "print(|)" with suffix ")" → suggest the argument, NOT "print(...)" which would duplicate the function call
+
+Provide the code completion (raw code only, no markdown, syntactically correct):"""
+
+        try:
+            response = await self._call_model(completion_prompt)
+            
+            # Clean up the response - remove code fences, markdown, backticks, and explanations
+            suggestion = response.strip()
+            
+            # Remove ALL backticks first (they should never appear in code suggestions)
+            suggestion = suggestion.replace('`', '')
+            
+            # Remove code fences (handle various formats: ```, ```python, ```js, etc.)
+            # Remove opening code fence (at start or after whitespace)
+            suggestion = re.sub(r'^```[a-zA-Z0-9]*\s*\n?', '', suggestion, flags=re.MULTILINE)
+            suggestion = re.sub(r'\n\s*```[a-zA-Z0-9]*\s*\n?', '\n', suggestion, flags=re.MULTILINE)
+            # Remove closing code fence (at end or before newline)
+            suggestion = re.sub(r'\n?\s*```\s*$', '', suggestion, flags=re.MULTILINE)
+            suggestion = re.sub(r'\n?\s*```\s*\n', '\n', suggestion, flags=re.MULTILINE)
+            # Remove any remaining standalone ``` lines
+            suggestion = re.sub(r'^\s*```\s*$', '', suggestion, flags=re.MULTILINE)
+            
+            # Remove any remaining backticks that might have been in code fences
+            suggestion = suggestion.replace('`', '')
+            suggestion = suggestion.strip()
+            
+            # Remove common markdown patterns and explanations
+            # Remove lines that look like explanations (starting with #, //, or containing "Here is", "The code", etc.)
+            suggestion_lines = suggestion.split('\n')
+            cleaned_lines = []
+            skip_explanation = True
+            for line in suggestion_lines:
+                line_stripped = line.strip()
+                # Skip explanation lines at the start
+                if skip_explanation:
+                    # Check for comment markers
+                    if (line_stripped.startswith('#') or 
+                        line_stripped.startswith('//') or 
+                        line_stripped.startswith('/*') or
+                        line_stripped.startswith('*') or
+                        # Check for common explanation phrases
+                        any(phrase in line_stripped.lower() for phrase in [
+                            'here is', 'the code', 'completion:', 'suggestion:', 'example:',
+                            'note:', 'notes:', 'note that', 'notes that',
+                            'important:', 'warning:', 'tip:', 'hint:',
+                            'remember:', 'keep in mind', 'please note'
+                        ]) or
+                        # Check if line is just "Notes" or "Note"
+                        line_stripped.lower() in ['notes', 'note', 'note:', 'notes:']):
+                        continue
+                    if line_stripped:  # First non-explanation line
+                        skip_explanation = False
+                
+                # Also filter out explanation lines in the middle (but be less aggressive)
+                if not skip_explanation:
+                    # Skip lines that are clearly explanations even in the middle
+                    if (line_stripped.lower() in ['notes', 'note', 'note:', 'notes:'] or
+                        (line_stripped.lower().startswith('note:') and len(line_stripped) < 50) or
+                        (line_stripped.lower().startswith('notes:') and len(line_stripped) < 50)):
+                        continue
+                
+                # Keep the line
+                if not skip_explanation or line_stripped:
+                    cleaned_lines.append(line)
+            
+            suggestion = '\n'.join(cleaned_lines).strip()
+            
+            # Final check: if suggestion starts with "Notes" or "Note", remove it
+            suggestion_stripped = suggestion.strip()
+            if suggestion_stripped.lower().startswith('notes') or suggestion_stripped.lower().startswith('note:'):
+                # Find the first line break or remove the first line
+                lines = suggestion.split('\n')
+                if len(lines) > 1:
+                    # Remove first line if it's just "Notes" or "Note:"
+                    if lines[0].strip().lower() in ['notes', 'note', 'note:', 'notes:']:
+                        suggestion = '\n'.join(lines[1:]).strip()
+                    elif lines[0].strip().lower().startswith('note'):
+                        # Check if it's a short note line
+                        if len(lines[0].strip()) < 50:
+                            suggestion = '\n'.join(lines[1:]).strip()
+                else:
+                    # Single line that's just "Notes" - return empty
+                    if suggestion_stripped.lower() in ['notes', 'note', 'note:', 'notes:']:
+                        suggestion = ""
+            
+            # Remove duplicate/redundant code - be aggressive about detecting what user already typed
+            if suggestion and line_prefix.strip():
+                line_prefix_stripped = line_prefix.strip()
+                suggestion_stripped = suggestion.strip()
+                suggestion_lines_list = suggestion.split('\n')
+                
+                # Check if suggestion starts with the same prefix (case-insensitive)
+                prefix_lower = line_prefix_stripped.lower()
+                suggestion_lower = suggestion_stripped.lower()
+                
+                # More aggressive matching: check if any significant part of prefix appears in suggestion
+                # Split prefix into meaningful tokens (words, operators, etc.)
+                prefix_tokens = re.findall(r'\w+|[^\w\s]', line_prefix_stripped)
+                
+                if prefix_tokens and len(prefix_tokens) > 0:
+                    # Check if suggestion starts with the same tokens
+                    suggestion_tokens = re.findall(r'\w+|[^\w\s]', suggestion_stripped)
+                    
+                    # Find matching token count
+                    match_count = 0
+                    for i in range(min(len(prefix_tokens), len(suggestion_tokens))):
+                        if prefix_tokens[i].lower() == suggestion_tokens[i].lower():
+                            match_count += 1
+                        else:
+                            break
+                    
+                    # If significant portion matches, remove it
+                    if match_count >= 2 or (match_count >= 1 and len(prefix_tokens) <= 3):
+                        # Reconstruct matched prefix from suggestion tokens
+                        matched_tokens = suggestion_tokens[:match_count]
+                        matched_text = ''.join(matched_tokens)
+                        
+                        # Find where this text appears in suggestion
+                        if suggestion_stripped.lower().startswith(matched_text.lower()):
+                            # Find exact position (preserving case)
+                            remaining = suggestion_stripped
+                            for i in range(len(suggestion_stripped)):
+                                if suggestion_stripped[i:].lower().startswith(matched_text.lower()):
+                                    remaining = suggestion_stripped[i + len(matched_text):]
+                                    break
+                            
+                            # Remove leading whitespace and common separators
+                            remaining = remaining.lstrip()
+                            # Remove colon, semicolon, equals, or other separators that might be duplicated
+                            while remaining and remaining[0] in [':', ';', '=', '(', '[', '{', ' ']:
+                                remaining = remaining[1:].lstrip()
+                            
+                            # Only use remaining if it's meaningful
+                            if remaining and len(remaining) > 0:
+                                suggestion = remaining
+                            elif len(suggestion_lines_list) > 1:
+                                # Remove first line and use rest
+                                suggestion = '\n'.join(suggestion_lines_list[1:]).strip()
+                            else:
+                                suggestion = ""
+                
+                # Also check if first line of suggestion exactly matches or contains current_line
+                if suggestion_lines_list and current_line.strip():
+                    suggestion_first_line = suggestion_lines_list[0].strip()
+                    current_line_stripped = current_line.strip()
+                    
+                    # If first line matches current line exactly, remove it
+                    if suggestion_first_line == current_line_stripped:
+                        if len(suggestion_lines_list) > 1:
+                            suggestion = '\n'.join(suggestion_lines_list[1:]).strip()
+                        else:
+                            suggestion = ""
+                    # Check if first line starts with current_line (partial match)
+                    elif suggestion_first_line.lower().startswith(current_line_stripped.lower()):
+                        # Remove the matching prefix from first line
+                        remaining_first = suggestion_first_line[len(current_line_stripped):].lstrip()
+                        # Remove separators
+                        while remaining_first and remaining_first[0] in [':', ';', '=', '(', '[', '{', ' ']:
+                            remaining_first = remaining_first[1:].lstrip()
+                        
+                        if remaining_first:
+                            suggestion_lines_list[0] = remaining_first
+                            suggestion = '\n'.join(suggestion_lines_list).strip()
+                        elif len(suggestion_lines_list) > 1:
+                            suggestion = '\n'.join(suggestion_lines_list[1:]).strip()
+                        else:
+                            suggestion = ""
+                
+                # Special handling for function definitions: if user typed "function name" or "def name"
+                # and suggestion starts with same, extract only the signature continuation
+                func_pattern = r'^(def|function|class)\s+(\w+)'
+                prefix_match = re.search(func_pattern, line_prefix_stripped, re.IGNORECASE)
+                if prefix_match and suggestion:
+                    func_keyword = prefix_match.group(1)
+                    func_name = prefix_match.group(2)
+                    # Check if suggestion repeats the function definition
+                    suggestion_func_match = re.search(func_pattern, suggestion_stripped, re.IGNORECASE)
+                    if suggestion_func_match and suggestion_func_match.group(2).lower() == func_name.lower():
+                        # Extract everything after the function signature
+                        # Find where function body starts (after colon or opening brace)
+                        body_start = re.search(r'[:\{]\s*', suggestion_stripped)
+                        if body_start:
+                            suggestion = suggestion_stripped[body_start.end():].strip()
+                        else:
+                            # Try to find the actual continuation
+                            lines = suggestion.split('\n')
+                            if len(lines) > 1:
+                                suggestion = '\n'.join(lines[1:]).strip()
+                            else:
+                                suggestion = ""
+            
+            # Context-aware suggestion adjustment
+            if suggestion and cursor_context['in_string']:
+                # If cursor is inside a string, the suggestion should be string content only
+                # Remove any quotes that might be in the suggestion (we're already inside quotes)
+                suggestion = suggestion.strip()
+                
+                # Remove leading/trailing quotes if present (we're already inside quotes)
+                quote_char = '"' if cursor_context['string_type'] in ['double', 'triple'] else "'"
+                triple_quote = '"""' if cursor_context['string_type'] == 'triple' and quote_char == '"' else "'''"
+                
+                # Remove triple quotes if present
+                if cursor_context['string_type'] == 'triple':
+                    if suggestion.startswith(triple_quote):
+                        suggestion = suggestion[len(triple_quote):]
+                    if suggestion.endswith(triple_quote):
+                        suggestion = suggestion[:-len(triple_quote)]
+                
+                # Remove single/double quotes
+                if suggestion.startswith('"') and suggestion.endswith('"'):
+                    suggestion = suggestion[1:-1]
+                elif suggestion.startswith("'") and suggestion.endswith("'"):
+                    suggestion = suggestion[1:-1]
+                
+                # Remove standalone quotes
+                if len(suggestion) == 1 and suggestion in ['"', "'"]:
+                    suggestion = ""
+                
+                # If suggestion ends with just a quote (likely the closing quote we already have)
+                # Remove it since the closing quote is already in the code
+                if suggestion.endswith(quote_char) and len(suggestion) > 1:
+                    # Check if it's just ending with quote (not escaped)
+                    if suggestion[-1] == quote_char and (len(suggestion) < 2 or suggestion[-2] != '\\'):
+                        suggestion = suggestion[:-1]
+                
+                suggestion = suggestion.strip()
+            
+            # Remove closing brackets/quotes from suggestion if they already exist after cursor
+            if suggestion and line_suffix:
+                suffix_stripped = line_suffix.strip()
+                suggestion_stripped = suggestion.strip()
+                
+                # If suffix starts with closing bracket and suggestion ends with same, remove from suggestion
+                if suffix_stripped.startswith(')') and suggestion_stripped.endswith(')'):
+                    # Check if it's a standalone closing paren (not part of something else)
+                    if len(suggestion_stripped) > 1 and suggestion_stripped[-2] not in ['(', '[', '{']:
+                        suggestion = suggestion_stripped[:-1].strip()
+                elif suffix_stripped.startswith(']') and suggestion_stripped.endswith(']'):
+                    if len(suggestion_stripped) > 1 and suggestion_stripped[-2] not in ['(', '[', '{']:
+                        suggestion = suggestion_stripped[:-1].strip()
+                elif suffix_stripped.startswith('}') and suggestion_stripped.endswith('}'):
+                    if len(suggestion_stripped) > 1 and suggestion_stripped[-2] not in ['(', '[', '{']:
+                        suggestion = suggestion_stripped[:-1].strip()
+                elif suffix_stripped.startswith('"') and suggestion_stripped.endswith('"'):
+                    # Only if we're not in a string context (handled above)
+                    if not cursor_context.get('in_string'):
+                        if len(suggestion_stripped) > 1:
+                            suggestion = suggestion_stripped[:-1].strip()
+                elif suffix_stripped.startswith("'") and suggestion_stripped.endswith("'"):
+                    if not cursor_context.get('in_string'):
+                        if len(suggestion_stripped) > 1:
+                            suggestion = suggestion_stripped[:-1].strip()
+            
+            # Fix indentation to match current context
+            if suggestion:
+                suggestion_lines = suggestion.split('\n')
+                if suggestion_lines:
+                    # For inline completion, first line continues from cursor (no extra indent)
+                    # Subsequent lines should maintain proper relative indentation
+                    
+                    # Check if cursor is in middle of line or at start
+                    cursor_in_middle = cursor_column > 0 and current_line[:cursor_column].rstrip()
+                    
+                    if len(suggestion_lines) == 1:
+                        # Single line - just strip leading whitespace (continues from cursor)
+                        suggestion = suggestion.strip()
+                    else:
+                        # Multi-line suggestion
+                        # First line: no indent (continues from cursor position)
+                        adjusted_lines = []
+                        if suggestion_lines[0].strip():
+                            adjusted_lines.append(suggestion_lines[0].lstrip())
+                        else:
+                            adjusted_lines.append('')
+                        
+                        # For subsequent lines, calculate proper indentation
+                        # Find minimum indent in subsequent lines
+                        min_indent = float('inf')
+                        for line in suggestion_lines[1:]:
+                            if line.strip():
+                                line_indent = len(line) - len(line.lstrip())
+                                min_indent = min(min_indent, line_indent)
+                        
+                        if min_indent == float('inf'):
+                            min_indent = 0
+                        
+                        # Determine base indent for subsequent lines
+                        if cursor_in_middle:
+                            # Cursor in middle of line - check if line ends with colon/brace
+                            line_before_cursor = current_line[:cursor_column].rstrip()
+                            if line_before_cursor.endswith(':') or line_before_cursor.endswith('{') or line_before_cursor.endswith('('):
+                                subsequent_base_indent = base_indent + 4
+                            else:
+                                subsequent_base_indent = base_indent
+                        else:
+                            # Cursor at start or after whitespace
+                            # Check previous line for context
+                            if cursor_line > 0:
+                                prev_line = lines[cursor_line - 1].rstrip() if cursor_line - 1 < len(lines) else ""
+                                if prev_line.endswith(':') or prev_line.endswith('{') or prev_line.endswith('('):
+                                    subsequent_base_indent = base_indent + 4
+                                else:
+                                    subsequent_base_indent = base_indent
+                            else:
+                                subsequent_base_indent = base_indent
+                        
+                        # Adjust indentation for subsequent lines
+                        indent_diff = subsequent_base_indent - min_indent
+                        for line in suggestion_lines[1:]:
+                            if line.strip():
+                                current_indent = len(line) - len(line.lstrip())
+                                new_indent = max(0, current_indent + indent_diff)
+                                adjusted_lines.append(' ' * new_indent + line.lstrip())
+                            else:
+                                adjusted_lines.append('')
+                        
+                        suggestion = '\n'.join(adjusted_lines)
+            
+            # If suggestion is empty after cleaning, return empty
+            if not suggestion or not suggestion.strip():
+                return {
+                    "suggestion": "",
+                    "insert_text": "",
+                    "range_start_line": cursor_line,
+                    "range_start_column": cursor_column,
+                    "range_end_line": cursor_line,
+                    "range_end_column": cursor_column
+                }
+            
+            # Calculate the range for the suggestion
+            range_start_line = cursor_line
+            range_start_column = cursor_column
+            
+            # Determine what text to insert
+            insert_text = suggestion
+            
+            # For string completions, we might need to handle closing quotes
+            if cursor_context['in_string'] and line_suffix:
+                # Check if there's a closing quote after cursor
+                quote_char = '"' if cursor_context['string_type'] in ['double', 'triple'] else "'"
+                # Find the closing quote position
+                closing_quote_pos = line_suffix.find(quote_char)
+                if closing_quote_pos >= 0:
+                    # If suggestion doesn't end with quote, we might need to add it
+                    # But actually, let's let the AI handle this - if it suggests the content,
+                    # we'll replace up to the closing quote
+                    # For now, just replace the content between cursor and closing quote
+                    pass
+            
+            # Calculate end position based on suggestion
+            suggestion_lines = suggestion.split('\n')
+            if len(suggestion_lines) > 1:
+                # Multi-line suggestion
+                range_end_line = cursor_line + len(suggestion_lines) - 1
+                range_end_column = len(suggestion_lines[-1])
+            else:
+                # Single line suggestion - end is at cursor + length of suggestion
+                range_end_line = cursor_line
+                # If cursor is in middle of line, replace text after cursor
+                # For string context, be smarter about what to replace
+                if cursor_context['in_string'] and line_suffix:
+                    # If we're in a string and there's text after, check if we should replace it
+                    # For example, if cursor is at print("|"), line_suffix is '")'
+                    # We want to replace just the content, keeping the closing quote
+                    quote_char = '"' if cursor_context['string_type'] in ['double', 'triple'] else "'"
+                    closing_quote_pos = line_suffix.find(quote_char)
+                    if closing_quote_pos >= 0:
+                        # Replace content up to (but not including) the closing quote
+                        range_end_column = cursor_column + closing_quote_pos
+                    else:
+                        # No closing quote found, replace rest of line
+                        range_end_column = len(current_line)
+                elif cursor_column < len(current_line):
+                    # There's text after cursor - be careful about what we replace
+                    # Don't replace if it would break syntax
+                    # Check if suffix contains important syntax (closing brackets, etc.)
+                    suffix_stripped = line_suffix.strip()
+                    
+                    # If suffix starts with closing brackets/quotes that match open ones in prefix,
+                    # we might want to preserve them
+                    if suffix_stripped:
+                        # Check if we're in a context where suffix should be preserved
+                        # For example, if prefix has "print(" and suffix has ")", we should replace
+                        # content between them, not the closing paren
+                        if (cursor_context.get('in_parens') and 
+                            suffix_stripped.startswith(')') and 
+                            not suggestion.endswith(')')):
+                            # We're in parens and suffix has closing paren - replace up to it
+                            closing_paren_pos = line_suffix.find(')')
+                            if closing_paren_pos >= 0:
+                                range_end_column = cursor_column + closing_paren_pos
+                            else:
+                                range_end_column = len(current_line)
+                        elif (cursor_context.get('in_brackets') and 
+                              suffix_stripped.startswith(']') and 
+                              not suggestion.endswith(']')):
+                            closing_bracket_pos = line_suffix.find(']')
+                            if closing_bracket_pos >= 0:
+                                range_end_column = cursor_column + closing_bracket_pos
+                            else:
+                                range_end_column = len(current_line)
+                        elif (cursor_context.get('in_braces') and 
+                              suffix_stripped.startswith('}') and 
+                              not suggestion.endswith('}')):
+                            closing_brace_pos = line_suffix.find('}')
+                            if closing_brace_pos >= 0:
+                                range_end_column = cursor_column + closing_brace_pos
+                            else:
+                                range_end_column = len(current_line)
+                        else:
+                            # Replace rest of line
+                            range_end_column = len(current_line)
+                    else:
+                        # Empty suffix, just append
+                        range_end_column = cursor_column + len(suggestion)
+                else:
+                    # No text after cursor, just append
+                    range_end_column = cursor_column + len(suggestion)
+            
+            # Ensure valid range (end >= start)
+            if range_end_line < range_start_line:
+                range_end_line = range_start_line
+            if range_end_line == range_start_line and range_end_column < range_start_column:
+                range_end_column = range_start_column
+            
+            # Validate suggestion syntax - check if it would create syntax errors
+            if suggestion and not self._validate_suggestion_syntax(
+                suggestion, line_prefix, line_suffix, cursor_context, current_line, cursor_column
+            ):
+                # Suggestion would create syntax error, return empty
+                return {
+                    "suggestion": "",
+                    "insert_text": "",
+                    "range_start_line": cursor_line,
+                    "range_start_column": cursor_column,
+                    "range_end_line": cursor_line,
+                    "range_end_column": cursor_column
+                }
+            
+            return {
+                "suggestion": suggestion,
+                "insert_text": insert_text,
+                "range_start_line": range_start_line,
+                "range_start_column": range_start_column,
+                "range_end_line": range_end_line,
+                "range_end_column": range_end_column
+            }
+        except Exception as e:
+            raise Exception(f"Failed to generate code completion: {str(e)}")

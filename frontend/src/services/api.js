@@ -240,6 +240,16 @@ class ApiService {
     return this.get(`/api/code/suggestions/${encodedPath}?line_number=${lineNumber}`);
   }
 
+  static async getCodeCompletion(filePath, content, cursorLine, cursorColumn, language) {
+    return this.post('/api/code/completion', {
+      file_path: filePath,
+      content,
+      cursor_line: cursorLine,
+      cursor_column: cursorColumn,
+      language
+    });
+  }
+
   // Settings API
   static async getSettings() {
     // Backend mounts settings router at /api/settings

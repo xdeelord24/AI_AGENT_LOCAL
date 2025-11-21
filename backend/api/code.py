@@ -150,3 +150,42 @@ async def get_code_suggestions(
         raise HTTPException(status_code=404, detail="File not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting suggestions: {str(e)}")
+
+
+class CodeCompletionRequest(BaseModel):
+    file_path: str
+    content: str
+    cursor_line: int
+    cursor_column: int
+    language: str
+
+
+class CodeCompletionResponse(BaseModel):
+    suggestion: str
+    insert_text: str
+    range_start_line: int
+    range_start_column: int
+    range_end_line: int
+    range_end_column: int
+
+
+@router.post("/completion", response_model=CodeCompletionResponse)
+async def get_code_completion(
+    request: CodeCompletionRequest,
+    ai_service = Depends(get_ai_service)
+):
+    """Get AI-powered code completion suggestion"""
+    try:
+        result = await ai_service.generate_code_completion(
+            file_path=request.file_path,
+            content=request.content,
+            cursor_line=request.cursor_line,
+            cursor_column=request.cursor_column,
+            language=request.language
+        )
+        return result
+    except Exception as e:
+        error_msg = str(e)
+        if "unavailable" in error_msg.lower() or "ollama" in error_msg.lower():
+            raise HTTPException(status_code=503, detail=error_msg)
+        raise HTTPException(status_code=500, detail=f"Error getting code completion: {error_msg}")
