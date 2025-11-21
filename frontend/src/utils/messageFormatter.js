@@ -341,7 +341,81 @@ const applyCalloutEnhancements = (html) => {
 
 export const formatMessageContent = (content) => {
   const renderer = ensureRenderer();
-  const normalized = normalizeInputContent(content).replace(/\r\n/g, '\n');
+  let normalized = normalizeInputContent(content).replace(/\r\n/g, '\n');
+  
+  // Filter out raw JSON structures that might be accidentally included
+  // Remove trailing closing brackets/braces that look like JSON artifacts
+  normalized = normalized.replace(/[\]}]+(\s*)$/m, '$1');
+  
+  // Remove JSON object/array structures that appear to be metadata artifacts
+  // This regex matches patterns like: }, "fileoperations": [{...}], etc.
+  normalized = normalized.replace(/\s*[,\s]*\}\s*,\s*"fileoperations?":\s*\[.*?\]/gis, '');
+  normalized = normalized.replace(/\s*[,\s]*\}\s*,\s*"file_operations?":\s*\[.*?\]/gis, '');
+  normalized = normalized.replace(/\s*[,\s]*\}\s*,\s*"ai[_\-]?plan":\s*\{.*?\}\s*[,}]?/gis, '');
+  normalized = normalized.replace(/\s*[,\s]*\}\s*,\s*"activity[_\-]?log":\s*\[.*?\]/gis, '');
+  
+  // Remove standalone JSON objects/arrays at the end of content
+  // Match JSON-like structures (objects or arrays) that might be metadata
+  normalized = normalized.replace(/\s*[,\s]*[{\[]\s*"fileoperations?":\s*\[.*?\]\s*[}\]]/gis, '');
+  normalized = normalized.replace(/\s*[,\s]*[{\[]\s*"file_operations?":\s*\[.*?\]\s*[}\]]/gis, '');
+  normalized = normalized.replace(/\s*[,\s]*[{\[]\s*"ai[_\-]?plan":\s*\{.*?\}\s*[}\]]/gis, '');
+  normalized = normalized.replace(/\s*[,\s]*[{\[]\s*"activity[_\-]?log":\s*\[.*?\]\s*[}\]]/gis, '');
+  
+  // Remove lines that are just closing brackets or JSON structure markers
+  const lines = normalized.split('\n');
+  const filteredLines = lines.filter((line, index) => {
+    const trimmed = line.trim();
+    
+    // Skip lines that are only closing brackets/braces
+    if (/^[\]}]+$/.test(trimmed)) {
+      return false;
+    }
+    
+    // Skip lines that look like JSON structure artifacts
+    if (/^\s*[,{\[]\s*$/.test(trimmed)) {
+      return false;
+    }
+    
+    // Skip lines that start with JSON keys like "fileoperations", "aiplan", etc.
+    if (/^\s*[,{\[]?\s*"fileoperations?":/i.test(trimmed)) {
+      return false;
+    }
+    if (/^\s*[,{\[]?\s*"file_operations?":/i.test(trimmed)) {
+      return false;
+    }
+    if (/^\s*[,{\[]?\s*"ai[_\-]?plan":/i.test(trimmed)) {
+      return false;
+    }
+    if (/^\s*[,{\[]?\s*"activity[_\-]?log":/i.test(trimmed)) {
+      return false;
+    }
+    
+    // Skip lines that are just empty JSON objects or arrays
+    if (/^\s*[{\[]\s*"type":\s*"none",?\s*$/i.test(trimmed)) {
+      return false;
+    }
+    if (/^\s*"path":\s*"",?\s*$/i.test(trimmed)) {
+      return false;
+    }
+    if (/^\s*"content":\s*"",?\s*$/i.test(trimmed)) {
+      return false;
+    }
+    
+    return true;
+  });
+  
+  normalized = filteredLines.join('\n');
+  
+  // Remove any remaining trailing JSON artifacts
+  normalized = normalized.replace(/[,\s]*[\]}]+(\s*)$/m, '$1');
+  normalized = normalized.replace(/\s*[,\s]*\}\s*,\s*"fileoperations?":\s*\[/gi, '');
+  normalized = normalized.replace(/\s*"type":\s*"none",?\s*/gi, '');
+  normalized = normalized.replace(/\s*"path":\s*"",?\s*/gi, '');
+  normalized = normalized.replace(/\s*"content":\s*"",?\s*/gi, '');
+  
+  // Clean up multiple consecutive newlines
+  normalized = normalized.replace(/\n{3,}/g, '\n\n').trim();
+  
   let formattedContent = '';
 
   try {

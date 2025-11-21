@@ -504,7 +504,26 @@ const safeStringifyInput = (value, spacing = 2) => {
 const normalizeChatInput = (value) => {
   if (value == null) return '';
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
+    let str = String(value);
+    
+    // Remove JSON artifacts that might be embedded in the string
+    // Remove patterns like: }, "fileoperations": [{...}], etc.
+    str = str.replace(/\s*[,\s]*\}\s*,\s*"fileoperations?":\s*\[.*?\]\s*/gis, '');
+    str = str.replace(/\s*[,\s]*\}\s*,\s*"file_operations?":\s*\[.*?\]\s*/gis, '');
+    str = str.replace(/\s*[,\s]*\}\s*,\s*"ai[_\-]?plan":\s*\{.*?\}\s*/gis, '');
+    str = str.replace(/\s*[,\s]*\}\s*,\s*"activity[_\-]?log":\s*\[.*?\]\s*/gis, '');
+    
+    // Remove trailing JSON structure markers
+    str = str.replace(/[,\s]*[\]}]+(\s*)$/m, '$1');
+    
+    // Remove empty JSON object patterns
+    str = str.replace(/\{\s*"type":\s*"none",?\s*"path":\s*"",?\s*"content":\s*"",?\s*\}/gi, '');
+    str = str.replace(/\{\s*"type":\s*"none"\s*\}/gi, '');
+    str = str.replace(/"type":\s*"none",?\s*/gi, '');
+    str = str.replace(/"path":\s*"",?\s*/gi, '');
+    str = str.replace(/"content":\s*"",?\s*/gi, '');
+    
+    return str;
   }
   if (Array.isArray(value)) {
     return value
@@ -513,11 +532,34 @@ const normalizeChatInput = (value) => {
       .join('\n\n');
   }
   if (typeof value === 'object') {
-    try {
-      return safeStringifyInput(value, 2);
-    } catch (error) {
-      return Object.prototype.toString.call(value);
+    // Extract text content from structured objects instead of stringifying
+    // Check for common content fields first
+    if (typeof value.content === 'string') {
+      return value.content;
     }
+    if (typeof value.text === 'string') {
+      return value.text;
+    }
+    if (typeof value.message === 'string') {
+      return value.message;
+    }
+    // If it's an object with a single string property, use that
+    const keys = Object.keys(value);
+    if (keys.length === 1 && typeof value[keys[0]] === 'string') {
+      return value[keys[0]];
+    }
+    // Otherwise, try to extract all string values
+    const stringValues = [];
+    for (const key in value) {
+      if (typeof value[key] === 'string' && value[key].trim()) {
+        stringValues.push(value[key]);
+      }
+    }
+    if (stringValues.length > 0) {
+      return stringValues.join('\n\n');
+    }
+    // Last resort: skip objects that don't contain displayable content
+    return '';
   }
   return String(value);
 };
@@ -825,9 +867,24 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     { id: 'browser_tab', label: 'Browser Tab', description: 'Let AI open the in-app browser tab.' },
     { id: 'google_chrome', label: 'Google Chrome', description: 'Let AI request an external Chrome window.' }
   ];
-  // Default to full agent behavior so follow-up chats stay in agent mode
-  const [agentMode, setAgentMode] = useState('agent');
-  const [webSearchMode, setWebSearchMode] = useState('off');
+  // Load agentMode from localStorage, default to 'agent' if not set
+  const [agentMode, setAgentMode] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('aiAgentMode');
+      return saved && ['ask', 'plan', 'agent'].includes(saved) ? saved : 'agent';
+    } catch (error) {
+      return 'agent';
+    }
+  });
+  // Load webSearchMode from localStorage, default to 'off' if not set
+  const [webSearchMode, setWebSearchMode] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('aiWebSearchMode');
+      return saved && ['off', 'browser_tab', 'google_chrome'].includes(saved) ? saved : 'off';
+    } catch (error) {
+      return 'off';
+    }
+  });
   const [showWebSearchMenu, setShowWebSearchMenu] = useState(false);
   const [showFileSuggestions, setShowFileSuggestions] = useState(false);
   const [fileSuggestions, setFileSuggestions] = useState([]);
@@ -1200,6 +1257,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       await ApiService.selectModel(modelName);
       setShowAutoDropdown(false);
       
+      // Persist to localStorage
+      try {
+        window.localStorage.setItem('aiSelectedModel', modelName);
+      } catch (error) {
+        console.warn('Failed to save selected model to localStorage:', error);
+      }
+      
       // Notify parent component about model change
       if (onModelSelect) {
         onModelSelect(modelName);
@@ -1366,15 +1430,37 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       const hfModel = response.hf_model || 'meta-llama/Llama-3.1-8B-Instruct';
       const normalizedHfBaseUrl = normalizeConnectivityBaseUrl(response.hf_base_url);
 
+      // Try to restore saved model from localStorage
+      let savedModel = null;
+      try {
+        savedModel = window.localStorage.getItem('aiSelectedModel');
+      } catch (error) {
+        console.warn('Failed to read saved model from localStorage:', error);
+      }
+
+      const serverModel = provider === 'huggingface'
+        ? hfModel
+        : response.current_model || defaultModel;
+
+      const effectiveModel = savedModel && provider === 'ollama' ? savedModel : serverModel;
+
+      // If we have a saved model that's different from server, try to select it in background
+      if (savedModel && savedModel !== serverModel && provider === 'ollama') {
+        // Don't await - let it happen in background
+        ApiService.selectModel(savedModel).catch(err => {
+          console.warn('Failed to restore saved model:', err);
+        });
+        if (onModelSelect) {
+          onModelSelect(savedModel);
+        }
+      }
+
       setConnectivitySettings({
         provider,
         ollamaUrl: response.ollama_url || 'http://localhost:5000',
         ollamaDirectUrl: response.ollama_direct_url || 'http://localhost:11434',
         useProxy: response.use_proxy ?? true,
-        currentModel:
-          provider === 'huggingface'
-            ? hfModel
-            : response.current_model || defaultModel,
+        currentModel: effectiveModel,
         defaultModel,
         hfModel,
         hfBaseUrl: normalizedHfBaseUrl,
@@ -1390,7 +1476,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     } finally {
       setIsConnectivityLoading(false);
     }
-  }, [loadAvailableModels]);
+  }, [loadAvailableModels, onModelSelect]);
 
   useEffect(() => {
     // Preload connectivity settings so the panel opens faster
@@ -6825,6 +6911,12 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                           type="button"
                           onClick={() => {
                             setAgentMode(mode.id);
+                            // Persist to localStorage
+                            try {
+                              window.localStorage.setItem('aiAgentMode', mode.id);
+                            } catch (error) {
+                              console.warn('Failed to save agent mode to localStorage:', error);
+                            }
                             setShowAgentModeMenu(false);
                           }}
                           className={`w-full text-left px-3 py-2 text-xs transition-colors ${
@@ -6883,6 +6975,12 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                             type="button"
                             onClick={() => {
                               setWebSearchMode(option.id);
+                              // Persist to localStorage
+                              try {
+                                window.localStorage.setItem('aiWebSearchMode', option.id);
+                              } catch (error) {
+                                console.warn('Failed to save web search mode to localStorage:', error);
+                              }
                               setShowWebSearchMenu(false);
                             }}
                             className={`w-full text-left px-3 py-2 text-xs transition-colors ${
