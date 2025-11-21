@@ -9,11 +9,11 @@ import {
   RefreshCw, Minimize2, Workflow, Trash2,
   Sparkles, Brain, ListChecks, FileSearch, Milestone, PenTool,
   Activity, ShieldCheck, Megaphone, AlertTriangle,
-  ThumbsUp, ThumbsDown
+  ThumbsUp, ThumbsDown, Copy
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
-import { formatMessageContent, initializeCopyCodeListeners } from '../utils/messageFormatter';
+import { formatMessageContent, initializeCopyCodeListeners, copyToClipboard } from '../utils/messageFormatter';
 import { detectNewScriptIntent } from '../utils/intentDetection';
 import toast from 'react-hot-toast';
 
@@ -606,7 +606,15 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   // Panel visibility states
   const [leftSidebarVisible, setLeftSidebarVisible] = useState(true);
   const [rightSidebarVisible, setRightSidebarVisible] = useState(true);
-  const [bottomPanelVisible, setBottomPanelVisible] = useState(true);
+  // Load bottomPanelVisible from localStorage, default to true if not set
+  const [bottomPanelVisible, setBottomPanelVisible] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem('terminalPanelVisible');
+      return saved !== null ? saved === 'true' : true;
+    } catch (error) {
+      return true;
+    }
+  });
   const [bottomPanelTab, setBottomPanelTab] = useState('terminal');
   
   // Panel size states
@@ -939,6 +947,15 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   useEffect(() => {
     initializeCopyCodeListeners();
   }, []);
+
+  // Persist terminal panel visibility to localStorage
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('terminalPanelVisible', String(bottomPanelVisible));
+    } catch (error) {
+      console.warn('Failed to save terminal panel visibility to localStorage:', error);
+    }
+  }, [bottomPanelVisible]);
 
   const normalizeOperationContent = useCallback((value) => {
     if (typeof value !== 'string' || value.length === 0) {
@@ -4594,6 +4611,24 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
     setFollowUpInput('');
   };
 
+  const handleCopyMessage = useCallback(async (message) => {
+    try {
+      const contentToCopy = message.rawContent ?? message.content;
+      const normalizedContent = normalizeChatInput(contentToCopy);
+      
+      // Try to get plain text from HTML if it's formatted
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = formatMessageContent(normalizedContent);
+      const plainText = tempDiv.textContent || tempDiv.innerText || normalizedContent;
+      
+      await copyToClipboard(plainText.trim());
+      toast.success('Message copied to clipboard');
+    } catch (error) {
+      console.error('Failed to copy message:', error);
+      toast.error('Failed to copy message');
+    }
+  }, []);
+
   const handleMessageFeedback = useCallback(async (message, rating) => {
     if (!message?.messageId || !message?.conversationId) {
       toast.error('Feedback is unavailable for this response.');
@@ -7185,6 +7220,15 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                             <div className="mt-3 flex items-center gap-3 text-xs text-dark-400">
                               <span>Was this helpful?</span>
                               <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyMessage(message)}
+                                  className={`${feedbackButtonBase} border-dark-600 text-dark-300 hover:text-dark-100`}
+                                  title="Copy message to clipboard"
+                                >
+                                  <Copy className="w-3.5 h-3.5" />
+                                  Copy
+                                </button>
                                 <button
                                   type="button"
                                   disabled={Boolean(isSubmittingFeedback)}
