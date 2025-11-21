@@ -23,7 +23,8 @@ A local-first AI pair programmer built with FastAPI and React. The backend (`mai
                              └────────────────────────┘
 ```
 <img width="1837" height="1029" alt="image" src="https://github.com/user-attachments/assets/b71a66a3-35a4-4478-9d04-cb16c1d5ecdb" />
-![IDE layout preview](https://github.com/user-attachments/assets/b71a66a3-35a4-4478-9d04-cb16c1d5ecdb)
+
+
 See `INSTALL.md`, `MCP_INTEGRATION.md`, and `WEB_SEARCH_IMPROVEMENTS.md` for deeper dives.
 
 ---
