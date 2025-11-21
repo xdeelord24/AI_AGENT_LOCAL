@@ -72,3 +72,6 @@ htmlcov/
 frontend/build/
 frontend/.next/
 
+# JSON files
+*.json
+
