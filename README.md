@@ -1,229 +1,186 @@
-## Offline AI Agent – Cursor-Style Local Coding Assistant
+# Offline AI Agent – Cursor-Style Local Coding Assistant
 
-A fully offline AI coding assistant that provides intelligent code completion, analysis, and generation capabilities without requiring internet connectivity. It is designed to feel similar to Cursor, but runs entirely on your machine using local models via Ollama.
+A local-first AI pair programmer built with FastAPI and React. The backend (`main.py`) runs entirely on your machine, talks to Ollama or HuggingFace models (`backend/services/ai_service.py`), and streams structured responses (plans, file operations, terminal output, etc.) directly into the IDE-style frontend (`frontend/src/components/IDELayout.js`). No network calls ever leave your box unless you explicitly opt in to HuggingFace or DuckDuckGo web search.
 
-### Features
+---
 
-- **Local AI Models**: Runs entirely offline using Ollama.
-- **Code Analysis**: Understands and analyzes your codebase.
-- **Code Generation**: Generates code based on natural language prompts.
-- **Semantic Search**: Uses project structure and context for smarter answers.
-- **File Operations**: Read, write, and manage files via structured metadata.
-- **Agent Mode & Planning**: Produces short TODO-style plans for complex tasks.
-- **Context Awareness**: Maintains context across conversations and open files.
-- **MCP Integration**: Model Context Protocol support for enhanced tool access and performance.
-- **Privacy First**: All data stays on your local machine.
+## Core Features
 
-### Architecture
+- **Chat-first workflow** – `/api/chat/send` orchestrates conversational prompts, auto-continues TODO plans, and records likes/dislikes to `data/feedback/feedback_log.jsonl`.
+- **Full project control** – `/api/files/*` implements read/write/tree/search/move operations on any path rooted at the workspace.
+- **Code intelligence** – `/api/code/*` offers analysis, refactors, completions, suggestions, and semantic search powered by the same model context used in chat.
+- **Terminal streaming** – `/api/terminal/command/stream` mirrors a persistent PTY session so the assistant can run tests or CLI tools and show incremental output.
+- **Session + status metadata** – chat sessions are persisted by `backend/api/chat_sessions.py`, and each response ships an `ai_plan`, `file_operations`, `agent_statuses`, and `activity_log` that the UI renders as live status cards.
+- **Multiple model backends** – Ollama (default) with optional proxy (`ollama_proxy.py`), HuggingFace fallback, configurable generation parameters, and automatic connection caching.
+- **MCP & web search** – Model Context Protocol tools (`backend/services/mcp_server.py`) and the enhanced DuckDuckGo cache (`backend/services/web_search_service.py`) can be toggled via environment flags.
 
 ```text
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │   Backend       │    │   Ollama        │
-│   (React)       │◄──►│   (FastAPI)     │◄──►│   (Local LLM)   │
-│                 │    │                 │    │                 │
-│ - Chat UI       │    │ - API Endpoints │    │ - Code Models   │
-│ - File Explorer │    │ - File Manager  │    │ - Context Mgmt  │
-│ - Code Editor   │    │ - AI Integration│    │                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+┌───────────────────────┐    ┌────────────────────────┐    ┌─────────────────────┐
+│ React Frontend        │    │ FastAPI Backend        │    │ Local Models        │
+│ • Chat / Editor / FS  │←──→│ • Chat, Files, Code    │←──→│ • Ollama (proxy)    │
+│ • Terminal streaming  │    │ • Terminal, Sessions   │    │ • HuggingFace (opt) │
+└───────────────────────┘    │ • MCP + Web Search     │    └─────────────────────┘
+                             └────────────────────────┘
 ```
-
-### Example UI
-
-
 <img width="1837" height="1029" alt="image" src="https://github.com/user-attachments/assets/b71a66a3-35a4-4478-9d04-cb16c1d5ecdb" />
+![IDE layout preview](https://github.com/user-attachments/assets/b71a66a3-35a4-4478-9d04-cb16c1d5ecdb)
+See `INSTALL.md`, `MCP_INTEGRATION.md`, and `WEB_SEARCH_IMPROVEMENTS.md` for deeper dives.
 
+---
 
+## Requirements
+
+- Python 3.8+ (the backend uses FastAPI, uvicorn, aiohttp, duckduckgo_search, etc.).
+- Node.js 16+ (React app built with `react-scripts` 5.0.1, Tailwind, Monaco).
+- Ollama running locally (`ollama serve`) with at least one code-capable model (`codellama`, `deepseek-coder`, etc.).
+- 8 GB RAM minimum (16 GB+ recommended for larger models). GPU acceleration is optional but helpful.
+
+Optional:
+
+- `duckduckgo_search` for richer web search answers.
+- `mcp` extras for Model Context Protocol support (see `MCP_INTEGRATION.md`).
+- HuggingFace account/key if you want to set `LLM_PROVIDER=huggingface`.
+
+---
 
 ## Quick Start
 
-### Automated Setup
+```bash
+# 1. Configure environment
+cp env.example .env         # edit if needed
+
+# 2. Install backend deps (pip fallback uses requirements-flexible.txt)
+python -m pip install -r requirements.txt
+
+# 3. Install frontend deps
+cd frontend && npm install && cd ..
+
+# 4. Launch everything
+python start.py             # starts backend + frontend, installs node deps if missing
+```
+
+Once both servers are up, open `http://localhost:3000`. The CRA dev server proxies API calls to `http://localhost:8000` (configurable via `frontend/package.json` or `REACT_APP_API_URL`).
+
+Automated setup helpers:
 
 ```bash
-python setup.py
-
-# If setup.py fails, install Python deps and frontend deps separately
-python install_deps.py
-python install_frontend.py
-
-# Start the full application (backend + frontend)
-python start.py
-
-# Or start backend only (for testing)
-python start_backend.py
+python setup.py             # full install + model sanity checks
+python install_deps.py      # Python requirements only
+python install_frontend.py  # npm install frontend
 ```
 
-### Manual Setup
+---
 
-1. **Install Ollama**
+## Running Services
 
-   ```bash
-   # Download from https://ollama.ai
-   # Start Ollama service
-   ollama serve
+- `python main.py` – runs the FastAPI app with uvicorn (reload enabled by default).
+- `cd frontend && npm start` – launches the React dev server with Tailwind + Monaco editor.
+- `python start.py` – convenience launcher (checks Ollama, spawns backend thread, runs npm start, opens browser).
+- `python start_with_proxy.py` – same as above but also runs `ollama_proxy.py` (Flask proxy on `http://localhost:5000`) so browsers blocked by CORS can still reach Ollama.
+- `python start_manual.py` – starts backend only and prints the commands for manually starting the frontend.
+- `python start_backend.py` – backend only (handy for API tests or pairing with another UI).
+- Windows users can run `fix_ollama_cors.bat` to set `OLLAMA_ORIGINS=*` before `ollama serve`, eliminating proxy requirements.
 
-   # Install a code-capable model
-   ollama pull codellama
-   ollama pull deepseek-coder
-   ```
+Use `simple_test.py`, `test_connections.py`, or `test_api_direct.py` if you need quick sanity checks against the backend endpoints.
 
-2. **Install Dependencies**
+---
 
-   ```bash
-   pip install -r requirements.txt
-   cd frontend && npm install
-   ```
+## Environment & Configuration
 
-3. **Start the Application**
+All runtime settings are pulled from `.env` (see `env.example`) and standard environment variables:
 
-   ```bash
-   # Start backend
-   python main.py
+- **API**: `API_HOST`, `API_PORT`, `LOG_LEVEL`, `DEBUG`, `RELOAD`.
+- **Model routing** (`backend/services/ai_service.py`):
+  - `LLM_PROVIDER` – `ollama` (default) or `huggingface`.
+  - `OLLAMA_URL` – proxy endpoint (default `http://localhost:5000`); `OLLAMA_DIRECT_URL` – direct endpoint (`http://localhost:11434`).
+  - `USE_PROXY`, `OLLAMA_REQUEST_TIMEOUT`, `OLLAMA_NUM_*`, `OLLAMA_KEEP_ALIVE`.
+  - `DEFAULT_MODEL`, `HF_MODEL`, `HF_API_KEY`, `HF_BASE_URL`.
+- **Generation controls**: `MAX_TOKENS`, `TEMPERATURE`, `TOP_P`, `OLLAMA_NUM_PREDICT`, etc.
+- **File limits**: `MAX_FILE_SIZE`, `SUPPORTED_EXTENSIONS`.
+- **Web search**: `ENABLE_WEB_SEARCH`, `WEB_SEARCH_CACHE_SIZE`, `WEB_SEARCH_CACHE_TTL`, `WEB_SEARCH_MAX_RESULTS`.
+- **MCP**: `ENABLE_MCP`, `MCP_CACHE_TTL_SECONDS`, `AI_AGENT_CONFIG_DIR`.
 
-   # Start frontend (in another terminal)
-   cd frontend && npm start
-   ```
+The frontend can point to a remote backend by setting `REACT_APP_API_URL` before `npm start`.
 
-4. **Access the Interface**
+---
 
-   Open `http://localhost:3000` in your browser.
+## Backend API Surface
 
-### Configuration
+The FastAPI router (`backend/api/router.py`) mounts multiple sub-routers. The most commonly used endpoints are:
 
-- **Copy the example environment file**:
+- `POST /api/chat/send` – main conversation endpoint. Handles plan auto-continue, metadata extraction, and ASK mode safeguards.
+- `GET /api/chat/models`, `POST /api/chat/models/{name}/select`, `GET /api/chat/status` – manage model availability and runtime health.
+- `GET/POST/PUT/DELETE /api/chat/sessions*` – persist chat transcripts, implemented in `backend/api/chat_sessions.py`.
+- `GET /api/files/list|read|tree|info`, `POST /api/files/write|create-directory|copy|move`, `DELETE /api/files/delete` – workspace file manager, powered by `backend/services/file_service.py`.
+- `POST /api/code/analyze|generate|search|refactor|completion`, `GET /api/code/languages|suggestions` – code operations orchestrated by `backend/services/code_analyzer.py`.
+- `POST /api/terminal/session|command|command/stream|interrupt|complete` – PTY-backed shell commands via `backend/services/terminal_service.py`.
+- `GET/PUT /api/settings`, `POST /api/settings/test-connection` – persist connection settings to `~/.offline_ai_agent/settings.json`.
 
-  ```bash
-  cp env.example .env
-  ```
+All responses share a consistent metadata contract so the React client (`frontend/src/services/api.js`) can render plans, file diffs, statuses, and streamed terminal chunks in realtime.
 
-- **Key settings** (see `INSTALL.md` for more):
-  - `API_HOST` / `API_PORT`: where the FastAPI backend listens (defaults to `0.0.0.0:8000`).
-  - `OLLAMA_URL`: Ollama server URL (for example `http://localhost:11434`).
-  - `DEFAULT_MODEL`: default AI model name (for example `codellama`).
-  - `MAX_FILE_SIZE`: maximum file size the agent will read/edit.
-  - `MCP_CACHE_TTL_SECONDS`: how long (in seconds) MCP directory/tree responses are cached to speed up repeated tool calls (default `4`).
-  - `LOG_LEVEL`, `DEBUG`, `RELOAD`, and basic model settings like `MAX_TOKENS`, `TEMPERATURE`, `TOP_P`.
+---
 
-### Start Scripts Overview
+## Frontend Notes
 
-- **`start.py`**: Convenience script that:
-  - Checks you are in the project root.
-  - Verifies Ollama is reachable.
-  - Starts the FastAPI backend (`main.py`) and React frontend (`frontend` via `npm start`), installing `node_modules` if needed.
-  - Opens `http://localhost:3000` in your browser.
-- **`start_with_proxy.py`**: Same as `start.py` but also:
-  - Launches the Flask-based Ollama CORS proxy (`ollama_proxy.py`) on `http://localhost:5000`.
-  - Is useful if your browser cannot connect directly to Ollama due to CORS/network limitations.
-- **`start_manual.py`**: Starts only the backend and prints step-by-step instructions for running the frontend manually.
-- **`start_backend.py`**: Minimal helper to run the backend only (handy for API testing or when integrating with another UI).
+- Built with React 18 + React Router + Tailwind (`frontend/src/components/IDELayout.js` is the primary layout).
+- Monaco editor (`@monaco-editor/react`) drives the multi-pane IDE experience with file tree, tabs, chat, and terminal.
+- Markdown rendering uses `marked` with custom formatters (`frontend/src/utils/messageFormatter.js`) to support copy buttons, inline formatting, and sanitized metadata blocks.
+- API requests share a single helper (`frontend/src/services/api.js`) that normalizes paths, handles streaming, and exposes high-level functions for every backend route.
 
-### Handling Ollama CORS
+Development commands:
 
-- **Option 1 – Use the proxy**:
-  - Run: `python start_with_proxy.py` to start the proxy, backend, and frontend together.
-  - The backend will talk to Ollama through the proxy (`ollama_proxy.py`) to avoid browser CORS issues.
-- **Option 2 – Enable CORS directly in Ollama (Windows)**:
-  - Run `fix_ollama_cors.bat`, which sets `OLLAMA_ORIGINS=*` and starts `ollama serve` so the frontend can call Ollama directly.
-
-### Detailed Installation
-
-See `INSTALL.md` for comprehensive installation instructions, including platform-specific steps, troubleshooting, and advanced deployment.
-
-## AI Response Format & Markdown Styling
-
-The backend AI service instructs the model to always answer using GitHub-flavored Markdown so the React frontend can render rich, readable output.
-
-- **Headings**: Uses `##` and `###` headings (top-level `#` headings are avoided to keep the UI lighter).
-- **Lists**: Uses bullet lists starting with `- ` for steps, notes, and explanations.
-- **Emphasis**: Uses `**bold**` to highlight key points and pseudo-headings in lists, and `*italic*` sparingly.
-- **Inline code**: Wraps file names, directories, functions, and identifiers in backticks (for example `backend/api/chat.py`).
-- **Links**: Uses markdown links like `[Ollama](https://ollama.ai)` or wraps bare URLs in backticks.
-- **Code blocks**: Uses fenced code blocks with language tags, for example:
-
-```python
-def example():
-    print("Hello from the offline AI agent")
+```bash
+cd frontend
+npm start     # dev server @ http://localhost:3000 with proxy to :8000
+npm run build # production bundle under frontend/build
+npm test      # CRA test runner
 ```
 
-On the frontend, `frontend/src/utils/messageFormatter.js` uses `marked` plus custom renderers to:
+---
 
-- Render code blocks with a copy-to-clipboard button.
-- Enhance lists, links, tables, and images.
-- Handle inline markdown and math-like formatting via `formatInlineMarkdown`.
+## Troubleshooting
 
-## File Operations & AI Plan Metadata
+- **Ollama not detected** – run `ollama serve` manually, verify with `curl http://localhost:11434/api/tags`, or use `python test_connections.py`.
+- **Browser blocked by CORS** – either run `python start_with_proxy.py` (uses Flask proxy on port 5000) or execute `fix_ollama_cors.bat` on Windows to set `OLLAMA_ORIGINS=*`.
+- **npm missing** – `start.py` and `setup.py` try `npm`, `npm.cmd`, and `npm.exe`. Install Node 16+ from `https://nodejs.org` if detection fails.
+- **Model not downloaded** – `setup.py` checks `ollama list` and can automatically `ollama pull codellama`. Otherwise run the `ollama pull` commands listed in `INSTALL.md`.
+- **HuggingFace provider** – set `LLM_PROVIDER=huggingface`, fill `HF_API_KEY` and `HF_MODEL`, and optionally `HF_BASE_URL` for an OpenAI-compatible proxy.
+- **MCP / web search** – enable by installing the optional dependencies referenced in `MCP_INTEGRATION.md` and `WEB_SEARCH_IMPROVEMENTS.md`.
 
-When the AI wants to change files, it returns a JSON metadata block that the backend parses and exposes to the UI. This metadata is embedded in the markdown response and then stripped from the user-visible text.
+---
 
-- **AI Plan (`ai_plan`)** – a short TODO-style plan for complex tasks:
+## AI Response Format Reference
+
+The assistant always emits GitHub-flavored Markdown plus optional embedded JSON metadata. The backend enforces this by injecting formatter instructions (`AIService.METADATA_FORMAT_LINES`) and scrubbing responses in ASK mode. Frontend rendering expectations:
+
+- Headings limited to `##` / `###`.
+- Bulleted lists for tasks or steps (use `-` followed by a space).
+- Inline code for identifiers and paths.
+- Fenced code blocks with language tags (copy button enabled in the UI).
+- Optional metadata:
+  - `ai_plan` – summary + tasks; used for progress pills and auto-continue prompts.
+  - `file_operations` – edit/create/delete descriptors for the file patch previewer.
+  - `agent_statuses` and `activity_log` – timeline cards showing what the agent is doing.
+
+Example payload (trimmed for brevity):
 
 ```json
 {
   "ai_plan": {
-    "summary": "Short summary of your approach",
+    "summary": "Add health check and describe tests",
     "tasks": [
-      {
-        "id": "task-1",
-        "title": "Describe the step",
-        "status": "pending"
-      }
+      {"id": "1", "title": "Update backend routes", "status": "completed"},
+      {"id": "2", "title": "Document new endpoint", "status": "pending"}
     ]
-  }
-}
-```
-
-- **File Operations (`file_operations`)** – concrete file edits the agent wants to apply:
-
-```json
-{
+  },
   "file_operations": [
-    {
-      "type": "create_file",
-      "path": "backend/services/new_service.py",
-      "content": "# New service implementation ..."
-    },
-    {
-      "type": "edit_file",
-      "path": "frontend/src/App.js",
-      "content": "/* full updated file content here */"
-    }
+    {"type": "edit_file", "path": "backend/api/chat.py", "content": "..."}
   ]
 }
 ```
 
-The backend is lenient and also accepts:
-
-- A single file operation object at the top level.
-- A top-level list of file operations.
-- JSON embedded in fenced ` ```json ` blocks or inline within the markdown.
-
-## Agent Status & Context
-
-The AI service (`backend/services/ai_service.py`) exposes rich status and context information:
-
-- **Agent statuses**: `generate_agent_statuses` returns a list of step descriptions (for example “Thinking about…”, “Grepping workspace…”, “Drafting potential code changes…”), which the frontend can render as a live status timeline.
-- **Context-aware prompts**: The AI prompt includes `active_file`, `open_files`, `mentioned_files`, and a file tree when available so responses are grounded in the current project.
-- **Web search (optional)**: If `duckduckgo_search` is installed and `web_search_mode` is enabled in the context, the service augments responses with recent DuckDuckGo search results.
-
-The main chat API is implemented in `backend/api/chat.py` and exposes endpoints for sending messages, listing models, selecting a model, and checking service status.
-
-## Supported Models
-
-- **CodeLlama**: Excellent for code generation and completion.
-- **DeepSeek-Coder**: Strong code understanding and analysis.
-- **WizardCoder**: Good balance of performance and speed.
-- **StarCoder**: Fast code completion.
-
-Any model available in Ollama that supports the `generate` API can be used. The default model is controlled by `DEFAULT_MODEL` and can be changed at runtime with the `/api/chat/models/{model_name}/select` endpoint.
-
-## Requirements
-
-- Python 3.8+
-- Node.js 16+
-- 8GB+ RAM (for local models)
-- Ollama installed and running
-
-Optionally, install `duckduckgo_search` to enable web search augmentation.
+---
 
 ## License
 
-MIT License – feel free to use and modify as needed.
+Released under the MIT License – see `LICENSE` or reuse/modify as needed.
