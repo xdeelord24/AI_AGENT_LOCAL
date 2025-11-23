@@ -31,14 +31,14 @@ See `INSTALL.md`, `MCP_INTEGRATION.md`, and `WEB_SEARCH_IMPROVEMENTS.md` for dee
 
 ## Requirements
 
-- Python 3.8+ (the backend uses FastAPI, uvicorn, aiohttp, duckduckgo_search, etc.).
+- Python 3.8+ (the backend uses FastAPI, uvicorn, aiohttp, ddgs, etc.).
 - Node.js 16+ (React app built with `react-scripts` 5.0.1, Tailwind, Monaco).
 - Ollama running locally (`ollama serve`) with at least one code-capable model (`codellama`, `deepseek-coder`, etc.).
 - 8 GB RAM minimum (16 GB+ recommended for larger models). GPU acceleration is optional but helpful.
 
 Optional:
 
-- `duckduckgo_search` for richer web search answers.
+- `ddgs` for richer web search answers.
 - `mcp` extras for Model Context Protocol support (see `MCP_INTEGRATION.md`).
 - HuggingFace account/key if you want to set `LLM_PROVIDER=huggingface`.
 

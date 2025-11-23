@@ -13,11 +13,15 @@ from collections import OrderedDict
 import os
 
 try:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS  # type: ignore
     DDGS_AVAILABLE = True
 except ImportError:
-    DDGS = None
-    DDGS_AVAILABLE = False
+    try:
+        from duckduckgo_search import DDGS  # type: ignore
+        DDGS_AVAILABLE = True
+    except ImportError:
+        DDGS = None
+        DDGS_AVAILABLE = False
 
 
 class WebSearchService:
@@ -221,7 +225,7 @@ class WebSearchService:
             Tuple of (results, metadata)
         """
         if not DDGS_AVAILABLE:
-            return [], {"error": "DuckDuckGo search not available. Install duckduckgo-search package."}
+            return [], {"error": "DuckDuckGo search not available. Install the 'ddgs' package."}
         
         if not query or not query.strip():
             return [], {"error": "Empty search query"}

@@ -4,11 +4,13 @@ from typing import List, Optional, Dict, Any, Tuple, Literal
 import asyncio
 import json
 import time
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 from pathlib import Path
 import uuid
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 MAX_PLAN_AUTOCONTINUE_ROUNDS = 3
 COMPLETED_TASK_STATUSES = {"completed", "complete", "done"}
@@ -105,6 +107,11 @@ def _summarize_request(message: str, limit: int = 120) -> str:
     return snippet[: limit - 1].rstrip() + "…"
 
 
+def _utc_now_iso() -> str:
+    """Return current UTC timestamp with trailing Z."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _record_activity_event(
     events: List[Dict[str, Any]],
     key: str,
@@ -114,7 +121,7 @@ def _record_activity_event(
         "key": key,
         "label": label,
         "ts": time.perf_counter(),
-        "started_at": datetime.utcnow().isoformat() + "Z",
+        "started_at": _utc_now_iso(),
     })
 
 
@@ -293,7 +300,16 @@ async def send_message(
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
+        error_msg = str(e)
+        logger.exception("Error processing message in /api/chat/send endpoint")
+        # Provide more detailed error messages for common issues
+        if "Ollama is not running" in error_msg or "Cannot connect" in error_msg:
+            status_code = 503  # Service Unavailable
+        elif "Ollama API error" in error_msg or "model" in error_msg.lower():
+            status_code = 400  # Bad Request (likely model name issue)
+        else:
+            status_code = 500  # Internal Server Error
+        raise HTTPException(status_code=status_code, detail=f"Error processing message: {error_msg}")
 
 
 @router.get("/models")
@@ -341,7 +357,7 @@ async def submit_feedback(feedback: FeedbackRequest):
         "rating": feedback.rating,
         "comment": feedback.comment or "",
         "metadata": feedback.metadata or {},
-        "recorded_at": datetime.utcnow().isoformat() + "Z"
+        "recorded_at": _utc_now_iso()
     }
     try:
         await asyncio.to_thread(_append_feedback_entry, entry)

@@ -649,7 +649,7 @@ class MCPServerTools:
             
             return [TextContent(type="text", text=formatted)]
         except ImportError:
-            return [TextContent(type="text", text="Web search not available. Install duckduckgo-search package.")]
+            return [TextContent(type="text", text="Web search not available. Install the 'ddgs' package.")]
         except Exception as e:
             return [TextContent(type="text", text=f"Error performing web search: {str(e)}")]
 

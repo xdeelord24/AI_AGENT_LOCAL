@@ -53,6 +53,10 @@ def run_frontend():
             
             os.chdir("..")
         
+        # Ensure CRA dev server uses safe defaults even without LAN IP
+        os.environ.pop("HOST", None)
+        os.environ.setdefault("DANGEROUSLY_DISABLE_HOST_CHECK", "true")
+
         # Start the frontend server
         os.chdir("frontend")
         # Try different ways to find npm for starting

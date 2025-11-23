@@ -12,14 +12,20 @@ from typing import List, Dict, Any, Optional, Tuple
 import os
 import re
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 FILE_OP_METADATA_PATTERN = r'(?:file[\s_-]?operations|file[\s_-]?ops)'
 AI_PLAN_METADATA_PATTERN = r'(?:ai[\s_-]?plan|ai[\s_-]?todo)'
 
 try:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS  # type: ignore
 except ImportError:
-    DDGS = None
+    try:
+        from duckduckgo_search import DDGS  # type: ignore
+    except ImportError:
+        DDGS = None
 
 try:
     from huggingface_hub import InferenceClient
@@ -1517,6 +1523,11 @@ class AIService:
         if self.provider == "ollama":
             if not await self.check_ollama_connection():
                 raise Exception("Ollama is not running. Please start Ollama and install a model.")
+            # Validate that the selected model exists
+            available_models = await self.get_available_models()
+            if available_models and self.current_model not in available_models:
+                logger.warning(f"Model '{self.current_model}' not found in available models. Available: {available_models}. Trying anyway...")
+                # Note: We'll try anyway as Ollama might return a better error message
         elif self.provider == "huggingface":
             if InferenceClient is None:
                 raise Exception("huggingface-hub is not installed. Please install it to use Hugging Face models.")
@@ -1858,20 +1869,35 @@ class AIService:
             cleaned_response = self._strip_file_operation_mentions(cleaned_response)
         
         # Never generate file operations in ASK mode
-        if self._can_modify_files(context) and not metadata.get("file_operations") and self._should_force_file_operations(message, cleaned_response, context):
-            fallback_cleaned, fallback_metadata = await self._generate_file_operations_metadata(
-                message=message,
-                context=context,
-                history=conversation_history or [],
-                assistant_response=cleaned_response
-            )
-            fallback_ops = fallback_metadata.get("file_operations") or []
-            if fallback_ops:
-                metadata["file_operations"] = fallback_ops
-                if fallback_metadata.get("ai_plan") and not metadata.get("ai_plan"):
-                    metadata["ai_plan"] = fallback_metadata["ai_plan"]
-                # Don't add the "Generated concrete file operations" message - it's not needed
-                # cleaned_response is already set above
+        # In agent mode, if no file operations were generated but the user asked for changes, force regeneration
+        if self._can_modify_files(context) and not metadata.get("file_operations"):
+            should_force = self._should_force_file_operations(message, cleaned_response, context)
+            
+            # Additional check: in agent mode, if user message has change intent, be more aggressive
+            if not should_force and self._is_agent_context(context):
+                user_has_change_intent = self._has_change_intent(message)
+                # If user explicitly asked for changes but no file operations were generated, force it
+                if user_has_change_intent:
+                    should_force = True
+            
+            if should_force:
+                print(f"[Agent Mode] Forcing file operations generation for message: {message[:100]}...")
+                fallback_cleaned, fallback_metadata = await self._generate_file_operations_metadata(
+                    message=message,
+                    context=context,
+                    history=conversation_history or [],
+                    assistant_response=cleaned_response
+                )
+                fallback_ops = fallback_metadata.get("file_operations") or []
+                if fallback_ops:
+                    print(f"[Agent Mode] Generated {len(fallback_ops)} file operation(s) via fallback")
+                    metadata["file_operations"] = fallback_ops
+                    if fallback_metadata.get("ai_plan") and not metadata.get("ai_plan"):
+                        metadata["ai_plan"] = fallback_metadata["ai_plan"]
+                    # Don't add the "Generated concrete file operations" message - it's not needed
+                    # cleaned_response is already set above
+                else:
+                    print(f"[Agent Mode] Warning: Fallback file operations generation returned no operations")
         
         # Store conversation
         self.conversation_history[conversation_id] = {
@@ -2050,6 +2076,8 @@ class AIService:
                 "- Treat agent mode as fully autonomous execution: do NOT ask the user follow-up questions unless the request is self-contradictory or unsafe. Instead, state reasonable assumptions and continue working.",
                 "- When the user responds with short inputs like `1`, `2`, `option A`, or repeats one of your earlier choices, interpret that as their selection instead of asking the same question again.",
                 "- When creating or editing files, emit the necessary file_operations and then immediately move on to the next task—do not stop after the first modification if other tasks remain.",
+                "- CRITICAL: If the user asks to create, make, write, or generate a file, you MUST include a create_file operation in file_operations. Never just describe the file—actually create it via file_operations.",
+                "- CRITICAL: If the user asks to modify, update, change, or fix code, you MUST include edit_file operations in file_operations. Never just show code blocks—include the actual file_operations.",
                 "- Keep edits surgical: update only the portions of each file that the user asked to change and preserve the rest of the file exactly as-is.",
                 "- Only mark a task as `completed` if you actually performed that step in the current response. Mark the task you are actively doing as `in_progress`; leave future work as `pending`.",
                 "- Do not leave tasks pending unless you hit a hard blocker; otherwise continue working until every task is marked `completed` within this response.",
@@ -2361,6 +2389,7 @@ class AIService:
             "implement",
             "add ",
             "add\n",
+            "add\t",
             "remove",
             "rewrite",
             "improve",
@@ -2375,11 +2404,24 @@ class AIService:
             "prototype",
             "develop",
             "new file",
+            "new files",
             "new app",
+            "new script",
+            "new code",
+            "make a",
+            "make an",
+            "write a",
+            "write an",
+            "set up",
+            "setup",
             "upgrade",
             "enhance",
             "rename",
             "delete",
+            "make",
+            "write",
+            "put",
+            "save",
         ]
         return any(keyword in normalized for keyword in change_keywords)
     
@@ -2818,18 +2860,54 @@ class AIService:
             return False
         
         combined = f"{message or ''}\n{assistant_response or ''}".lower()
-        change_intent = self._has_change_intent(combined)
-        analysis_only = not change_intent and self._is_analysis_request(message)
-        has_code_block = "```" in (assistant_response or "")
-        mentions_file_section = "file operation" in combined
+        message_lower = (message or "").lower()
+        response_lower = (assistant_response or "").lower()
         
-        if has_code_block or mentions_file_section:
+        # Check if user message has change intent
+        user_change_intent = self._has_change_intent(message)
+        combined_change_intent = self._has_change_intent(combined)
+        
+        # Check for explicit file-related patterns in user message
+        file_creation_patterns = [
+            "create a file",
+            "create file",
+            "new file",
+            "make a file",
+            "write a file",
+            "add a file",
+            "generate a file",
+            "create the",
+            "make the",
+            "write the",
+        ]
+        has_file_creation_request = any(pattern in message_lower for pattern in file_creation_patterns)
+        
+        analysis_only = not combined_change_intent and self._is_analysis_request(message)
+        has_code_block = "```" in response_lower
+        mentions_file_section = "file operation" in combined or "file_operations" in combined
+        
+        # In agent mode, be more aggressive about forcing file operations
+        # If user explicitly asks for file creation/modification, always force
+        if has_file_creation_request:
             return True
         
+        # If user has change intent and response has code blocks, likely needs file operations
+        if user_change_intent and has_code_block:
+            return True
+        
+        # If response mentions file operations but none were extracted, force regeneration
+        if mentions_file_section:
+            return True
+        
+        # If analysis only, don't force
         if analysis_only:
             return False
         
-        return change_intent
+        # If user has change intent, be more likely to force (especially in agent mode)
+        if user_change_intent:
+            return True
+        
+        return False
     
     async def _generate_file_operations_metadata(
         self,
@@ -2874,10 +2952,14 @@ class AIService:
         prompt_lines.append("")
         prompt_lines.extend([
             "You must now produce concrete file_operations that actually fulfill the developer's request.",
-            "- If the request requires new functionality, include at least one `create_file` or `edit_file` entry with the complete file contents (no placeholders like TODO).",
+            "- CRITICAL: If the user asked to create, make, write, or generate a file, you MUST include a `create_file` operation with the complete file contents.",
+            "- CRITICAL: If the user asked to modify, update, change, or fix code, you MUST include `edit_file` operations with the complete updated file contents.",
+            "- Include at least one `create_file` or `edit_file` entry with the complete file contents (no placeholders like TODO, no comments saying 'add code here').",
+            "- The file_operations array must contain actual operations—do not return an empty array unless the user explicitly said no code changes are needed.",
             "- Assume reasonable defaults instead of asking the user more questions.",
             "- Only leave file_operations empty if the user explicitly said that no code changes are needed.",
             "- Keep the ai_plan consistent with the work you are now completing (mark finished steps as completed).",
+            "- Do not just describe what should be done—actually create the file_operations that do it.",
             ""
         ])
         prompt_lines.append(
@@ -2977,18 +3059,44 @@ class AIService:
                     timeout=aiohttp.ClientTimeout(total=self.request_timeout)
                 ) as response:
                     if response.status == 200:
-                        data = await response.json()
-                        return data.get("response", "No response generated")
+                        # Check content-type to handle different response formats
+                        content_type = response.headers.get('Content-Type', '').lower()
+                        
+                        # Read response as text first to handle text/plain content-type issue
+                        # Some models return JSON data with text/plain content-type
+                        response_text = await response.text()
+                        
+                        # Try to parse as JSON first (even if content-type is text/plain)
+                        # Many Ollama-compatible APIs return JSON with wrong content-type
+                        try:
+                            data = json.loads(response_text)
+                            if isinstance(data, dict):
+                                # Standard Ollama format has 'response' field
+                                return data.get("response", response_text)
+                            elif isinstance(data, str):
+                                return data
+                            else:
+                                return str(data)
+                        except (json.JSONDecodeError, ValueError) as json_error:
+                            # If it's not JSON, return as plain text
+                            logger.debug(f"Response is not JSON (content-type: {content_type}), returning as text. Error: {json_error}")
+                            return response_text
                     else:
                         error_text = await response.text()
+                        logger.error(f"Ollama API error: {response.status} - Model: {self.current_model}, URL: {url}, Error: {error_text}")
                         raise Exception(f"Ollama API error: {response.status} - {error_text}")
         except asyncio.TimeoutError:
+            logger.error(f"Ollama request timed out after {self.request_timeout}s. Model: {self.current_model}, URL: {url}")
             raise Exception(
                 f"Request timed out after {self.request_timeout}s. "
                 "The model might be too slow or overloaded. "
                 "You can increase OLLAMA_REQUEST_TIMEOUT or try a smaller prompt."
             )
+        except aiohttp.ClientConnectorError as e:
+            logger.error(f"Cannot connect to Ollama at {url}. Model: {self.current_model}, Error: {str(e)}")
+            raise Exception(f"Cannot connect to Ollama at {url}. Please ensure Ollama is running (try 'ollama serve'). Error: {str(e)}")
         except Exception as e:
+            logger.exception(f"Error calling Ollama. Model: {self.current_model}, URL: {url}")
             raise Exception(f"Error calling Ollama: {str(e)}")
     
     async def generate_code(

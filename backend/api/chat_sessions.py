@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -42,6 +42,11 @@ class ChatSessionUpdate(BaseModel):
     messages: Optional[List[Dict[str, Any]]] = None
 
 
+def _utc_now_iso() -> str:
+    """Return current UTC timestamp with trailing Z."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 def _get_session_file_path(session_id: str) -> Path:
     """Get the file path for a chat session"""
     return CHAT_SESSIONS_DIR / f"{session_id}.json"
@@ -49,7 +54,7 @@ def _get_session_file_path(session_id: str) -> Path:
 
 def _generate_session_id() -> str:
     """Generate a unique session ID"""
-    return f"chat_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{os.urandom(4).hex()}"
+    return f"chat_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{os.urandom(4).hex()}"
 
 
 def _generate_title_from_messages(messages: List[Dict[str, Any]]) -> str:
@@ -73,7 +78,7 @@ def _format_time_ago(timestamp_str: str) -> str:
         if dt.tzinfo:
             now = datetime.now(dt.tzinfo)
         else:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
         delta = now - dt
         
         if delta.total_seconds() < 60:
@@ -97,7 +102,7 @@ async def create_chat_session(session: ChatSessionCreate):
     try:
         session_id = _generate_session_id()
         title = session.title or _generate_title_from_messages(session.messages)
-        now = datetime.utcnow().isoformat() + "Z"
+        now = _utc_now_iso()
         
         # Convert messages to ChatSessionMessage format
         messages = []
@@ -217,7 +222,7 @@ async def update_chat_session(session_id: str, update: ChatSessionUpdate):
         if update.messages is not None:
             session_data["messages"] = update.messages
         
-        session_data["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        session_data["updated_at"] = _utc_now_iso()
         
         # Save back to file
         with open(session_file, "w", encoding="utf-8") as f:
