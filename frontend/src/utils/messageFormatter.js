@@ -430,42 +430,64 @@ export const formatMessageContent = (content, webReferences = null) => {
       }
     });
 
-    // Replace [1], [2], etc. with markdown link format BEFORE markdown parsing
-    // Match [1], [2], [10], etc. but NOT [text](url) - use negative lookahead
+    // Replace [1], [2], 【1】, 【2】, etc. with markdown link format BEFORE markdown parsing
+    // Match both regular brackets [1] and full-width brackets 【1】
     // Process in reverse to avoid offset issues when replacing
-    const refPattern = /\[(\d+)\](?!\()/g;
-    let match;
+    const refPatterns = [
+      /\[(\d+)\](?!\()/g,  // Regular brackets: [1], [2]
+      /【(\d+)】/g           // Full-width brackets: 【1】, 【2】
+    ];
     const replacements = [];
     
-    // First, collect all matches with their positions
-    while ((match = refPattern.exec(normalized)) !== null) {
-      const index = parseInt(match[1], 10);
-      const ref = refMap.get(index);
-      if (ref) {
-        // Check if we're inside a code block (simple check)
-        const beforeMatch = normalized.substring(0, match.index);
-        const codeBlockCount = (beforeMatch.match(/```/g) || []).length;
-        const isInCodeBlock = codeBlockCount % 2 !== 0;
-        
-        // Check if we're inside inline code
-        const lastBacktick = beforeMatch.lastIndexOf('`');
-        const afterMatch = normalized.substring(match.index + match[0].length);
-        const nextBacktick = afterMatch.indexOf('`');
-        const isInInlineCode = lastBacktick !== -1 && nextBacktick !== -1 && 
-                               !normalized.substring(lastBacktick + 1, match.index + match[0].length + nextBacktick).includes('\n');
-        
-        if (!isInCodeBlock && !isInInlineCode) {
-          replacements.push({
-            index: match.index,
-            length: match[0].length,
-            replacement: `[${index}](${ref.url.replace(/\)/g, '%29')} "${(ref.title || ref.url).replace(/"/g, '&quot;')}")`
-          });
+    // Process both patterns
+    refPatterns.forEach((refPattern, patternIndex) => {
+      let match;
+      const isFullWidth = patternIndex === 1;
+      
+      // Reset regex lastIndex
+      refPattern.lastIndex = 0;
+      
+      // First, collect all matches with their positions
+      while ((match = refPattern.exec(normalized)) !== null) {
+        const index = parseInt(match[1], 10);
+        const ref = refMap.get(index);
+        if (ref) {
+          // Check if we're inside a code block (simple check)
+          const beforeMatch = normalized.substring(0, match.index);
+          const codeBlockCount = (beforeMatch.match(/```/g) || []).length;
+          const isInCodeBlock = codeBlockCount % 2 !== 0;
+          
+          // Check if we're inside inline code
+          const lastBacktick = beforeMatch.lastIndexOf('`');
+          const afterMatch = normalized.substring(match.index + match[0].length);
+          const nextBacktick = afterMatch.indexOf('`');
+          const isInInlineCode = lastBacktick !== -1 && nextBacktick !== -1 && 
+                                 !normalized.substring(lastBacktick + 1, match.index + match[0].length + nextBacktick).includes('\n');
+          
+          if (!isInCodeBlock && !isInInlineCode) {
+            // Convert to markdown link format
+            // For full-width brackets, use regular brackets in markdown (markdown doesn't support full-width)
+            // but store the original style so we can restore it later
+            const bracketOpen = isFullWidth ? '[' : '[';
+            const bracketClose = isFullWidth ? ']' : ']';
+            // Add a data attribute to preserve full-width style
+            const styleMarker = isFullWidth ? ' data-fullwidth="true"' : '';
+            replacements.push({
+              index: match.index,
+              length: match[0].length,
+              isFullWidth: isFullWidth,
+              replacement: `${bracketOpen}${index}${bracketClose}(${ref.url.replace(/\)/g, '%29')} "${(ref.title || ref.url).replace(/"/g, '&quot;')}")`
+            });
+          }
         }
       }
-    }
+    });
+    
+    // Sort replacements by index in descending order for safe replacement
+    replacements.sort((a, b) => b.index - a.index);
     
     // Apply replacements in reverse order to maintain correct indices
-    for (let i = replacements.length - 1; i >= 0; i--) {
+    for (let i = 0; i < replacements.length; i++) {
       const rep = replacements[i];
       normalized = normalized.substring(0, rep.index) + rep.replacement + normalized.substring(rep.index + rep.length);
     }
@@ -508,6 +530,7 @@ export const formatMessageContent = (content, webReferences = null) => {
 
     // Find links that contain [number] as text and match reference URLs
     // Handle various HTML formats that markdown might produce
+    // Note: Full-width brackets are converted to regular brackets for markdown, so we match [number]
     formattedContent = formattedContent.replace(
       /<a\s+([^>]*?)href=["']([^"']+)["']([^>]*?)>\[(\d+)\]<\/a>/gi,
       (match, beforeHref, url, afterHref, indexStr) => {
@@ -532,12 +555,103 @@ export const formatMessageContent = (content, webReferences = null) => {
           if (normalizeUrl(ref.url) === normalizeUrl(decodedUrl) || normalizeUrl(ref.url) === normalizeUrl(url)) {
             const safeUrl = escapeHtml(ref.url);
             const safeTitle = escapeHtml(ref.title);
+            // Check if this was originally a full-width bracket by checking the original text
+            // We'll use regular brackets for now, and the fallback handler will catch full-width ones
             return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="reference-link" title="${safeTitle}">[${index}]</a>`;
           }
         }
         return match;
       }
     );
+    
+    // Also handle plain text 【number】 that markdown didn't convert to links
+    // This handles cases where full-width brackets weren't recognized by markdown
+    // Process in a way that avoids matching inside existing links
+    let tempContent = formattedContent;
+    const fullWidthMatches = [];
+    const fullWidthPattern = /【(\d+)】/g;
+    let fullWidthMatch;
+    
+    while ((fullWidthMatch = fullWidthPattern.exec(tempContent)) !== null) {
+      // Check if we're inside an existing link tag
+      const beforeMatch = tempContent.substring(0, fullWidthMatch.index);
+      const afterMatch = tempContent.substring(fullWidthMatch.index + fullWidthMatch[0].length);
+      
+      // Find the last <a tag before this match
+      const lastATag = beforeMatch.lastIndexOf('<a');
+      const lastCloseATag = beforeMatch.lastIndexOf('</a>');
+      
+      // If there's an <a tag and no closing </a> after it, we're inside a link
+      if (lastATag !== -1 && (lastCloseATag === -1 || lastCloseATag < lastATag)) {
+        continue; // Skip, we're inside a link
+      }
+      
+      const index = parseInt(fullWidthMatch[1], 10);
+      const ref = refMap.get(index);
+      if (ref) {
+        fullWidthMatches.push({
+          index: fullWidthMatch.index,
+          length: fullWidthMatch[0].length,
+          indexNum: index,
+          ref: ref
+        });
+      }
+    }
+    
+    // Apply full-width replacements in reverse order
+    fullWidthMatches.sort((a, b) => b.index - a.index);
+    for (const match of fullWidthMatches) {
+      const safeUrl = escapeHtml(match.ref.url);
+      const safeTitle = escapeHtml(match.ref.title);
+      const replacement = `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="reference-link" title="${safeTitle}">【${match.indexNum}】</a>`;
+      tempContent = tempContent.substring(0, match.index) + replacement + tempContent.substring(match.index + match.length);
+    }
+    
+    formattedContent = tempContent;
+    
+    // Also handle plain text [number] that markdown didn't convert to links (fallback)
+    // Process in a way that avoids matching inside existing links
+    tempContent = formattedContent;
+    const regularMatches = [];
+    const regularPattern = /\[(\d+)\](?!\()/g;
+    let regularMatch;
+    
+    while ((regularMatch = regularPattern.exec(tempContent)) !== null) {
+      // Check if we're inside an existing link tag
+      const beforeMatch = tempContent.substring(0, regularMatch.index);
+      const afterMatch = tempContent.substring(regularMatch.index + regularMatch[0].length);
+      
+      // Find the last <a tag before this match
+      const lastATag = beforeMatch.lastIndexOf('<a');
+      const lastCloseATag = beforeMatch.lastIndexOf('</a>');
+      
+      // If there's an <a tag and no closing </a> after it, we're inside a link
+      if (lastATag !== -1 && (lastCloseATag === -1 || lastCloseATag < lastATag)) {
+        continue; // Skip, we're inside a link
+      }
+      
+      const index = parseInt(regularMatch[1], 10);
+      const ref = refMap.get(index);
+      if (ref) {
+        regularMatches.push({
+          index: regularMatch.index,
+          length: regularMatch[0].length,
+          indexNum: index,
+          ref: ref
+        });
+      }
+    }
+    
+    // Apply regular bracket replacements in reverse order
+    regularMatches.sort((a, b) => b.index - a.index);
+    for (const match of regularMatches) {
+      const safeUrl = escapeHtml(match.ref.url);
+      const safeTitle = escapeHtml(match.ref.title);
+      const replacement = `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="reference-link" title="${safeTitle}">[${match.indexNum}]</a>`;
+      tempContent = tempContent.substring(0, match.index) + replacement + tempContent.substring(match.index + match.length);
+    }
+    
+    formattedContent = tempContent;
   }
 
   // If something in the markdown pipeline produced [object Object],
