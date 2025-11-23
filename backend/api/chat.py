@@ -88,6 +88,34 @@ def _format_pending_tasks(ai_plan: Optional[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _finalize_ai_plan(ai_plan: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Mark all tasks in the plan as completed before finalizing."""
+    if not isinstance(ai_plan, dict):
+        return ai_plan
+    tasks = ai_plan.get("tasks") or []
+    if not isinstance(tasks, list):
+        return ai_plan
+    
+    # Create a copy to avoid mutating the original
+    finalized_plan = dict(ai_plan)
+    finalized_tasks = []
+    
+    for task in tasks:
+        if not isinstance(task, dict):
+            finalized_tasks.append(task)
+            continue
+        
+        # Mark task as completed if it's not already
+        finalized_task = dict(task)
+        current_status = (task.get("status") or "pending").strip().lower()
+        if current_status not in COMPLETED_TASK_STATUSES:
+            finalized_task["status"] = "completed"
+        finalized_tasks.append(finalized_task)
+    
+    finalized_plan["tasks"] = finalized_tasks
+    return finalized_plan
+
+
 def _build_auto_continue_prompt(ai_plan: Dict[str, Any]) -> str:
     summary = ai_plan.get("summary") or "Continue executing the current plan."
     pending_text = _format_pending_tasks(ai_plan)
@@ -280,11 +308,14 @@ async def send_message(
             "Finalizing TODO results and report"
         )
 
+        # Finalize the plan before returning
+        finalized_plan = _finalize_ai_plan(final_ai_plan) if final_ai_plan else None
+
         agent_statuses = ai_service.generate_agent_statuses(
             message=request.message,
             context=last_context_used or request.context or {},
             file_operations=accumulated_file_ops if accumulated_file_ops else None,
-            ai_plan=final_ai_plan
+            ai_plan=finalized_plan
         )
 
         activity_log = _finalize_activity_log(activity_events)
@@ -296,7 +327,7 @@ async def send_message(
             final_plan = None
         else:
             final_file_ops = accumulated_file_ops if accumulated_file_ops else None
-            final_plan = final_ai_plan
+            final_plan = finalized_plan
         
         return ChatResponse(
             response=combined_response,
@@ -408,6 +439,11 @@ async def send_message_stream(
                                 accumulated_file_ops.extend(full_response.get("file_operations"))
                             if full_response.get("ai_plan"):
                                 final_ai_plan = full_response.get("ai_plan")
+                                # Send plan update during streaming so frontend can display it
+                                yield f"data: {json.dumps({
+                                    'type': 'plan',
+                                    'ai_plan': final_ai_plan
+                                })}\n\n"
                         
                         # Update working history
                         working_history.append({"role": "user", "content": current_message})
@@ -430,14 +466,15 @@ async def send_message_stream(
                                 'conversation_id': conversation_id, 
                                 'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
                                 'file_operations': None if is_ask_mode else (accumulated_file_ops if accumulated_file_ops else None),
-                                'ai_plan': None if is_ask_mode else final_ai_plan,
+                                'ai_plan': None if is_ask_mode else _finalize_ai_plan(final_ai_plan),
                                 'activity_log': full_response.get('activity_log')
                             })}\n\n"
                             break
                         
                         ai_plan = full_response.get("ai_plan")
                         if not _plan_has_pending_tasks(ai_plan):
-                            # All tasks completed, send final response
+                            # All tasks completed, finalize plan and send final response
+                            finalized_plan = _finalize_ai_plan(final_ai_plan)
                             combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                             yield f"data: {json.dumps({
                                 'type': 'done', 
@@ -447,13 +484,14 @@ async def send_message_stream(
                                 'conversation_id': conversation_id, 
                                 'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
                                 'file_operations': accumulated_file_ops if accumulated_file_ops else None,
-                                'ai_plan': final_ai_plan,
+                                'ai_plan': finalized_plan,
                                 'activity_log': full_response.get('activity_log')
                             })}\n\n"
                             break
                         
                         if auto_continue_rounds >= MAX_PLAN_AUTOCONTINUE_ROUNDS:
-                            # Max rounds reached, send final response with warning
+                            # Max rounds reached, finalize plan and send final response with warning
+                            finalized_plan = _finalize_ai_plan(final_ai_plan)
                             combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                             yield f"data: {json.dumps({
                                 'type': 'done', 
@@ -463,7 +501,7 @@ async def send_message_stream(
                                 'conversation_id': conversation_id, 
                                 'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
                                 'file_operations': accumulated_file_ops if accumulated_file_ops else None,
-                                'ai_plan': final_ai_plan,
+                                'ai_plan': finalized_plan,
                                 'activity_log': full_response.get('activity_log')
                             })}\n\n"
                             break
@@ -516,6 +554,11 @@ async def send_message_stream(
                             accumulated_file_ops.extend(response.get("file_operations"))
                         if response.get("ai_plan"):
                             final_ai_plan = response.get("ai_plan")
+                            # Send plan update during streaming so frontend can display it
+                            yield f"data: {json.dumps({
+                                'type': 'plan',
+                                'ai_plan': final_ai_plan
+                            })}\n\n"
                     
                     # Accumulate response from this round
                     round_response = response.get('content', '')
@@ -542,6 +585,8 @@ async def send_message_stream(
                     
                     ai_plan = response.get("ai_plan")
                     if not _plan_has_pending_tasks(ai_plan):
+                        # All tasks completed, finalize plan and send final response
+                        finalized_plan = _finalize_ai_plan(final_ai_plan) if final_ai_plan else None
                         combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                         yield f"data: {json.dumps({
                             'type': 'done', 
@@ -551,12 +596,14 @@ async def send_message_stream(
                             'conversation_id': conversation_id, 
                             'timestamp': response.get('timestamp') or datetime.now().isoformat(),
                             'file_operations': accumulated_file_ops if accumulated_file_ops else None,
-                            'ai_plan': final_ai_plan,
+                            'ai_plan': finalized_plan,
                             'activity_log': response.get('activity_log')
                         })}\n\n"
                         break
                     
                     if auto_continue_rounds >= MAX_PLAN_AUTOCONTINUE_ROUNDS:
+                        # Finalize plan before sending
+                        finalized_plan = _finalize_ai_plan(final_ai_plan) if final_ai_plan else None
                         combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                         yield f"data: {json.dumps({
                             'type': 'done', 
@@ -566,7 +613,7 @@ async def send_message_stream(
                             'conversation_id': conversation_id, 
                             'timestamp': response.get('timestamp') or datetime.now().isoformat(),
                             'file_operations': accumulated_file_ops if accumulated_file_ops else None,
-                            'ai_plan': final_ai_plan,
+                            'ai_plan': finalized_plan,
                             'activity_log': response.get('activity_log')
                         })}\n\n"
                         break

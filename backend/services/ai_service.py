@@ -1325,8 +1325,20 @@ class AIService:
                     if len(para.strip()) > 20:
                         return para.strip()
             
+            # If still empty, try to extract any meaningful content (even if it looks like thinking)
+            # This prevents showing nothing when the model only generated thinking-like content
+            if response.strip():
+                # Remove only the most obvious thinking prefixes but keep the content
+                cleaned = response.strip()
+                # Remove common thinking prefixes but keep the rest
+                for pattern in [r'^(let me|i\'ll|i will)\s+', r'^(thinking|analyzing):\s*']:
+                    cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+                if cleaned.strip() and len(cleaned.strip()) > 10:
+                    return cleaned.strip()
+            
             # Last resort: return original if filtering removed everything
-            return response.strip()
+            # This ensures we always show something rather than nothing
+            return response.strip() if response.strip() else "I'm processing your request."
         
         # Remove duplicate price statements (AI sometimes mentions price twice - old then new)
         # Keep only the last (most recent) price mention
@@ -1889,18 +1901,51 @@ class AIService:
         # Parse metadata from response (pass context to block extraction in ASK mode)
         cleaned_response, metadata = self._parse_response_metadata(response, context)
         
+        # Store original response length to detect if filtering was too aggressive
+        original_length = len(cleaned_response.strip())
+        
         # Filter out thinking/planning/reporting content
         cleaned_response = self._filter_thinking_content(cleaned_response, context)
+        
+        # If filtering removed too much (more than 90% of content), be less aggressive
+        filtered_length = len(cleaned_response.strip())
+        if original_length > 50 and filtered_length < (original_length * 0.1):
+            # Filtering was too aggressive - use original response with minimal filtering
+            logger.warning(f"Response filtering removed {original_length - filtered_length} chars, using lighter filter")
+            # Only remove obvious thinking headers, keep the content
+            import re
+            lightly_filtered = re.sub(r'^#+\s*(thinking|analysis|reasoning):?\s*$', '', cleaned_response if cleaned_response else response, flags=re.IGNORECASE | re.MULTILINE)
+            lightly_filtered = re.sub(r'^##\s*thinking\s*$', '', lightly_filtered, flags=re.IGNORECASE | re.MULTILINE)
+            if lightly_filtered.strip() and len(lightly_filtered.strip()) > 10:
+                cleaned_response = lightly_filtered.strip()
+            elif response.strip():
+                # Last resort: use original response
+                cleaned_response = response.strip()
         
         structured_results = self._get_structured_web_results(context)
         # Post-process: If AI used outdated price ($23,433 range), extract correct price from search results
         if context.get("web_search_results_mcp") or structured_results:
             cleaned_response = self._correct_price_from_search_results(cleaned_response, context)
         
-        if not cleaned_response.strip() and structured_results:
-            fallback_from_results = self._build_answer_from_web_results(message, structured_results)
-            if fallback_from_results:
-                cleaned_response = fallback_from_results
+        # If response is empty or too short, try fallbacks
+        if not cleaned_response.strip() or len(cleaned_response.strip()) < 10:
+            # First try web search results
+            if structured_results:
+                fallback_from_results = self._build_answer_from_web_results(message, structured_results)
+                if fallback_from_results:
+                    cleaned_response = fallback_from_results
+            
+            # If still empty and we have the original response, use it with minimal processing
+            if (not cleaned_response.strip() or len(cleaned_response.strip()) < 10) and response.strip():
+                # The filtering was too aggressive - use original response but clean it minimally
+                cleaned_response = response.strip()
+                # Only remove obvious metadata blocks, keep everything else
+                cleaned_response = re.sub(r'```json\s*\{[^}]*"(?:ai_plan|file_operations)"[^}]*\}\s*```', '', cleaned_response, flags=re.IGNORECASE | re.DOTALL)
+                cleaned_response = cleaned_response.strip()
+                
+                # If still empty after minimal cleaning, ensure we have something
+                if not cleaned_response.strip():
+                    cleaned_response = "I'm processing your request. Please wait for the response."
         
         final_uncertain = self._detect_ai_uncertainty(cleaned_response, message)
         if final_uncertain and structured_results:
@@ -1923,6 +1968,27 @@ class AIService:
             )
             metadata["ai_plan"] = None
             metadata["file_operations"] = []
+        
+        # CRITICAL: Ensure we always have a response, even if minimal
+        # If response is still empty after all processing, use a fallback
+        if not cleaned_response.strip() or len(cleaned_response.strip()) < 5:
+            # If we have thinking content, extract useful parts from it
+            if accumulated_thinking and accumulated_thinking.strip():
+                # Try to extract the last meaningful sentence from thinking
+                thinking_sentences = [s.strip() for s in accumulated_thinking.split('.') if s.strip() and len(s.strip()) > 20]
+                if thinking_sentences:
+                    # Use the last sentence that's not just a status update
+                    for sentence in reversed(thinking_sentences):
+                        if not any(word in sentence.lower() for word in ['thinking', 'analyzing', 'considering', 'will', 'going to']):
+                            cleaned_response = sentence.strip()
+                            break
+                    # If still empty, use the last sentence anyway
+                    if not cleaned_response.strip() and thinking_sentences:
+                        cleaned_response = thinking_sentences[-1].strip()
+            
+            # Final fallback: ensure we always return something
+            if not cleaned_response.strip():
+                cleaned_response = "I've processed your request. Please let me know if you need more information."
         
         # CRITICAL: Ensure ASK mode NEVER has file operations or plans, even if the AI generated them
         if self._is_ask_context(context):

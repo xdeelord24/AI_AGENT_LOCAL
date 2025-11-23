@@ -4883,6 +4883,13 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                   ? { ...msg, content: normalizedContent, rawContent: streamingResponse }
                   : msg
               ));
+            } else if (chunk.type === 'plan') {
+              // Update plan during streaming so it can be displayed while loading
+              setChatMessages(prev => prev.map(msg => 
+                msg.id === assistantMessageId
+                  ? { ...msg, plan: chunk.ai_plan || null }
+                  : msg
+              ));
             } else if (chunk.type === 'continue') {
               // AI is continuing with remaining tasks - append continuation message
               currentRound = chunk.round || currentRound + 1;
@@ -4900,22 +4907,32 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
               const finalThinking = chunk.thinking || streamingThinking;
               const finalResponse = chunk.response || streamingResponse;
               const normalizedContent = normalizeChatInput(finalResponse);
+              const conversationId = chunk.conversation_id || null;
               
-              setChatMessages(prev => prev.map(msg => 
-                msg.id === assistantMessageId
-                  ? { 
-                      ...msg, 
-                      content: normalizedContent,
-                      rawContent: finalResponse,
-                      thinking: finalThinking || null,
-                      timestamp: chunk.timestamp || new Date().toISOString(),
-                      messageId: chunk.message_id || null,
-                      conversationId: chunk.conversation_id || null,
-                      plan: chunk.ai_plan || null,
-                      activityLog: chunk.activity_log || null
-                    }
-                  : msg
-              ));
+              setChatMessages(prev => {
+                const updated = prev.map(msg => 
+                  msg.id === assistantMessageId
+                    ? { 
+                        ...msg, 
+                        content: normalizedContent,
+                        rawContent: finalResponse,
+                        thinking: finalThinking || null,
+                        timestamp: chunk.timestamp || new Date().toISOString(),
+                        messageId: chunk.message_id || null,
+                        conversationId: conversationId,
+                        plan: chunk.ai_plan || null,
+                        activityLog: chunk.activity_log || null
+                      }
+                    : msg
+                );
+                
+                // Save chat session after updating messages
+                saveChatSession(conversationId, updated).catch(err => {
+                  console.error('Failed to save chat session:', err);
+                });
+                
+                return updated;
+              });
               
               // Handle file operations if present
               const isAskMode = (modePayload || '').toLowerCase() === 'ask';
@@ -4986,26 +5003,36 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
         await previewAiPlanBeforeAnswer(assistantPlan);
 
         const assistantContent = normalizeChatInput(response.response);
+        const conversationId = response.conversation_id || null;
         
         // CRITICAL: In ASK mode, NEVER process file operations, even if the backend sends them
         // This is a redundant safety check in case anything slips through
         const isAskMode = (modePayload || '').toLowerCase() === 'ask';
 
-        setChatMessages(prev => prev.map(msg => 
-          msg.id === assistantMessageId
-            ? {
-                ...msg,
-                content: assistantContent,
-                rawContent: assistantContent,
-                timestamp: response.timestamp,
-                plan: assistantPlan,
-                activityLog: response.activity_log || null,
-                messageId: response.message_id || null,
-                conversationId: response.conversation_id || null,
-                thinking: response.thinking || null,
-              }
-            : msg
-        ));
+        setChatMessages(prev => {
+          const updated = prev.map(msg => 
+            msg.id === assistantMessageId
+              ? {
+                  ...msg,
+                  content: assistantContent,
+                  rawContent: assistantContent,
+                  timestamp: response.timestamp,
+                  plan: assistantPlan,
+                  activityLog: response.activity_log || null,
+                  messageId: response.message_id || null,
+                  conversationId: conversationId,
+                  thinking: response.thinking || null,
+                }
+              : msg
+          );
+          
+          // Save chat session after updating messages
+          saveChatSession(conversationId, updated).catch(err => {
+            console.error('Failed to save chat session:', err);
+          });
+          
+          return updated;
+        });
         
         // Continue with file operations processing below
         if (!isAskMode && response.file_operations && response.file_operations.length > 0) {
@@ -7830,29 +7857,35 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                       )}
                     </div>
                   ))}
-                  {isLoadingChat && (
-                    <div className="flex space-x-2">
-                      <Bot className="w-5 h-5 text-primary-500 mt-1" />
-                      <div className="bg-dark-700 px-3 py-3 rounded-lg space-y-3">
-                        <div className="flex items-center gap-2 text-sm text-dark-300">
-                          <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
-                          <span>
-                            AI is thinking… {Math.max(1, Math.round(Math.max(thinkingElapsed, 1000) / 1000))}s elapsed
-                          </span>
+                  {isLoadingChat && (() => {
+                    // Find the last assistant message (the one being streamed)
+                    const lastAssistantMessage = [...chatMessages].reverse().find(msg => msg.role === 'assistant');
+                    const streamingPlan = lastAssistantMessage?.plan || thinkingAiPlan;
+                    
+                    return (
+                      <div className="flex space-x-2">
+                        <Bot className="w-5 h-5 text-primary-500 mt-1" />
+                        <div className="bg-dark-700 px-3 py-3 rounded-lg space-y-3">
+                          <div className="flex items-center gap-2 text-sm text-dark-300">
+                            <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
+                            <span>
+                              AI is thinking… {Math.max(1, Math.round(Math.max(thinkingElapsed, 1000) / 1000))}s elapsed
+                            </span>
+                          </div>
+                          {streamingPlan && (
+                            <div className="border-t border-dark-600 pt-3">
+                              {renderAiPlan(streamingPlan)}
+                            </div>
+                          )}
+                          {agentStatuses.length > 0 && (
+                            <div className={streamingPlan ? 'border-t border-dark-600 pt-3' : ''}>
+                              <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
+                            </div>
+                          )}
                         </div>
-                        {thinkingAiPlan && (
-                          <div className="border-t border-dark-600 pt-3">
-                            {renderAiPlan(thinkingAiPlan)}
-                          </div>
-                        )}
-                        {agentStatuses.length > 0 && (
-                          <div className={thinkingAiPlan ? 'border-t border-dark-600 pt-3' : ''}>
-                            <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
-                          </div>
-                        )}
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               )}
             </div>
