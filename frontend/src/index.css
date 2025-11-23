@@ -736,6 +736,28 @@ code {
   transform: translateY(-1px);
 }
 
+/* Reference links for web search citations */
+.prose .reference-link {
+  color: #818cf8;
+  text-decoration: none;
+  font-weight: 500;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background-color: rgba(129, 140, 248, 0.1);
+  border: 1px solid rgba(129, 140, 248, 0.2);
+  transition: all 0.2s ease;
+  display: inline-block;
+  margin: 0 1px;
+  vertical-align: baseline;
+}
+
+.prose .reference-link:hover {
+  color: #a5b4fc;
+  background-color: rgba(129, 140, 248, 0.2);
+  border-color: rgba(129, 140, 248, 0.4);
+  transform: translateY(-1px);
+}
+
 .prose .markdown-image {
   max-width: 100%;
   height: auto;

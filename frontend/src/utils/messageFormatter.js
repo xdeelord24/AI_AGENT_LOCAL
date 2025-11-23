@@ -339,7 +339,7 @@ const applyCalloutEnhancements = (html) => {
   });
 };
 
-export const formatMessageContent = (content) => {
+export const formatMessageContent = (content, webReferences = null) => {
   const renderer = ensureRenderer();
   let normalized = normalizeInputContent(content).replace(/\r\n/g, '\n');
   
@@ -416,6 +416,61 @@ export const formatMessageContent = (content) => {
   // Clean up multiple consecutive newlines
   normalized = normalized.replace(/\n{3,}/g, '\n\n').trim();
   
+  // Convert reference citations like [1], [2] to markdown links BEFORE markdown parsing
+  // This ensures they're properly converted to clickable links
+  if (webReferences && Array.isArray(webReferences) && webReferences.length > 0) {
+    // Create a map of index to URL for quick lookup
+    const refMap = new Map();
+    webReferences.forEach(ref => {
+      if (ref.index && ref.url) {
+        refMap.set(ref.index, {
+          url: ref.url,
+          title: ref.title || ref.url
+        });
+      }
+    });
+
+    // Replace [1], [2], etc. with markdown link format BEFORE markdown parsing
+    // Match [1], [2], [10], etc. but NOT [text](url) - use negative lookahead
+    // Process in reverse to avoid offset issues when replacing
+    const refPattern = /\[(\d+)\](?!\()/g;
+    let match;
+    const replacements = [];
+    
+    // First, collect all matches with their positions
+    while ((match = refPattern.exec(normalized)) !== null) {
+      const index = parseInt(match[1], 10);
+      const ref = refMap.get(index);
+      if (ref) {
+        // Check if we're inside a code block (simple check)
+        const beforeMatch = normalized.substring(0, match.index);
+        const codeBlockCount = (beforeMatch.match(/```/g) || []).length;
+        const isInCodeBlock = codeBlockCount % 2 !== 0;
+        
+        // Check if we're inside inline code
+        const lastBacktick = beforeMatch.lastIndexOf('`');
+        const afterMatch = normalized.substring(match.index + match[0].length);
+        const nextBacktick = afterMatch.indexOf('`');
+        const isInInlineCode = lastBacktick !== -1 && nextBacktick !== -1 && 
+                               !normalized.substring(lastBacktick + 1, match.index + match[0].length + nextBacktick).includes('\n');
+        
+        if (!isInCodeBlock && !isInInlineCode) {
+          replacements.push({
+            index: match.index,
+            length: match[0].length,
+            replacement: `[${index}](${ref.url.replace(/\)/g, '%29')} "${(ref.title || ref.url).replace(/"/g, '&quot;')}")`
+          });
+        }
+      }
+    }
+    
+    // Apply replacements in reverse order to maintain correct indices
+    for (let i = replacements.length - 1; i >= 0; i--) {
+      const rep = replacements[i];
+      normalized = normalized.substring(0, rep.index) + rep.replacement + normalized.substring(rep.index + rep.length);
+    }
+  }
+  
   let formattedContent = '';
 
   try {
@@ -437,6 +492,53 @@ export const formatMessageContent = (content) => {
   }
 
   formattedContent = applyCalloutEnhancements(formattedContent);
+
+  // After markdown parsing, convert reference links to use the reference-link class
+  // The markdown parser will have converted [1](url) to <a> tags, but we need to change the class
+  if (webReferences && Array.isArray(webReferences) && webReferences.length > 0) {
+    const refMap = new Map();
+    webReferences.forEach(ref => {
+      if (ref.index && ref.url) {
+        refMap.set(ref.index, {
+          url: ref.url,
+          title: ref.title || ref.url
+        });
+      }
+    });
+
+    // Find links that contain [number] as text and match reference URLs
+    // Handle various HTML formats that markdown might produce
+    formattedContent = formattedContent.replace(
+      /<a\s+([^>]*?)href=["']([^"']+)["']([^>]*?)>\[(\d+)\]<\/a>/gi,
+      (match, beforeHref, url, afterHref, indexStr) => {
+        // Skip if already has reference-link class
+        if (match.includes('reference-link')) {
+          return match;
+        }
+        
+        const index = parseInt(indexStr, 10);
+        const ref = refMap.get(index);
+        if (ref) {
+          // Decode URL to compare (markdown might escape it)
+          let decodedUrl;
+          try {
+            decodedUrl = decodeURIComponent(url.replace(/%29/g, ')'));
+          } catch (e) {
+            decodedUrl = url;
+          }
+          
+          // Check if URL matches (handle both encoded and decoded, with or without trailing slash)
+          const normalizeUrl = (u) => u.replace(/\/$/, '').toLowerCase();
+          if (normalizeUrl(ref.url) === normalizeUrl(decodedUrl) || normalizeUrl(ref.url) === normalizeUrl(url)) {
+            const safeUrl = escapeHtml(ref.url);
+            const safeTitle = escapeHtml(ref.title);
+            return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="reference-link" title="${safeTitle}">[${index}]</a>`;
+          }
+        }
+        return match;
+      }
+    );
+  }
 
   // If something in the markdown pipeline produced [object Object],
   // fall back to a very simple escaped HTML representation so the

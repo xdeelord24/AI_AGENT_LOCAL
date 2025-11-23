@@ -4921,7 +4921,8 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                         messageId: chunk.message_id || null,
                         conversationId: conversationId,
                         plan: chunk.ai_plan || null,
-                        activityLog: chunk.activity_log || null
+                        activityLog: chunk.activity_log || null,
+                        web_references: chunk.web_references || null
                       }
                     : msg
                 );
@@ -5022,6 +5023,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                   messageId: response.message_id || null,
                   conversationId: conversationId,
                   thinking: response.thinking || null,
+                  web_references: response.web_references || null
                 }
               : msg
           );
@@ -7633,7 +7635,8 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                       const normalizedContent = normalizeChatInput(
                         message.rawContent ?? message.content
                       );
-                      const formattedHtml = formatMessageContent(normalizedContent);
+                      const webReferences = message.web_references || message.webReferences || null;
+                      const formattedHtml = formatMessageContent(normalizedContent, webReferences);
                       const currentFeedback =
                         message.messageId && messageFeedback[message.messageId]
                           ? messageFeedback[message.messageId]

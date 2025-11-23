@@ -41,6 +41,7 @@ class ChatResponse(BaseModel):
     agent_statuses: Optional[List[Dict[str, Any]]] = None
     activity_log: Optional[List[Dict[str, Any]]] = None
     thinking: Optional[str] = None
+    web_references: Optional[List[Dict[str, Any]]] = None
 
 
 class FeedbackRequest(BaseModel):
@@ -203,6 +204,7 @@ async def send_message(
         accumulated_file_ops: List[Dict[str, Any]] = []
         accumulated_thinking: Optional[str] = None
         final_ai_plan: Optional[Dict[str, Any]] = None
+        final_web_references: Optional[List[Dict[str, Any]]] = None
         conversation_id: Optional[str] = None
         last_timestamp: Optional[str] = None
         last_context_used: Optional[Dict[str, Any]] = None
@@ -276,6 +278,10 @@ async def send_message(
 
                 if response.get("ai_plan"):
                     final_ai_plan = response["ai_plan"]
+                
+                # Track web references from the response
+                if response.get("web_references"):
+                    final_web_references = response["web_references"]
 
             working_history.append({"role": "user", "content": current_message})
             working_history.append({"role": "assistant", "content": response.get("content", "")})
@@ -339,7 +345,8 @@ async def send_message(
             ai_plan=final_plan,
             agent_statuses=agent_statuses,
             activity_log=activity_log or None,
-            thinking=accumulated_thinking
+            thinking=accumulated_thinking,
+            web_references=final_web_references
         )
 
     except Exception as e:
@@ -444,6 +451,10 @@ async def send_message_stream(
                                     'type': 'plan',
                                     'ai_plan': final_ai_plan
                                 })}\n\n"
+                            
+                            # Track web references
+                            if full_response.get("web_references"):
+                                final_web_references = full_response.get("web_references")
                         
                         # Update working history
                         working_history.append({"role": "user", "content": current_message})
@@ -467,7 +478,8 @@ async def send_message_stream(
                                 'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
                                 'file_operations': None if is_ask_mode else (accumulated_file_ops if accumulated_file_ops else None),
                                 'ai_plan': None if is_ask_mode else _finalize_ai_plan(final_ai_plan),
-                                'activity_log': full_response.get('activity_log')
+                                'activity_log': full_response.get('activity_log'),
+                                'web_references': None if is_ask_mode else final_web_references
                             })}\n\n"
                             break
                         
@@ -485,7 +497,8 @@ async def send_message_stream(
                                 'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
                                 'file_operations': accumulated_file_ops if accumulated_file_ops else None,
                                 'ai_plan': finalized_plan,
-                                'activity_log': full_response.get('activity_log')
+                                'activity_log': full_response.get('activity_log'),
+                                'web_references': final_web_references
                             })}\n\n"
                             break
                         
@@ -502,7 +515,8 @@ async def send_message_stream(
                                 'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
                                 'file_operations': accumulated_file_ops if accumulated_file_ops else None,
                                 'ai_plan': finalized_plan,
-                                'activity_log': full_response.get('activity_log')
+                                'activity_log': full_response.get('activity_log'),
+                                'web_references': final_web_references
                             })}\n\n"
                             break
                         

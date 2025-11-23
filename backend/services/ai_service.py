@@ -2002,6 +2002,23 @@ class AIService:
         if context.get("web_search_results_mcp") or structured_results:
             cleaned_response = self._correct_price_from_search_results(cleaned_response, context)
         
+        # Extract web search references for frontend linking
+        web_references = []
+        if structured_results:
+            for idx, result in enumerate(structured_results[:10], start=1):  # Limit to 10 references
+                url = result.get("url", "").strip()
+                title = result.get("title", "").strip()
+                if url:
+                    web_references.append({
+                        "index": idx,
+                        "url": url,
+                        "title": title or url
+                    })
+        
+        # Add web references to metadata
+        if web_references:
+            metadata["web_references"] = web_references
+        
         # If response is empty or too short, try fallbacks
         if not cleaned_response.strip() or len(cleaned_response.strip()) < 10:
             # First try web search results
@@ -2164,6 +2181,10 @@ class AIService:
             # Explicitly set to None/null in ASK mode to prevent any confusion
             result["file_operations"] = None
             result["ai_plan"] = None
+        
+        # Add web references if available (for clickable citations)
+        if metadata.get("web_references"):
+            result["web_references"] = metadata["web_references"]
         
         return result
     
