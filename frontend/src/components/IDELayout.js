@@ -3,7 +3,7 @@ import {
   X, ChevronLeft, ChevronRight, Maximize2,
   Code2, Bot, Wifi, WifiOff,
   Folder, File, FilePlus, FolderPlus,
-  ChevronRight as ChevronRightIcon, ChevronDown,
+  ChevronRight as ChevronRightIcon, ChevronDown, ChevronUp,
   Send, User, Loader2, CheckCircle, AlertCircle,
   Infinity, AtSign, Globe, Image, Mic, Square, Plus, Clock, History, MoreVertical,
   RefreshCw, Minimize2, Workflow, Trash2,
@@ -841,6 +841,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [chatMessages, setChatMessages] = useState([]);
   const [messageFeedback, setMessageFeedback] = useState({});
   const [feedbackSubmitting, setFeedbackSubmitting] = useState({});
+  const [collapsedThinking, setCollapsedThinking] = useState(new Set());
   const [chatInput, setChatInput] = useState('');
   const [composerInput, setComposerInput] = useState('');
   const [followUpInput, setFollowUpInput] = useState('');
@@ -7468,6 +7469,36 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                         message.messageId && feedbackSubmitting[message.messageId];
                       const feedbackButtonBase =
                         'flex items-center gap-1 px-2 py-1 rounded-md border text-xs transition-colors';
+                      
+                      // Determine if thinking should be collapsed
+                      const hasThinking = message.thinking && message.role === 'assistant';
+                      const hasContent = normalizedContent && normalizedContent.trim().length > 0;
+                      const messageKey = message.messageId || message.id;
+                      const isExplicitlyExpanded = collapsedThinking.has(`expanded-${messageKey}`);
+                      const isExplicitlyCollapsed = collapsedThinking.has(`collapsed-${messageKey}`);
+                      
+                      // Auto-collapse if there's content and user hasn't manually toggled
+                      // Default to collapsed if there's content, expanded if no content
+                      const shouldBeCollapsed = hasContent 
+                        ? (isExplicitlyCollapsed || (!isExplicitlyExpanded && !isExplicitlyCollapsed))
+                        : false;
+                      
+                      const toggleThinking = () => {
+                        setCollapsedThinking(prev => {
+                          const next = new Set(prev);
+                          if (shouldBeCollapsed) {
+                            // Currently collapsed, expand it
+                            next.delete(`collapsed-${messageKey}`);
+                            next.add(`expanded-${messageKey}`);
+                          } else {
+                            // Currently expanded, collapse it
+                            next.delete(`expanded-${messageKey}`);
+                            next.add(`collapsed-${messageKey}`);
+                          }
+                          return next;
+                        });
+                      };
+                      
                       return (
                         <div
                           className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
@@ -7476,26 +7507,58 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                               : 'bg-dark-700 text-dark-200'
                           }`}
                         >
-                          <div
-                            className="prose prose-invert max-w-none"
-                            dangerouslySetInnerHTML={{
-                              __html: formattedHtml,
-                            }}
-                          />
-                          {message.thinking &&
-                            message.role === 'assistant' && (
-                              <div className="mt-3 rounded-lg border border-primary-800/30 bg-primary-900/10 p-3">
-                                <div className="flex items-center gap-2 mb-2">
+                          {/* Show thinking first */}
+                          {hasThinking && (
+                            <div className="mb-3 rounded-lg border border-primary-800/30 bg-primary-900/10 p-3">
+                              <div className="flex items-center justify-between gap-2 mb-2">
+                                <div className="flex items-center gap-2">
                                   <Sparkles className="w-4 h-4 text-primary-400" />
                                   <span className="text-xs font-semibold text-primary-300 uppercase tracking-wide">
                                     Thinking
                                   </span>
                                 </div>
+                                {hasContent && (
+                                  <button
+                                    type="button"
+                                    onClick={toggleThinking}
+                                    className="flex items-center gap-1 px-2 py-1 text-xs text-primary-300 hover:text-primary-200 hover:bg-primary-800/20 rounded transition-colors"
+                                    title={shouldBeCollapsed ? "Expand thinking" : "Collapse thinking"}
+                                  >
+                                    {shouldBeCollapsed ? (
+                                      <>
+                                        <ChevronDown className="w-3 h-3" />
+                                        <span>Show</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <ChevronUp className="w-3 h-3" />
+                                        <span>Hide</span>
+                                      </>
+                                    )}
+                                  </button>
+                                )}
+                              </div>
+                              {!shouldBeCollapsed && (
                                 <div className="text-xs text-primary-200/80 leading-relaxed whitespace-pre-wrap">
                                   {message.thinking}
                                 </div>
-                              </div>
-                            )}
+                              )}
+                              {shouldBeCollapsed && (
+                                <div className="text-xs text-primary-300/60 italic">
+                                  Thinking process collapsed. Click "Show" to expand.
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {/* Show response content after thinking */}
+                          {hasContent && (
+                            <div
+                              className="prose prose-invert max-w-none"
+                              dangerouslySetInnerHTML={{
+                                __html: formattedHtml,
+                              }}
+                            />
+                          )}
                           {message.plan &&
                             message.role === 'assistant' && (
                               <div className="mt-3">
