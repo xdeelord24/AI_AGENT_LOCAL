@@ -4856,6 +4856,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
         activityLog: response.activity_log || null,
         messageId: response.message_id || null,
         conversationId: response.conversation_id || null,
+        thinking: response.thinking || null,
       };
 
       setChatMessages(prev => {
@@ -7481,6 +7482,20 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                               __html: formattedHtml,
                             }}
                           />
+                          {message.thinking &&
+                            message.role === 'assistant' && (
+                              <div className="mt-3 rounded-lg border border-primary-800/30 bg-primary-900/10 p-3">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <Sparkles className="w-4 h-4 text-primary-400" />
+                                  <span className="text-xs font-semibold text-primary-300 uppercase tracking-wide">
+                                    Thinking
+                                  </span>
+                                </div>
+                                <div className="text-xs text-primary-200/80 leading-relaxed whitespace-pre-wrap">
+                                  {message.thinking}
+                                </div>
+                              </div>
+                            )}
                           {message.plan &&
                             message.role === 'assistant' && (
                               <div className="mt-3">

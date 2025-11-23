@@ -39,6 +39,7 @@ class ChatResponse(BaseModel):
     ai_plan: Optional[Dict[str, Any]] = None
     agent_statuses: Optional[List[Dict[str, Any]]] = None
     activity_log: Optional[List[Dict[str, Any]]] = None
+    thinking: Optional[str] = None
 
 
 class FeedbackRequest(BaseModel):
@@ -171,6 +172,7 @@ async def send_message(
         context_payload: Dict[str, Any] = dict(request.context or {})
         aggregated_messages: List[str] = []
         accumulated_file_ops: List[Dict[str, Any]] = []
+        accumulated_thinking: Optional[str] = None
         final_ai_plan: Optional[Dict[str, Any]] = None
         conversation_id: Optional[str] = None
         last_timestamp: Optional[str] = None
@@ -223,6 +225,14 @@ async def send_message(
             aggregated_messages.append(response.get("content", ""))
             if response.get("message_id"):
                 last_message_id = response["message_id"]
+            
+            # Accumulate thinking if present
+            thinking_content = response.get("thinking")
+            if thinking_content:
+                if accumulated_thinking:
+                    accumulated_thinking = accumulated_thinking + "\n" + thinking_content
+                else:
+                    accumulated_thinking = thinking_content
 
             # CRITICAL: Never accumulate file operations or plans in ASK mode
             # Even if the AI service accidentally includes them, strip them here
@@ -296,7 +306,8 @@ async def send_message(
             file_operations=final_file_ops,
             ai_plan=final_plan,
             agent_statuses=agent_statuses,
-            activity_log=activity_log or None
+            activity_log=activity_log or None,
+            thinking=accumulated_thinking
         )
 
     except Exception as e:

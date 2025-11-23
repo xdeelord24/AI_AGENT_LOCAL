@@ -126,9 +126,9 @@ class AIService:
         except ValueError:
             self.hf_request_timeout = 120
         try:
-            self.hf_max_tokens = int(os.getenv("HF_MAX_TOKENS", "2048"))
+            self.hf_max_tokens = int(os.getenv("HF_MAX_TOKENS", "8192"))
         except ValueError:
-            self.hf_max_tokens = 2048
+            self.hf_max_tokens = 8192
         try:
             self.web_search_max_results = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
         except ValueError:
@@ -256,8 +256,8 @@ class AIService:
             "top_p": read_float("OLLAMA_TOP_P", 0.9),
             # Use larger defaults so long answers are less likely to be cut off.
             # These can still be customized via OLLAMA_NUM_PREDICT / OLLAMA_NUM_CTX.
-            "num_predict": read_int("OLLAMA_NUM_PREDICT", 4096),
-            "num_ctx": read_int("OLLAMA_NUM_CTX", 4096),
+            "num_predict": read_int("OLLAMA_NUM_PREDICT", 8192),
+            "num_ctx": read_int("OLLAMA_NUM_CTX", 8192),
             "num_batch": read_int("OLLAMA_NUM_BATCH", 256),
             "num_thread": default_threads,
         }
@@ -274,13 +274,15 @@ class AIService:
         is_large = any(tag in model_name for tag in ("120b", "110b", "70b", ":70", ":120"))
 
         if is_large:
-            options["num_ctx"] = max(options.get("num_ctx", 2048), 4096)
+            options["num_ctx"] = max(options.get("num_ctx", 4096), 8192)
             options["num_batch"] = max(options.get("num_batch", 256), 512)
             options["num_thread"] = max(
                 options.get("num_thread", 8),
                 self.large_model_thread_count,
             )
-            options["num_predict"] = min(options.get("num_predict", 1024), 768)
+            # For large models, ensure we have enough tokens for complete responses
+            # Don't reduce num_predict - large models need more tokens, not fewer
+            options["num_predict"] = max(options.get("num_predict", 4096), 4096)
 
         return options, keep_alive
 
@@ -1520,6 +1522,10 @@ class AIService:
     ) -> Dict[str, Any]:
         """Process a message and get AI response"""
         
+        # Initialize accumulated thinking at the start - must be initialized before any use
+        # Use explicit None assignment to ensure it's always defined
+        accumulated_thinking: Optional[str] = None
+        
         if self.provider == "ollama":
             if not await self.check_ollama_connection():
                 raise Exception("Ollama is not running. Please start Ollama and install a model.")
@@ -1729,7 +1735,10 @@ class AIService:
         prompt = self._build_prompt(message, context, conversation_history or [])
         
         # Get initial response from configured provider
-        response = await self._call_model(prompt)
+        # accumulated_thinking is already initialized to None at function start
+        response, thinking = await self._call_model(prompt)
+        # Always assign to ensure variable is set (even if thinking is None)
+        accumulated_thinking = thinking if thinking else None
         
         # Handle MCP tool calls if enabled
         if self.is_mcp_enabled():
@@ -1747,8 +1756,13 @@ class AIService:
                     follow_up_prompt = f"{prompt}\n\n{response}\n\n{tool_results_text}\n\nPlease use the tool execution results above to provide a complete answer."
                     
                     # Get follow-up response that incorporates tool results
-                    follow_up_response = await self._call_model(follow_up_prompt)
+                    follow_up_response, follow_up_thinking = await self._call_model(follow_up_prompt)
                     response = follow_up_response  # Use the follow-up response
+                    if follow_up_thinking:
+                        if accumulated_thinking:
+                            accumulated_thinking = (accumulated_thinking + "\n" + follow_up_thinking).strip()
+                        else:
+                            accumulated_thinking = follow_up_thinking
         
         # Check if AI response indicates uncertainty or lack of knowledge
         # If so, try web search as fallback (only if web search mode is not off)
@@ -1791,8 +1805,13 @@ class AIService:
                             follow_up_prompt = f"{prompt}\n\nInitial response:\n{response}\n\n{search_context}Please use the web search results above to provide a better answer. If the search results contain relevant information, use it to answer the question. If not, explain what you found."
                             
                             # Get follow-up response that incorporates web search results
-                            follow_up_response = await self._call_model(follow_up_prompt)
+                            follow_up_response, follow_up_thinking = await self._call_model(follow_up_prompt)
                             response = follow_up_response
+                            if follow_up_thinking:
+                                if accumulated_thinking:
+                                    accumulated_thinking = (accumulated_thinking + "\n" + follow_up_thinking).strip()
+                                else:
+                                    accumulated_thinking = follow_up_thinking
                     else:
                         # Fallback: use direct web search
                         search_results = await self.perform_web_search(search_query)
@@ -1816,8 +1835,13 @@ class AIService:
                             follow_up_prompt = f"{prompt}\n\nInitial response:\n{response}\n\n{search_context}Please use the web search results above to provide a better answer. If the search results contain relevant information, use it to answer the question. If not, explain what you found."
                             
                             # Get follow-up response that incorporates web search results
-                            follow_up_response = await self._call_model(follow_up_prompt)
+                            follow_up_response, follow_up_thinking = await self._call_model(follow_up_prompt)
                             response = follow_up_response
+                            if follow_up_thinking:
+                                if accumulated_thinking:
+                                    accumulated_thinking = (accumulated_thinking + "\n" + follow_up_thinking).strip()
+                                else:
+                                    accumulated_thinking = follow_up_thinking
                 except Exception as error:
                     # If web search fails, continue with original response
                     print(f"Web search fallback failed: {error}")
@@ -1870,7 +1894,10 @@ class AIService:
         
         # Never generate file operations in ASK mode
         # In agent mode, if no file operations were generated but the user asked for changes, force regeneration
-        if self._can_modify_files(context) and not metadata.get("file_operations"):
+        existing_ops = metadata.get("file_operations") or []
+        has_file_ops = existing_ops and len(existing_ops) > 0
+        
+        if self._can_modify_files(context) and not has_file_ops:
             should_force = self._should_force_file_operations(message, cleaned_response, context)
             
             # Additional check: in agent mode, if user message has change intent, be more aggressive
@@ -1889,7 +1916,7 @@ class AIService:
                     assistant_response=cleaned_response
                 )
                 fallback_ops = fallback_metadata.get("file_operations") or []
-                if fallback_ops:
+                if fallback_ops and len(fallback_ops) > 0:
                     print(f"[Agent Mode] Generated {len(fallback_ops)} file operation(s) via fallback")
                     metadata["file_operations"] = fallback_ops
                     if fallback_metadata.get("ai_plan") and not metadata.get("ai_plan"):
@@ -1898,6 +1925,25 @@ class AIService:
                     # cleaned_response is already set above
                 else:
                     print(f"[Agent Mode] Warning: Fallback file operations generation returned no operations")
+                    # If fallback failed but we're in agent mode with change intent, try one more time with a simpler prompt
+                    if self._is_agent_context(context) and self._has_change_intent(message):
+                        print(f"[Agent Mode] Retrying with simplified prompt...")
+                        simplified_prompt = (
+                            f"The user requested: {message[:200]}\n\n"
+                            f"Generate file_operations JSON. If they asked to create a file, include a create_file operation. "
+                            f"If they asked to modify code, include edit_file operations.\n\n"
+                            f"Format: {{\"file_operations\": [{{\"type\": \"create_file\", \"path\": \"filename.ext\", \"content\": \"...\"}}]}}\n\n"
+                            f"Return ONLY valid JSON, no other text."
+                        )
+                        try:
+                            retry_response, _ = await self._call_model(simplified_prompt)
+                            retry_cleaned, retry_metadata = self._parse_response_metadata(retry_response, context)
+                            retry_ops = retry_metadata.get("file_operations") or []
+                            if retry_ops and len(retry_ops) > 0:
+                                print(f"[Agent Mode] Retry successful: Generated {len(retry_ops)} file operation(s)")
+                                metadata["file_operations"] = retry_ops
+                        except Exception as retry_error:
+                            print(f"[Agent Mode] Retry failed: {retry_error}")
         
         # Store conversation
         self.conversation_history[conversation_id] = {
@@ -1906,19 +1952,31 @@ class AIService:
         }
         context.pop("_web_search_attempted", None)
         
+        # Ensure accumulated_thinking is always defined before use
+        # The variable is initialized at the start of the function, so it's always available
+        thinking_value = accumulated_thinking
+        
         result = {
             "content": cleaned_response,
             "conversation_id": conversation_id,
             "timestamp": datetime.now().isoformat(),
             "context_used": context,
-            "message_id": response_message_id
+            "message_id": response_message_id,
+            "thinking": thinking_value
         }
         
         # Only include file_operations and ai_plan if file modifications are allowed
         if self._can_modify_files(context):
             file_operations = metadata.get("file_operations") or []
-            if file_operations:
+            # Only include if we have actual operations (not empty list)
+            if file_operations and len(file_operations) > 0:
                 result["file_operations"] = file_operations
+                print(f"[Agent Mode] Returning {len(file_operations)} file operation(s) in response")
+            else:
+                # In agent mode, if user asked for changes but no file ops, log it
+                if self._is_agent_context(context) and self._has_change_intent(message):
+                    print(f"[Agent Mode] WARNING: User asked for changes but no file operations generated!")
+                result["file_operations"] = None
 
             if metadata.get("ai_plan"):
                 result["ai_plan"] = metadata["ai_plan"]
@@ -2096,6 +2154,7 @@ class AIService:
                 "USER INTENT: The developer explicitly requested a brand-new script.",
                 "- Do NOT continue editing previously opened files or tabs unless the user references them explicitly.",
                 "- Propose a sensible new filename (include directories if helpful) and include a `create_file` operation with the full script.",
+                "- CRITICAL: You MUST include the create_file operation in file_operations - do not just describe the file.",
                 "- Explain briefly why the new file is necessary before presenting the code.",
                 ""
             ])
@@ -2106,11 +2165,14 @@ class AIService:
                 "Always provide practical, working code examples. Be concise but thorough.",
                 "",
                 "ABSOLUTE RULES:",
+                "- 🚨 CRITICAL: If the user asks to create, make, write, or generate ANY file, you MUST include a create_file operation in file_operations. Never just show code in a code block—actually create the file via file_operations.",
+                "- 🚨 CRITICAL: If the user asks to modify, update, change, or fix ANY code, you MUST include edit_file operations in file_operations. Never just show code—include the actual file_operations.",
                 "- If the user mentions files via @filename or provides a path, open those files (content is in CONTEXT) and edit them via file_operations.",
                 "- Do NOT reply with generic statements like 'we need to inspect the file' or 'we need to access the file'—assume the IDE has already provided the relevant file contents in CONTEXT and operate directly on that content.",
                 "- On follow-up requests like \"change it\" or \"update that code\", assume the target file is the current active_file or default_target_file from context and still produce concrete file_operations.",
                 "- Do not stop after describing a plan; always include the updated file content in file_operations so the IDE can apply the change.",
                 "- Keep natural-language responses short; rely on file_operations to convey the actual modifications.",
+                "- NEVER respond with just code blocks when the user asks to create or modify files—ALWAYS include file_operations.",
                 "- When web_search_mode is not 'off', do NOT reply with generic suggestions to visit websites; instead, read the provided web_search_results and answer the user's question as concretely as possible using those results.",
                 '- When web_search_mode is not "off", you HAVE internet access through the web_search tool. Statements like "I cannot browse the internet" or "I cannot access external information" are FALSE. You DO have access to web_search_results and can use the web_search tool anytime; never claim that you lack browsing or external access.',
                 "- 🚫 NEVER write code to access the internet (requests.get(), urllib, httpx, etc.). If internet information is needed, use the web_search MCP tool instead.",
@@ -2871,14 +2933,24 @@ class AIService:
         file_creation_patterns = [
             "create a file",
             "create file",
+            "create files",
             "new file",
+            "new files",
             "make a file",
+            "make files",
             "write a file",
+            "write files",
             "add a file",
+            "add files",
             "generate a file",
+            "generate files",
             "create the",
             "make the",
             "write the",
+            "create",
+            "make",
+            "write",
+            "add",
         ]
         has_file_creation_request = any(pattern in message_lower for pattern in file_creation_patterns)
         
@@ -2886,25 +2958,29 @@ class AIService:
         has_code_block = "```" in response_lower
         mentions_file_section = "file operation" in combined or "file_operations" in combined
         
-        # In agent mode, be more aggressive about forcing file operations
-        # If user explicitly asks for file creation/modification, always force
+        # In agent mode, be VERY aggressive about forcing file operations
+        # If user explicitly asks for file creation/modification, ALWAYS force
         if has_file_creation_request:
+            print(f"[Agent Mode] Detected file creation request, forcing file operations")
             return True
         
         # If user has change intent and response has code blocks, likely needs file operations
         if user_change_intent and has_code_block:
+            print(f"[Agent Mode] User has change intent + code blocks, forcing file operations")
             return True
         
         # If response mentions file operations but none were extracted, force regeneration
         if mentions_file_section:
+            print(f"[Agent Mode] Response mentions file operations, forcing regeneration")
             return True
         
         # If analysis only, don't force
         if analysis_only:
             return False
         
-        # If user has change intent, be more likely to force (especially in agent mode)
+        # In agent mode, if user has change intent, ALWAYS force (be very aggressive)
         if user_change_intent:
+            print(f"[Agent Mode] User has change intent in agent mode, forcing file operations")
             return True
         
         return False
@@ -2972,16 +3048,18 @@ class AIService:
         fallback_prompt = "\n".join(prompt_lines)
         
         try:
-            fallback_response = await self._call_model(fallback_prompt)
+            fallback_response, _ = await self._call_model(fallback_prompt)
         except Exception as error:
             print(f"Failed to regenerate file operations metadata: {error}")
             return "", {"file_operations": [], "ai_plan": None}
         
         return self._parse_response_metadata(fallback_response, context)
     
-    async def _call_model(self, prompt: str) -> str:
+    async def _call_model(self, prompt: str) -> Tuple[str, Optional[str]]:
+        """Call the AI model, returns (response, thinking) tuple"""
         if self.provider == "huggingface":
-            return await self._call_huggingface(prompt)
+            response = await self._call_huggingface(prompt)
+            return response, None  # Hugging Face doesn't support thinking yet
         return await self._call_ollama(prompt)
 
     async def _call_huggingface(self, prompt: str) -> str:
@@ -3036,13 +3114,13 @@ class AIService:
         except Exception as error:
             raise Exception(f"Hugging Face API error: {error}") from error
 
-    async def _call_ollama(self, prompt: str) -> str:
-        """Make API call to Ollama"""
+    async def _call_ollama(self, prompt: str) -> Tuple[str, Optional[str]]:
+        """Make API call to Ollama, returns (response, thinking) tuple"""
         generation_options, keep_alive = self._build_generation_options_for_model()
         payload = {
             "model": self.current_model,
             "prompt": prompt,
-            "stream": False,
+            "stream": True,  # Enable streaming to capture thinking
             "options": generation_options
         }
         if keep_alive:
@@ -3059,28 +3137,73 @@ class AIService:
                     timeout=aiohttp.ClientTimeout(total=self.request_timeout)
                 ) as response:
                     if response.status == 200:
-                        # Check content-type to handle different response formats
-                        content_type = response.headers.get('Content-Type', '').lower()
+                        # Stream the response to capture thinking and response separately
+                        response_parts = []
+                        thinking_parts = []
+                        buffer = ""
+                        done = False
                         
-                        # Read response as text first to handle text/plain content-type issue
-                        # Some models return JSON data with text/plain content-type
-                        response_text = await response.text()
+                        async for chunk in response.content.iter_chunked(8192):
+                            if not chunk or done:
+                                break
+                            buffer += chunk.decode('utf-8', errors='ignore')
+                            
+                            # Process complete lines (Ollama sends newline-delimited JSON)
+                            while '\n' in buffer:
+                                line, buffer = buffer.split('\n', 1)
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                
+                                try:
+                                    # Parse each JSON line from the stream
+                                    data = json.loads(line)
+                                    
+                                    # Capture thinking if present
+                                    if "thinking" in data and data["thinking"]:
+                                        thinking_parts.append(data["thinking"])
+                                    
+                                    # Capture response if present
+                                    if "response" in data and data["response"]:
+                                        response_parts.append(data["response"])
+                                    
+                                    # Check if done
+                                    if data.get("done", False):
+                                        done = True
+                                        break
+                                except json.JSONDecodeError:
+                                    # Skip invalid JSON lines
+                                    continue
+                                except Exception as e:
+                                    logger.debug(f"Error parsing stream line: {e}")
+                                    continue
                         
-                        # Try to parse as JSON first (even if content-type is text/plain)
-                        # Many Ollama-compatible APIs return JSON with wrong content-type
-                        try:
-                            data = json.loads(response_text)
-                            if isinstance(data, dict):
-                                # Standard Ollama format has 'response' field
-                                return data.get("response", response_text)
-                            elif isinstance(data, str):
-                                return data
-                            else:
-                                return str(data)
-                        except (json.JSONDecodeError, ValueError) as json_error:
-                            # If it's not JSON, return as plain text
-                            logger.debug(f"Response is not JSON (content-type: {content_type}), returning as text. Error: {json_error}")
-                            return response_text
+                        # Combine all parts
+                        full_response = "".join(response_parts)
+                        full_thinking = "".join(thinking_parts) if thinking_parts else None
+                        
+                        # Fallback: if streaming didn't work, try non-streaming
+                        if not full_response:
+                            # Retry with non-streaming
+                            payload["stream"] = False
+                            async with session.post(
+                                f"{url}/api/generate",
+                                json=payload,
+                                timeout=aiohttp.ClientTimeout(total=self.request_timeout)
+                            ) as fallback_response:
+                                if fallback_response.status == 200:
+                                    response_text = await fallback_response.text()
+                                    try:
+                                        data = json.loads(response_text)
+                                        if isinstance(data, dict):
+                                            full_response = data.get("response", response_text)
+                                            full_thinking = data.get("thinking")
+                                        else:
+                                            full_response = str(data)
+                                    except (json.JSONDecodeError, ValueError):
+                                        full_response = response_text
+                        
+                        return full_response or "", full_thinking
                     else:
                         error_text = await response.text()
                         logger.error(f"Ollama API error: {response.status} - Model: {self.current_model}, URL: {url}, Error: {error_text}")
