@@ -13,7 +13,7 @@ import uuid
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-MAX_PLAN_AUTOCONTINUE_ROUNDS = 3
+MAX_PLAN_AUTOCONTINUE_ROUNDS = 10  # Increased to handle plans with many tasks
 COMPLETED_TASK_STATUSES = {"completed", "complete", "done"}
 FEEDBACK_LOG_PATH = Path("data/feedback/feedback_log.jsonl")
 
@@ -342,82 +342,242 @@ async def send_message_stream(
                         history.append(msg.dict())
             
             context_payload: Dict[str, Any] = dict(request.context or {})
-            # Build prompt using the same method as process_message
-            prompt = ai_service._build_prompt(request.message, context_payload, history)
             
-            # Stream from Ollama directly
+            # Detect ASK mode - never auto-continue in ASK mode
+            mode_value = (context_payload.get("mode") or "").lower()
+            chat_mode_value = (context_payload.get("chat_mode") or "").lower()
+            is_ask_mode = (mode_value == "ask" or chat_mode_value == "ask") and not context_payload.get("composer_mode")
+            
+            working_history = list(history)
+            current_message = request.message
+            auto_continue_rounds = 0
             accumulated_thinking = ""
-            accumulated_response = ""
-            conversation_id = str(uuid.uuid4())
-            message_id = str(uuid.uuid4())
+            accumulated_responses = []  # Accumulate responses from all rounds
+            conversation_id = None
+            message_id = None
+            final_ai_plan = None
+            accumulated_file_ops = []
             
-            if ai_service.provider == "ollama":
-                async for chunk in ai_service._stream_ollama(prompt):
-                    if chunk.get("type") == "thinking":
-                        accumulated_thinking += chunk.get("content", "")
-                        yield f"data: {json.dumps({'type': 'thinking', 'content': chunk.get('content', '')})}\n\n"
-                    elif chunk.get("type") == "response":
-                        accumulated_response += chunk.get("content", "")
-                        yield f"data: {json.dumps({'type': 'response', 'content': chunk.get('content', '')})}\n\n"
-                    elif chunk.get("type") == "done":
-                        # After streaming, process the full message flow to get file operations, plans, etc.
-                        # Call process_message to handle tool calls, file operations extraction, etc.
-                        try:
-                            full_response = await ai_service.process_message(
-                                request.message,
-                                context_payload,
-                                history
-                            )
-                            # Send final response with accumulated content and full metadata
-                            yield f"data: {json.dumps({
-                                'type': 'done', 
-                                'thinking': full_response.get('thinking') or accumulated_thinking or None, 
-                                'response': full_response.get('content') or accumulated_response,
-                                'message_id': full_response.get('message_id') or message_id, 
-                                'conversation_id': full_response.get('conversation_id') or conversation_id, 
-                                'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
-                                'file_operations': full_response.get('file_operations'),
-                                'ai_plan': full_response.get('ai_plan'),
-                                'activity_log': full_response.get('activity_log')
-                            })}\n\n"
-                        except Exception as process_error:
-                            # If process_message fails, at least send what we streamed
-                            logger.exception("Error processing full message flow")
+            while True:
+                # Build prompt for current message
+                prompt = ai_service._build_prompt(current_message, context_payload, working_history)
+                
+                # Stream from Ollama directly
+                accumulated_thinking_round = ""
+                accumulated_response_round = ""
+                
+                if ai_service.provider == "ollama":
+                    async for chunk in ai_service._stream_ollama(prompt):
+                        if chunk.get("type") == "thinking":
+                            thinking_chunk = chunk.get("content", "")
+                            accumulated_thinking_round += thinking_chunk
+                            accumulated_thinking += thinking_chunk
+                            yield f"data: {json.dumps({'type': 'thinking', 'content': thinking_chunk, 'round': auto_continue_rounds + 1})}\n\n"
+                        elif chunk.get("type") == "response":
+                            response_chunk = chunk.get("content", "")
+                            accumulated_response_round += response_chunk
+                            yield f"data: {json.dumps({'type': 'response', 'content': response_chunk, 'round': auto_continue_rounds + 1})}\n\n"
+                        elif chunk.get("type") == "done":
+                            break
+                        elif chunk.get("type") == "error":
+                            yield f"data: {json.dumps({'type': 'error', 'content': chunk.get('content', 'Unknown error')})}\n\n"
+                            return
+                    
+                    # After streaming, process the full message flow to get file operations, plans, etc.
+                    try:
+                        full_response = await ai_service.process_message(
+                            current_message,
+                            context_payload,
+                            working_history
+                        )
+                        
+                        if not conversation_id:
+                            conversation_id = full_response.get("conversation_id") or str(uuid.uuid4())
+                        if not message_id:
+                            message_id = full_response.get("message_id") or str(uuid.uuid4())
+                        
+                        # Accumulate thinking and file operations
+                        if full_response.get("thinking"):
+                            if accumulated_thinking:
+                                accumulated_thinking = accumulated_thinking + "\n" + full_response.get("thinking")
+                            else:
+                                accumulated_thinking = full_response.get("thinking")
+                        
+                        if not is_ask_mode:
+                            if full_response.get("file_operations"):
+                                accumulated_file_ops.extend(full_response.get("file_operations"))
+                            if full_response.get("ai_plan"):
+                                final_ai_plan = full_response.get("ai_plan")
+                        
+                        # Update working history
+                        working_history.append({"role": "user", "content": current_message})
+                        working_history.append({"role": "assistant", "content": full_response.get("content", "")})
+                        
+                        # Accumulate response from this round
+                        round_response = full_response.get('content', '')
+                        if round_response:
+                            accumulated_responses.append(round_response)
+                        
+                        # Check if we should continue
+                        if is_ask_mode:
+                            # Send final response and break
+                            combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                             yield f"data: {json.dumps({
                                 'type': 'done', 
                                 'thinking': accumulated_thinking or None, 
-                                'response': accumulated_response,
+                                'response': combined_response,
                                 'message_id': message_id, 
                                 'conversation_id': conversation_id, 
-                                'timestamp': datetime.now().isoformat()
+                                'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
+                                'file_operations': None if is_ask_mode else (accumulated_file_ops if accumulated_file_ops else None),
+                                'ai_plan': None if is_ask_mode else final_ai_plan,
+                                'activity_log': full_response.get('activity_log')
                             })}\n\n"
+                            break
+                        
+                        ai_plan = full_response.get("ai_plan")
+                        if not _plan_has_pending_tasks(ai_plan):
+                            # All tasks completed, send final response
+                            combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
+                            yield f"data: {json.dumps({
+                                'type': 'done', 
+                                'thinking': accumulated_thinking or None, 
+                                'response': combined_response,
+                                'message_id': message_id, 
+                                'conversation_id': conversation_id, 
+                                'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
+                                'file_operations': accumulated_file_ops if accumulated_file_ops else None,
+                                'ai_plan': final_ai_plan,
+                                'activity_log': full_response.get('activity_log')
+                            })}\n\n"
+                            break
+                        
+                        if auto_continue_rounds >= MAX_PLAN_AUTOCONTINUE_ROUNDS:
+                            # Max rounds reached, send final response with warning
+                            combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
+                            yield f"data: {json.dumps({
+                                'type': 'done', 
+                                'thinking': accumulated_thinking or None, 
+                                'response': combined_response + "\n\nAuto-continue stopped after maximum retries. Some tasks may still be pending.",
+                                'message_id': message_id, 
+                                'conversation_id': conversation_id, 
+                                'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
+                                'file_operations': accumulated_file_ops if accumulated_file_ops else None,
+                                'ai_plan': final_ai_plan,
+                                'activity_log': full_response.get('activity_log')
+                            })}\n\n"
+                            break
+                        
+                        # Continue with next round
+                        auto_continue_rounds += 1
+                        current_message = _build_auto_continue_prompt(ai_plan or {})
+                        # Update context from response
+                        if full_response.get("context_used"):
+                            context_payload = dict(full_response.get("context_used"))
+                        
+                        # Send a continuation marker
+                        yield f"data: {json.dumps({'type': 'continue', 'round': auto_continue_rounds + 1, 'message': 'Continuing with remaining tasks...'})}\n\n"
+                        
+                    except Exception as process_error:
+                        logger.exception("Error processing full message flow")
+                        yield f"data: {json.dumps({
+                            'type': 'done', 
+                            'thinking': accumulated_thinking or None, 
+                            'response': accumulated_response_round,
+                            'message_id': message_id or str(uuid.uuid4()), 
+                            'conversation_id': conversation_id or str(uuid.uuid4()), 
+                            'timestamp': datetime.now().isoformat()
+                        })}\n\n"
                         break
-                    elif chunk.get("type") == "error":
-                        yield f"data: {json.dumps({'type': 'error', 'content': chunk.get('content', 'Unknown error')})}\n\n"
+                else:
+                    # For non-Ollama providers, fall back to regular processing with auto-continue
+                    response = await ai_service.process_message(
+                        current_message,
+                        context_payload,
+                        working_history
+                    )
+                    
+                    if not conversation_id:
+                        conversation_id = response.get("conversation_id") or str(uuid.uuid4())
+                    if not message_id:
+                        message_id = response.get("message_id") or str(uuid.uuid4())
+                    
+                    if response.get("thinking"):
+                        if accumulated_thinking:
+                            accumulated_thinking = accumulated_thinking + "\n" + response.get("thinking")
+                        else:
+                            accumulated_thinking = response.get("thinking")
+                        yield f"data: {json.dumps({'type': 'thinking', 'content': response['thinking'], 'round': auto_continue_rounds + 1})}\n\n"
+                    
+                    yield f"data: {json.dumps({'type': 'response', 'content': response.get('content', ''), 'round': auto_continue_rounds + 1})}\n\n"
+                    
+                    if not is_ask_mode:
+                        if response.get("file_operations"):
+                            accumulated_file_ops.extend(response.get("file_operations"))
+                        if response.get("ai_plan"):
+                            final_ai_plan = response.get("ai_plan")
+                    
+                    # Accumulate response from this round
+                    round_response = response.get('content', '')
+                    if round_response:
+                        accumulated_responses.append(round_response)
+                    
+                    working_history.append({"role": "user", "content": current_message})
+                    working_history.append({"role": "assistant", "content": round_response})
+                    
+                    if is_ask_mode:
+                        combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
+                        yield f"data: {json.dumps({
+                            'type': 'done', 
+                            'thinking': accumulated_thinking or None, 
+                            'response': combined_response,
+                            'message_id': message_id, 
+                            'conversation_id': conversation_id, 
+                            'timestamp': response.get('timestamp') or datetime.now().isoformat(),
+                            'file_operations': None,
+                            'ai_plan': None,
+                            'activity_log': response.get('activity_log')
+                        })}\n\n"
                         break
-            else:
-                # For non-Ollama providers, fall back to regular processing
-                response = await ai_service.process_message(
-                    request.message,
-                    context_payload,
-                    history
-                )
-                conversation_id = response.get("conversation_id") or str(uuid.uuid4())
-                message_id = response.get("message_id") or str(uuid.uuid4())
-                if response.get("thinking"):
-                    yield f"data: {json.dumps({'type': 'thinking', 'content': response['thinking']})}\n\n"
-                yield f"data: {json.dumps({'type': 'response', 'content': response.get('content', '')})}\n\n"
-                yield f"data: {json.dumps({
-                    'type': 'done', 
-                    'thinking': response.get('thinking'), 
-                    'response': response.get('content', ''),
-                    'message_id': message_id, 
-                    'conversation_id': conversation_id, 
-                    'timestamp': response.get('timestamp') or datetime.now().isoformat(),
-                    'file_operations': response.get('file_operations'),
-                    'ai_plan': response.get('ai_plan'),
-                    'activity_log': response.get('activity_log')
-                })}\n\n"
+                    
+                    ai_plan = response.get("ai_plan")
+                    if not _plan_has_pending_tasks(ai_plan):
+                        combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
+                        yield f"data: {json.dumps({
+                            'type': 'done', 
+                            'thinking': accumulated_thinking or None, 
+                            'response': combined_response,
+                            'message_id': message_id, 
+                            'conversation_id': conversation_id, 
+                            'timestamp': response.get('timestamp') or datetime.now().isoformat(),
+                            'file_operations': accumulated_file_ops if accumulated_file_ops else None,
+                            'ai_plan': final_ai_plan,
+                            'activity_log': response.get('activity_log')
+                        })}\n\n"
+                        break
+                    
+                    if auto_continue_rounds >= MAX_PLAN_AUTOCONTINUE_ROUNDS:
+                        combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
+                        yield f"data: {json.dumps({
+                            'type': 'done', 
+                            'thinking': accumulated_thinking or None, 
+                            'response': combined_response + "\n\nAuto-continue stopped after maximum retries. Some tasks may still be pending.",
+                            'message_id': message_id, 
+                            'conversation_id': conversation_id, 
+                            'timestamp': response.get('timestamp') or datetime.now().isoformat(),
+                            'file_operations': accumulated_file_ops if accumulated_file_ops else None,
+                            'ai_plan': final_ai_plan,
+                            'activity_log': response.get('activity_log')
+                        })}\n\n"
+                        break
+                    
+                    auto_continue_rounds += 1
+                    current_message = _build_auto_continue_prompt(ai_plan or {})
+                    if response.get("context_used"):
+                        context_payload = dict(response.get("context_used"))
+                    
+                    yield f"data: {json.dumps({'type': 'continue', 'round': auto_continue_rounds + 1, 'message': 'Continuing with remaining tasks...'})}\n\n"
+                    
         except Exception as e:
             logger.exception("Error in streaming chat")
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"

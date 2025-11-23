@@ -878,3 +878,37 @@ export const initializeCopyCodeListeners = () => {
   document.addEventListener('click', handleCopyButtonClick);
   window[COPY_HANDLER_STORAGE_KEY] = handleCopyButtonClick;
 };
+
+export const highlightCodeBlocks = (container = document) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  
+  // Wait for Prism to load if not available yet
+  if (!window.Prism) {
+    // Try again after a short delay
+    setTimeout(() => highlightCodeBlocks(container), 100);
+    return;
+  }
+  
+  try {
+    const targetContainer = container === document ? document.body : container;
+    const codeBlocks = targetContainer.querySelectorAll('pre code[class*="language-"]');
+    codeBlocks.forEach((block) => {
+      // Only highlight if not already highlighted and not language-none
+      const hasLanguage = Array.from(block.classList).some(cls => 
+        cls.startsWith('language-') && cls !== 'language-none'
+      );
+      if (hasLanguage && !block.hasAttribute('data-prism-processed')) {
+        try {
+          window.Prism.highlightElement(block);
+        } catch (err) {
+          // If highlighting fails for a specific block, continue with others
+          console.warn('Failed to highlight code block:', err);
+        }
+      }
+    });
+  } catch (error) {
+    console.warn('Failed to highlight code blocks:', error);
+  }
+};

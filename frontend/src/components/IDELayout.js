@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
-import { formatMessageContent, initializeCopyCodeListeners, copyToClipboard } from '../utils/messageFormatter';
+import { formatMessageContent, initializeCopyCodeListeners, copyToClipboard, highlightCodeBlocks } from '../utils/messageFormatter';
 import { detectNewScriptIntent } from '../utils/intentDetection';
 import toast from 'react-hot-toast';
 
@@ -934,6 +934,16 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   useEffect(() => {
     initializeCopyCodeListeners();
   }, []);
+
+  // Highlight code blocks when messages change
+  useEffect(() => {
+    if (chatMessages.length > 0) {
+      // Use setTimeout to ensure DOM is updated
+      setTimeout(() => {
+        highlightCodeBlocks();
+      }, 100);
+    }
+  }, [chatMessages]);
 
   // Persist terminal panel visibility to localStorage
   useEffect(() => {
@@ -4832,6 +4842,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
       let streamingThinking = "";
       let streamingResponse = "";
       let assistantMessageId = Date.now() + 1;
+      let currentRound = 1;
       
       // Create initial assistant message for streaming
       const assistantMessage = {
@@ -4872,6 +4883,18 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                   ? { ...msg, content: normalizedContent, rawContent: streamingResponse }
                   : msg
               ));
+            } else if (chunk.type === 'continue') {
+              // AI is continuing with remaining tasks - append continuation message
+              currentRound = chunk.round || currentRound + 1;
+              const continueMsg = `\n\n---\n\n**Continuing with remaining tasks (round ${currentRound})...**\n\n`;
+              streamingResponse += continueMsg;
+              const normalizedContent = normalizeChatInput(streamingResponse);
+              setChatMessages(prev => prev.map(msg => 
+                msg.id === assistantMessageId
+                  ? { ...msg, content: normalizedContent, rawContent: streamingResponse }
+                  : msg
+              ));
+              // Note: streamingResponse continues to accumulate across rounds
             } else if (chunk.type === 'done') {
               // Finalize the message
               const finalThinking = chunk.thinking || streamingThinking;
@@ -7679,6 +7702,14 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                               className="prose prose-invert max-w-none"
                               dangerouslySetInnerHTML={{
                                 __html: formattedHtml,
+                              }}
+                              ref={(el) => {
+                                if (el) {
+                                  // Highlight code blocks after render
+                                  setTimeout(() => {
+                                    highlightCodeBlocks(el);
+                                  }, 0);
+                                }
                               }}
                             />
                           )}

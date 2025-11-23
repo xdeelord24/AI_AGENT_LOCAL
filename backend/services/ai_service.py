@@ -1743,6 +1743,45 @@ class AIService:
         # Handle MCP tool calls if enabled
         if self.is_mcp_enabled():
             tool_calls = self.mcp_client.parse_tool_calls_from_response(response)
+            
+            # Check if user asked about directories but AI didn't use tools (just described what it would do)
+            message_lower = (message or "").lower()
+            response_lower = (response or "").lower()
+            directory_keywords = ["scan", "directory", "list files", "examine", "project structure", "show directory", "what files", "directory contents", "understand the project"]
+            directory_intent = any(keyword in message_lower for keyword in directory_keywords)
+            just_describing = any(phrase in response_lower for phrase in [
+                "i'll scan", "i will scan", "let me scan", "i'll examine", "i will examine", 
+                "let me examine", "i'll check", "i will check", "let me check", "i'll look",
+                "i will look", "let me look", "i'll list", "i will list"
+            ])
+            
+            # If user wants directory info but AI just described action without tool call, auto-trigger tool
+            if directory_intent and just_describing and not tool_calls:
+                logger.info("Detected directory scan request but AI only described action - auto-triggering list_directory tool")
+                # Determine path from message or use current directory
+                path = "."
+                if "path" in message_lower or "/" in message or "\\" in message:
+                    # Try to extract path from message (simple extraction)
+                    import re
+                    path_match = re.search(r'["\']([^"\']+[/\\][^"\']+)["\']', message)
+                    if path_match:
+                        path = path_match.group(1)
+                    else:
+                        # Look for path-like strings
+                        words = message.split()
+                        for word in words:
+                            if "/" in word or "\\" in word:
+                                path = word.strip('"\'')
+                                break
+                
+                # Auto-trigger list_directory tool
+                auto_tool_call = {
+                    "name": "list_directory",
+                    "arguments": {"path": path}
+                }
+                tool_calls = [auto_tool_call]
+                logger.info(f"Auto-triggered list_directory tool with path: {path}")
+            
             if tool_calls:
                 # Execute tool calls
                 allow_write = self._can_modify_files(context)
@@ -2063,6 +2102,27 @@ class AIService:
                     "- Searching code: use grep_code tool",
                     "- Searching the web: use web_search tool (THIS GIVES YOU INTERNET ACCESS - DO NOT WRITE CODE TO SCRAPE)",
                     "- Executing commands: use execute_command tool",
+                    "- Listing directory contents: use list_directory tool",
+                    "- Getting directory tree structure: use get_file_tree tool",
+                    "",
+                    "🚨🚨🚨 CRITICAL DIRECTORY SCANNING RULE 🚨🚨🚨",
+                    "",
+                    "When the user asks to 'scan the directory', 'list files', 'show directory structure', 'examine the project', 'understand the project', or ANY similar request:",
+                    "",
+                    "❌ FORBIDDEN RESPONSES (DO NOT DO THIS):",
+                    "- 'I'll scan the directory...'",
+                    "- 'Let me examine the files...'",
+                    "- 'I'll check the project structure...'",
+                    "- 'I'll look at the directory...'",
+                    "- ANY response that describes what you WILL do instead of actually doing it",
+                    "",
+                    "✅ REQUIRED ACTION (YOU MUST DO THIS):",
+                    "- IMMEDIATELY use a tool call to get the actual directory data",
+                    "- Example: <tool_call name=\"list_directory\" args='{\"path\": \".\"}' />",
+                    "- Or: <tool_call name=\"get_file_tree\" args='{\"path\": \".\", \"max_depth\": 6}' />",
+                    "- Then provide the ACTUAL directory listing or structure from the tool results",
+                    "",
+                    "The tool call MUST appear in your FIRST response. Do not describe - ACTUALLY DO IT.",
                     "",
                     "Use the appropriate MCP tools instead of just describing what should be done.",
                     "For any question requiring current information, real-time data, or internet content, use the web_search tool.",
@@ -2104,6 +2164,9 @@ class AIService:
             "- Avoid phrases like 'Let me think...', 'I'll analyze...', 'Here's my plan...', 'In summary...', etc.",
             "- If you need to show your thinking process, put it in the `ai_plan` metadata (for agent/plan modes only).",
             "",
+            "🚨 CRITICAL: NEVER say 'I'll scan...', 'I'll examine...', 'I'll check...' - ACTUALLY DO IT by using tools immediately.",
+            "If the user asks about directories, files, or project structure, use list_directory or get_file_tree tool RIGHT AWAY.",
+            "",
             "MARKDOWN FORMATTING RULES:",
             "- Always answer using GitHub-flavored Markdown.",
             "- Use '##' and '###' headings (never top-level '#' headings).",
@@ -2128,6 +2191,10 @@ class AIService:
                 "- Your response text should contain only the actual answer, code, explanations, or results—not your internal reasoning process.",
                 "- Break large requests into 3–6 concrete subtasks that flow through this lifecycle: gather information ➜ plan ➜ implement ➜ verify ➜ report.",
                 "- Always begin with at least one information-gathering task (inspect mentioned files, open files, file_tree_structure, or provided web_search_results when browsing is enabled) and actually perform it before you present the plan.",
+                "- 🚨 CRITICAL: When gathering information about directories or project structure, YOU MUST USE the list_directory or get_file_tree MCP tools.",
+                "- 🚨 FORBIDDEN: Never respond with 'I'll scan the directory...' or 'Let me examine...' - you MUST include the tool call in your response.",
+                "- If the user asks to scan, list, or examine a directory, your FIRST response MUST include: <tool_call name=\"list_directory\" args='{\"path\": \".\"}' /> or <tool_call name=\"get_file_tree\" args='{\"path\": \".\", \"max_depth\": 6}' />",
+                "- Do not describe what you will do - the tool call must be in your response so the system can execute it.",
                 "- Maintain a TODO list (max 5 items) where every task has an id, title, and status (`pending`, `in_progress`, or `completed`). Update statuses as you make progress so the user can monitor it.",
                 "- Include this plan in the `ai_plan` metadata described below even if no file changes are required.",
                 "- After planning, proactively execute the tasks: gather the requested information, produce concrete file edits (via file_operations), or clearly state which files/commands you ran.",
@@ -2406,6 +2473,21 @@ class AIService:
         # Add current message
         prompt_parts.append(f"USER REQUEST: {message}")
         prompt_parts.append("")
+        
+        # Add final reminder about directory scanning if the message seems to request it
+        message_lower = (message or "").lower()
+        directory_scan_keywords = ["scan", "directory", "list files", "examine", "project structure", "show directory", "what files", "directory contents"]
+        if any(keyword in message_lower for keyword in directory_scan_keywords):
+            prompt_parts.extend([
+                "",
+                "=" * 80,
+                "🚨 FINAL REMINDER: The user is asking about directories/files.",
+                "🚨 YOU MUST use list_directory or get_file_tree tool - DO NOT just say 'I'll scan...'",
+                "🚨 Include the tool call in your response NOW: <tool_call name=\"list_directory\" args='{\"path\": \".\"}' />",
+                "=" * 80,
+                "",
+            ])
+        
         prompt_parts.append("ASSISTANT RESPONSE:")
         
         return "\n".join(prompt_parts)
