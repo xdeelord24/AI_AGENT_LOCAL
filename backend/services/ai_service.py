@@ -1428,13 +1428,8 @@ class AIService:
         return result
     
     def _correct_price_from_search_results(self, response: str, context: Dict[str, Any]) -> str:
-        """Extract correct price from search results if AI used outdated price"""
+        """Extract correct information from search results if AI used outdated data"""
         import re
-        
-        # Check if response contains outdated BTC price ($23,000-$24,000 range)
-        outdated_price_pattern = r'\$23[,.]?\d{3}[,.]?\d*'
-        if not re.search(outdated_price_pattern, response):
-            return response  # No outdated price found, return as-is
         
         # Get search results
         search_results_text = context.get("web_search_results_mcp", "")
@@ -1450,36 +1445,65 @@ class AIService:
         if not search_results_text:
             return response  # No search results available
         
-        # Extract all prices from search results (look for $XX,XXX.XX or $XX,XXX format)
-        price_pattern = r'\$[\d,]+\.?\d*'
-        prices_found = re.findall(price_pattern, search_results_text)
+        # Check for outdated BTC/crypto prices ($23,000-$24,000 range - common outdated training data)
+        outdated_price_pattern = r'\$23[,.]?\d{3}[,.]?\d*'
+        if re.search(outdated_price_pattern, response):
+            # Extract all prices from search results
+            price_pattern = r'\$[\d,]+\.?\d*'
+            prices_found = re.findall(price_pattern, search_results_text)
+            
+            if prices_found:
+                # Convert to numbers and find the highest (most likely current price)
+                def parse_price(price_str):
+                    try:
+                        return float(price_str.replace('$', '').replace(',', ''))
+                    except:
+                        return 0
+                
+                prices = [parse_price(p) for p in prices_found]
+                valid_prices = [p for p in prices if 1000 < p < 200000]  # Reasonable BTC price range
+                if valid_prices:
+                    # Use the highest price found (most likely current)
+                    correct_price = max(valid_prices)
+                    correct_price_str = f"${correct_price:,.2f}" if correct_price % 1 else f"${int(correct_price):,}"
+                    
+                    # Replace outdated price with correct price
+                    response = re.sub(
+                        outdated_price_pattern,
+                        correct_price_str,
+                        response,
+                        count=1  # Replace only first occurrence
+                    )
         
-        if not prices_found:
-            return response  # No prices found in search results
+        # Check for other common outdated patterns when web search results are available
+        # If the response mentions "I don't have access" or "I cannot" but we have search results, 
+        # that's a sign the AI ignored the search results
+        if re.search(r"(?:i (?:don'?t|do not) have|i cannot|cannot access|no access to|unable to access).*(?:internet|web|current|latest|real.?time)", response, re.IGNORECASE):
+            # The AI claimed it doesn't have access, but we provided search results
+            # Try to extract key information from search results and prepend it
+            if len(search_results_text) > 100:
+                # Extract first meaningful sentence from search results
+                sentences = re.split(r'[.!?]+', search_results_text[:500])
+                if sentences:
+                    first_info = sentences[0].strip()
+                    if len(first_info) > 20:
+                        # Prepend a note that we're using search results
+                        response = f"Based on current web search results: {first_info}\n\n{response}"
         
-        # Convert to numbers and find the highest (most likely current price)
-        def parse_price(price_str):
-            try:
-                return float(price_str.replace('$', '').replace(',', ''))
-            except:
-                return 0
+        # Check if response contains phrases indicating the AI didn't use search results
+        # when search results are clearly available
+        ignore_patterns = [
+            r"based on my (?:knowledge|training|data)",
+            r"as of my (?:last|most recent) (?:update|knowledge)",
+            r"my training (?:data|knowledge)",
+            r"i (?:was|am) (?:trained|trained on)",
+        ]
         
-        prices = [parse_price(p) for p in prices_found]
-        valid_prices = [p for p in prices if 1000 < p < 200000]  # Reasonable BTC price range
-        if not valid_prices:
-            return response
-        
-        # Use the highest price found (most likely current)
-        correct_price = max(valid_prices)
-        correct_price_str = f"${correct_price:,.2f}" if correct_price % 1 else f"${int(correct_price):,}"
-        
-        # Replace outdated price with correct price
-        response = re.sub(
-            outdated_price_pattern,
-            correct_price_str,
-            response,
-            count=1  # Replace only first occurrence
-        )
+        has_ignore_phrase = any(re.search(pattern, response, re.IGNORECASE) for pattern in ignore_patterns)
+        if has_ignore_phrase and search_results_text:
+            # The AI is referencing its training data instead of search results
+            # Add a warning at the beginning
+            response = f"⚠️ NOTE: Current information from web search is available above. " + response
         
         return response
 
@@ -1670,11 +1694,62 @@ class AIService:
                 "Browser mode is off, so live web searches are unavailable for this request."
             )
         elif web_search_mode in ("browser_tab", "google_chrome"):
-            # Explicit web search mode - don't perform automatic searches to avoid blocking
-            # Instead, just enable web search capability and let the AI decide when to use it via tool calls
-            # This ensures the AI always responds quickly without waiting for searches
-            # The AI can use the web_search MCP tool in its response if it needs current information
-            # Skip automatic search to prevent blocking - let AI use tool if needed
+            # Explicit web search mode - perform search if query clearly needs current information
+            # Check if the message needs web search (prices, current events, etc.)
+            if self._detect_web_search_needed(message, web_search_mode):
+                # Perform web search automatically when clearly needed
+                if self.is_mcp_enabled():
+                    try:
+                        search_query = self._extract_search_query(message)
+                        tool_call = {
+                            "name": "web_search",
+                            "arguments": {
+                                "query": search_query,
+                                "max_results": self.web_search_max_results,
+                                "search_type": "text"
+                            }
+                        }
+                        # Use timeout to prevent blocking (5 seconds max)
+                        try:
+                            tool_results = await asyncio.wait_for(
+                                self.mcp_client.execute_tool_calls(
+                                    [tool_call],
+                                    allow_write=True
+                                ),
+                                timeout=5.0
+                            )
+                            if tool_results and not tool_results[0].get("error", False):
+                                context["web_search_results_mcp"] = tool_results[0].get("result", "")
+                                structured_results = self._parse_web_search_results_text(tool_results[0].get("result", ""))
+                                if structured_results:
+                                    context["web_search_results"] = structured_results
+                                context["_web_search_attempted"] = True
+                        except asyncio.TimeoutError:
+                            print(f"Web search timed out in {web_search_mode} mode - continuing without results")
+                        except Exception as search_error:
+                            print(f"Web search exception in {web_search_mode} mode: {search_error}")
+                    except Exception as error:
+                        print(f"Web search error in {web_search_mode} mode: {error}")
+                else:
+                    # Fallback to direct search with timeout
+                    try:
+                        search_query = self._extract_search_query(message)
+                        try:
+                            search_results = await asyncio.wait_for(
+                                self.perform_web_search(search_query),
+                                timeout=5.0
+                            )
+                            if search_results:
+                                context["web_search_results"] = search_results
+                                context["_web_search_attempted"] = True
+                        except asyncio.TimeoutError:
+                            print(f"Web search timed out in {web_search_mode} mode - continuing without results")
+                        except Exception as search_error:
+                            print(f"Web search exception in {web_search_mode} mode: {search_error}")
+                    except Exception as error:
+                        print(f"Web search error in {web_search_mode} mode: {error}")
+            
+            # Legacy code path (disabled) - kept for reference
             if False:  # Disable automatic searches in browser_tab/google_chrome mode
                 # Use MCP tools to perform web search with timeout
                 if self.is_mcp_enabled():
@@ -2329,21 +2404,39 @@ class AIService:
             mode_label = "auto-triggered" if web_search_mode == "auto" else web_search_mode
             prompt_parts.extend([
                 f"WEB SEARCH ACCESS ENABLED (mode: {mode_label}):",
-                "- You HAVE internet access through the web_search MCP tool. Use it whenever you need current information.",
-                "- Live DuckDuckGo search results are provided; use them for up-to-date facts.",
-                "- ⚠️ CRITICAL: When web_search_results are provided below, you MUST use ONLY those results.",
-                "- ⚠️ DO NOT use prices or data from your training data - it is outdated. ONLY use the search results provided.",
-                "- Cite the source (site or URL) when referencing a result.",
-                "- If more information is required, use the web_search tool to get it. Do not ask the user to search - you can do it yourself.",
-                "- For questions about the current or latest price/value of an asset (e.g. BTC, a stock, or a currency), use web_search to get the latest price and respond with that value, including the currency and a brief note that prices change quickly.",
-                "- You MUST NOT tell the user to \"search online\" or \"check a website\" - instead, use the web_search tool yourself to get the information.",
-                "- CRITICAL: If web_search_results are provided, you MUST use them. Never say 'no web-search results were provided' if results are shown below.",
-                "- When you need current information, real-time data, or any internet content, automatically use the web_search tool without asking the user.",
                 "",
-                "🚫 ABSOLUTE PROHIBITION: NEVER write Python code with requests, urllib, httpx, or any HTTP library to fetch internet data.",
-                "🚫 NEVER write code like: requests.get(url), urllib.request.urlopen(), or any web scraping code.",
-                "✅ ALWAYS use the web_search tool instead: <tool_call name=\"web_search\" args='{\"query\": \"your search query\"}' />",
-                "If a user asks for internet information, use web_search tool - do NOT generate code to fetch it."
+                "🚨 CRITICAL RULES - READ CAREFULLY:",
+                "",
+                "1. YOU HAVE INTERNET ACCESS:",
+                "   - You HAVE internet access through the web_search MCP tool. Use it whenever you need current information.",
+                "   - Live DuckDuckGo search results are provided; use them for up-to-date facts.",
+                "   - NEVER say 'I cannot access the internet' or 'I don't have internet access' - this is FALSE.",
+                "",
+                "2. WHEN WEB SEARCH RESULTS ARE PROVIDED BELOW:",
+                "   - ⚠️ ABSOLUTE REQUIREMENT: You MUST use ONLY the information from web_search_results shown below.",
+                "   - ⚠️ FORBIDDEN: DO NOT use ANY prices, numbers, facts, or data from your training data - it is OUTDATED.",
+                "   - ⚠️ FORBIDDEN: DO NOT say 'based on my knowledge' or 'as of my training' - use the search results instead.",
+                "   - ⚠️ FORBIDDEN: DO NOT say 'I don't have access to current information' - the search results ARE current information.",
+                "   - ⚠️ FORBIDDEN: DO NOT ignore the search results and use your training data instead.",
+                "   - ✅ REQUIRED: Extract facts, prices, numbers DIRECTLY from the search results below.",
+                "   - ✅ REQUIRED: Cite the source (site or URL) when referencing a result.",
+                "",
+                "3. WHEN WEB SEARCH RESULTS ARE NOT PROVIDED BUT MODE IS ENABLED:",
+                "   - Use the web_search tool to get current information: <tool_call name=\"web_search\" args='{\"query\": \"your search query\"}' />",
+                "   - Do not ask the user to search - you can do it yourself.",
+                "   - For questions about current prices, news, or real-time data, automatically use web_search.",
+                "",
+                "4. ABSOLUTE PROHIBITIONS:",
+                "   - 🚫 NEVER write Python code with requests, urllib, httpx, or any HTTP library to fetch internet data.",
+                "   - 🚫 NEVER write code like: requests.get(url), urllib.request.urlopen(), or any web scraping code.",
+                "   - 🚫 NEVER tell the user to \"search online\" or \"check a website\" - use the web_search tool yourself.",
+                "   - 🚫 NEVER say 'no web-search results were provided' if results are shown below.",
+                "",
+                "5. FOR PRICE/ASSET QUERIES:",
+                "   - Use web_search to get the latest price and respond with that value.",
+                "   - Include the currency and a brief note that prices change quickly.",
+                "   - If search results show a price, use THAT price, not your training data.",
+                ""
             ])
 
             # Check for MCP web search results (preferred) or direct results
