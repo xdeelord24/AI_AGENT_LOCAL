@@ -8,7 +8,7 @@ import aiohttp
 import json
 import uuid
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, AsyncGenerator
 import os
 import re
 import time
@@ -3221,6 +3221,67 @@ class AIService:
         except Exception as e:
             logger.exception(f"Error calling Ollama. Model: {self.current_model}, URL: {url}")
             raise Exception(f"Error calling Ollama: {str(e)}")
+    
+    async def _stream_ollama(self, prompt: str) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream Ollama response, yielding chunks as they arrive"""
+        generation_options, keep_alive = self._build_generation_options_for_model()
+        payload = {
+            "model": self.current_model,
+            "prompt": prompt,
+            "stream": True,
+            "options": generation_options
+        }
+        if keep_alive:
+            payload["keep_alive"] = keep_alive
+        
+        url = self.ollama_url if self.use_proxy else self.ollama_direct
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{url}/api/generate",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=self.request_timeout)
+                ) as response:
+                    if response.status == 200:
+                        buffer = ""
+                        async for chunk in response.content.iter_chunked(8192):
+                            if not chunk:
+                                break
+                            buffer += chunk.decode('utf-8', errors='ignore')
+                            
+                            while '\n' in buffer:
+                                line, buffer = buffer.split('\n', 1)
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                
+                                try:
+                                    data = json.loads(line)
+                                    
+                                    # Yield thinking chunks
+                                    if "thinking" in data and data["thinking"]:
+                                        yield {"type": "thinking", "content": data["thinking"]}
+                                    
+                                    # Yield response chunks
+                                    if "response" in data and data["response"]:
+                                        yield {"type": "response", "content": data["response"]}
+                                    
+                                    # Yield done signal
+                                    if data.get("done", False):
+                                        yield {"type": "done"}
+                                        return
+                                except json.JSONDecodeError:
+                                    continue
+                                except Exception as e:
+                                    logger.debug(f"Error parsing stream line: {e}")
+                                    continue
+                    else:
+                        error_text = await response.text()
+                        raise Exception(f"Ollama API error: {response.status} - {error_text}")
+        except Exception as e:
+            logger.exception(f"Error streaming from Ollama: {e}")
+            yield {"type": "error", "content": str(e)}
     
     async def generate_code(
         self, 

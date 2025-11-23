@@ -4828,12 +4828,205 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
           });
       }
 
-      const response = await ApiService.sendMessage(
-        finalMessage,
-        context,
-        sanitizedHistory,
-        { mode: modePayload, signal: abortController.signal }
-      );
+      // Use streaming for real-time thinking display
+      let streamingThinking = "";
+      let streamingResponse = "";
+      let assistantMessageId = Date.now() + 1;
+      
+      // Create initial assistant message for streaming
+      const assistantMessage = {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        rawContent: '',
+        timestamp: new Date().toISOString(),
+        plan: null,
+        activityLog: null,
+        messageId: null,
+        conversationId: null,
+        thinking: '',
+      };
+      
+      // Add the message immediately so we can update it
+      setChatMessages(prev => [...prev, assistantMessage]);
+      
+      try {
+        await ApiService.sendMessageStream({
+          message: finalMessage,
+          context: context,
+          conversationHistory: sanitizedHistory,
+          signal: abortController.signal,
+          onChunk: async (chunk) => {
+            if (chunk.type === 'thinking') {
+              streamingThinking += chunk.content || '';
+              setChatMessages(prev => prev.map(msg => 
+                msg.id === assistantMessageId
+                  ? { ...msg, thinking: streamingThinking }
+                  : msg
+              ));
+            } else if (chunk.type === 'response') {
+              streamingResponse += chunk.content || '';
+              const normalizedContent = normalizeChatInput(streamingResponse);
+              setChatMessages(prev => prev.map(msg => 
+                msg.id === assistantMessageId
+                  ? { ...msg, content: normalizedContent, rawContent: streamingResponse }
+                  : msg
+              ));
+            } else if (chunk.type === 'done') {
+              // Finalize the message
+              const finalThinking = chunk.thinking || streamingThinking;
+              const finalResponse = chunk.response || streamingResponse;
+              const normalizedContent = normalizeChatInput(finalResponse);
+              
+              setChatMessages(prev => prev.map(msg => 
+                msg.id === assistantMessageId
+                  ? { 
+                      ...msg, 
+                      content: normalizedContent,
+                      rawContent: finalResponse,
+                      thinking: finalThinking || null,
+                      timestamp: chunk.timestamp || new Date().toISOString(),
+                      messageId: chunk.message_id || null,
+                      conversationId: chunk.conversation_id || null,
+                      plan: chunk.ai_plan || null,
+                      activityLog: chunk.activity_log || null
+                    }
+                  : msg
+              ));
+              
+              // Handle file operations if present
+              const isAskMode = (modePayload || '').toLowerCase() === 'ask';
+              if (!isAskMode && chunk.file_operations && chunk.file_operations.length > 0) {
+                const normalizedOperations = coalesceFileOperationsForEditor(
+                  chunk.file_operations.map((op) => ({
+                    ...op,
+                    path: normalizeEditorPath(op.path),
+                  }))
+                );
+
+                try {
+                  const operationsWithPreviews = await buildFileOperationPreviews(normalizedOperations);
+                  setPendingFileOperations({
+                    operations: operationsWithPreviews,
+                    assistantMessageId: assistantMessageId,
+                    mode: modePayload,
+                  });
+                  setActiveFileOperationIndex(0);
+                  setShowReviewButton(true);
+                  setReviewedOperations(new Set());
+                  setAcceptedLines(new Map());
+                  setDeclinedLines(new Map());
+                  toast.success('Review the AI file changes before deciding to keep them.');
+                } catch (error) {
+                  console.error('Failed to build AI file operation previews:', error);
+                  setPendingFileOperations({
+                    operations: normalizedOperations,
+                    assistantMessageId: assistantMessageId,
+                    mode: modePayload,
+                  });
+                  setActiveFileOperationIndex(0);
+                  setShowReviewButton(true);
+                  setReviewedOperations(new Set());
+                  setAcceptedLines(new Map());
+                  setDeclinedLines(new Map());
+                  toast.error('AI proposed file changes, but previews failed to load. Review carefully before applying.');
+                }
+              } else if (isAskMode && chunk.file_operations && chunk.file_operations.length > 0) {
+                console.warn('ASK mode: Ignoring file operations that were incorrectly sent by backend', chunk.file_operations);
+              }
+            } else if (chunk.type === 'error') {
+              throw new Error(chunk.content || 'Streaming error');
+            }
+          }
+        });
+      } catch (streamError) {
+        if (streamError.name === 'AbortError' || abortController.signal.aborted) {
+          setIsLoadingChat(false);
+          setThinkingAiPlan(null);
+          return;
+        }
+        // Fall back to non-streaming if streaming fails
+        const response = await ApiService.sendMessage(
+          finalMessage,
+          context,
+          sanitizedHistory,
+          { mode: modePayload, signal: abortController.signal }
+        );
+        
+        if (abortController.signal.aborted) {
+          setIsLoadingChat(false);
+          setThinkingAiPlan(null);
+          return;
+        }
+
+        const assistantPlan = response.ai_plan || null;
+        await previewAiPlanBeforeAnswer(assistantPlan);
+
+        const assistantContent = normalizeChatInput(response.response);
+        
+        // CRITICAL: In ASK mode, NEVER process file operations, even if the backend sends them
+        // This is a redundant safety check in case anything slips through
+        const isAskMode = (modePayload || '').toLowerCase() === 'ask';
+
+        setChatMessages(prev => prev.map(msg => 
+          msg.id === assistantMessageId
+            ? {
+                ...msg,
+                content: assistantContent,
+                rawContent: assistantContent,
+                timestamp: response.timestamp,
+                plan: assistantPlan,
+                activityLog: response.activity_log || null,
+                messageId: response.message_id || null,
+                conversationId: response.conversation_id || null,
+                thinking: response.thinking || null,
+              }
+            : msg
+        ));
+        
+        // Continue with file operations processing below
+        if (!isAskMode && response.file_operations && response.file_operations.length > 0) {
+          const normalizedOperations = coalesceFileOperationsForEditor(
+            response.file_operations.map((op) => ({
+              ...op,
+              path: normalizeEditorPath(op.path),
+            }))
+          );
+
+          try {
+            const operationsWithPreviews = await buildFileOperationPreviews(normalizedOperations);
+            setPendingFileOperations({
+              operations: operationsWithPreviews,
+              assistantMessageId: assistantMessageId,
+              mode: modePayload,
+            });
+            setActiveFileOperationIndex(0);
+            setShowReviewButton(true);
+            setReviewedOperations(new Set());
+            setAcceptedLines(new Map());
+            setDeclinedLines(new Map());
+            toast.success('Review the AI file changes before deciding to keep them.');
+          } catch (error) {
+            console.error('Failed to build AI file operation previews:', error);
+            setPendingFileOperations({
+              operations: normalizedOperations,
+              assistantMessageId: assistantMessageId,
+              mode: modePayload,
+            });
+            setActiveFileOperationIndex(0);
+            setShowReviewButton(true);
+            setReviewedOperations(new Set());
+            setAcceptedLines(new Map());
+            setDeclinedLines(new Map());
+            toast.error('AI proposed file changes, but previews failed to load. Review carefully before applying.');
+          }
+        } else if (isAskMode && response.file_operations && response.file_operations.length > 0) {
+          console.warn('ASK mode: Ignoring file operations that were incorrectly sent by backend', response.file_operations);
+        }
+        setIsLoadingChat(false);
+        setThinkingAiPlan(null);
+        return;
+      }
       
       // Check if request was aborted
       if (abortController.signal.aborted) {
@@ -4842,78 +5035,8 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
         return;
       }
 
-      const assistantPlan = response.ai_plan || null;
-      await previewAiPlanBeforeAnswer(assistantPlan);
-
-      const assistantContent = normalizeChatInput(response.response);
-
-      const assistantMessage = {
-        id: Date.now() + 1,
-        role: 'assistant',
-        content: assistantContent,
-        rawContent: assistantContent,
-        timestamp: response.timestamp,
-        plan: assistantPlan,
-        activityLog: response.activity_log || null,
-        messageId: response.message_id || null,
-        conversationId: response.conversation_id || null,
-        thinking: response.thinking || null,
-      };
-
-      setChatMessages(prev => {
-        const updated = [...prev, assistantMessage];
-        // Save chat session after assistant response with the updated messages
-        // Use the updated array that includes both user and assistant messages
-        setTimeout(() => {
-          saveChatSession(response.conversation_id, updated);
-        }, 100);
-        return updated;
-      });
-
-      // CRITICAL: In ASK mode, NEVER process file operations, even if the backend sends them
-      // This is a redundant safety check in case anything slips through
-      const isAskMode = (modePayload || '').toLowerCase() === 'ask';
-      
-      if (!isAskMode && response.file_operations && response.file_operations.length > 0) {
-        const normalizedOperations = coalesceFileOperationsForEditor(
-          response.file_operations.map((op) => ({
-            ...op,
-            path: normalizeEditorPath(op.path),
-          }))
-        );
-
-        try {
-          const operationsWithPreviews = await buildFileOperationPreviews(normalizedOperations);
-          setPendingFileOperations({
-            operations: operationsWithPreviews,
-            assistantMessageId: assistantMessage.id,
-            mode: modePayload,
-          });
-          setActiveFileOperationIndex(0);
-          setShowReviewButton(true); // Show "Review the Files" button
-          setReviewedOperations(new Set());
-          setAcceptedLines(new Map());
-          setDeclinedLines(new Map());
-          toast.success('Review the AI file changes before deciding to keep them.');
-        } catch (error) {
-          console.error('Failed to build AI file operation previews:', error);
-          // Fall back to showing raw operations without rich previews
-          setPendingFileOperations({
-            operations: normalizedOperations,
-            assistantMessageId: assistantMessage.id,
-            mode: modePayload,
-          });
-          setActiveFileOperationIndex(0);
-          setShowReviewButton(true); // Show "Review the Files" button
-          setReviewedOperations(new Set());
-          setAcceptedLines(new Map());
-          setDeclinedLines(new Map());
-          toast.error('AI proposed file changes, but previews failed to load. Review carefully before applying.');
-        }
-      } else if (isAskMode && response.file_operations && response.file_operations.length > 0) {
-        // Log a warning if file operations are received in ASK mode (this shouldn't happen)
-        console.warn('ASK mode: Ignoring file operations that were incorrectly sent by backend', response.file_operations);
-      }
+      // For now, streaming endpoint doesn't return file operations
+      // We'll need to enhance it later to handle the full flow
       setIsLoadingChat(false);
       setThinkingAiPlan(null);
     } catch (error) {

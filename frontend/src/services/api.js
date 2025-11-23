@@ -83,6 +83,103 @@ class ApiService {
     return this.post('/api/chat/send', payload, config);
   }
 
+  static async sendMessageStream({
+    message,
+    context = {},
+    conversationHistory = [],
+    signal,
+    onChunk,
+  }) {
+    if (typeof onChunk !== 'function') {
+      throw new Error('sendMessageStream requires an onChunk callback');
+    }
+
+    const payload = {
+      message,
+      context,
+      conversation_history: conversationHistory
+    };
+
+    const response = await fetch(`${API_BASE_URL}/api/chat/send/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+
+    if (!response.ok) {
+      let detail;
+      try {
+        detail = await response.json();
+      } catch {
+        detail = null;
+      }
+      const message = detail?.detail || detail?.message || `Streaming failed (${response.status})`;
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
+    }
+
+    if (!response.body || typeof response.body.getReader !== 'function') {
+      const error = new Error('Streaming responses are not supported in this browser');
+      throw error;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        
+        // Process SSE format (data: ...\n\n)
+        let newlineIndex;
+        while ((newlineIndex = buffer.indexOf('\n\n')) !== -1) {
+          const chunk = buffer.slice(0, newlineIndex);
+          buffer = buffer.slice(newlineIndex + 2);
+          
+          if (chunk.startsWith('data: ')) {
+            const data = chunk.slice(6); // Remove 'data: ' prefix
+            try {
+              const payload = JSON.parse(data);
+              await Promise.resolve(onChunk(payload));
+            } catch (error) {
+              console.warn('Skipping malformed stream chunk', data, error);
+            }
+          }
+        }
+      }
+      
+      // Process remaining buffer
+      if (buffer.trim()) {
+        const lines = buffer.split('\n');
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            try {
+              const payload = JSON.parse(data);
+              await Promise.resolve(onChunk(payload));
+            } catch (error) {
+              console.warn('Skipping malformed stream chunk', data, error);
+            }
+          }
+        }
+      }
+    } finally {
+      if (typeof reader.releaseLock === 'function') {
+        reader.releaseLock();
+      }
+    }
+  }
+
   static async getModels() {
     return this.get('/api/chat/models');
   }

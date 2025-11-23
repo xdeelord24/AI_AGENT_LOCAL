@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any, Tuple, Literal
+from typing import List, Optional, Dict, Any, Tuple, Literal, AsyncGenerator
 import asyncio
 import json
 import time
@@ -321,6 +322,107 @@ async def send_message(
         else:
             status_code = 500  # Internal Server Error
         raise HTTPException(status_code=status_code, detail=f"Error processing message: {error_msg}")
+
+
+@router.post("/send/stream")
+async def send_message_stream(
+    request: ChatRequest,
+    ai_service = Depends(get_ai_service)
+):
+    """Stream chat messages with real-time thinking and response chunks, then process full flow for file operations"""
+    async def generate_stream():
+        try:
+            # Build prompt
+            history: List[Dict[str, Any]] = []
+            if request.conversation_history:
+                for msg in request.conversation_history:
+                    if isinstance(msg, dict):
+                        history.append(msg)
+                    else:
+                        history.append(msg.dict())
+            
+            context_payload: Dict[str, Any] = dict(request.context or {})
+            # Build prompt using the same method as process_message
+            prompt = ai_service._build_prompt(request.message, context_payload, history)
+            
+            # Stream from Ollama directly
+            accumulated_thinking = ""
+            accumulated_response = ""
+            conversation_id = str(uuid.uuid4())
+            message_id = str(uuid.uuid4())
+            
+            if ai_service.provider == "ollama":
+                async for chunk in ai_service._stream_ollama(prompt):
+                    if chunk.get("type") == "thinking":
+                        accumulated_thinking += chunk.get("content", "")
+                        yield f"data: {json.dumps({'type': 'thinking', 'content': chunk.get('content', '')})}\n\n"
+                    elif chunk.get("type") == "response":
+                        accumulated_response += chunk.get("content", "")
+                        yield f"data: {json.dumps({'type': 'response', 'content': chunk.get('content', '')})}\n\n"
+                    elif chunk.get("type") == "done":
+                        # After streaming, process the full message flow to get file operations, plans, etc.
+                        # Call process_message to handle tool calls, file operations extraction, etc.
+                        try:
+                            full_response = await ai_service.process_message(
+                                request.message,
+                                context_payload,
+                                history
+                            )
+                            # Send final response with accumulated content and full metadata
+                            yield f"data: {json.dumps({
+                                'type': 'done', 
+                                'thinking': full_response.get('thinking') or accumulated_thinking or None, 
+                                'response': full_response.get('content') or accumulated_response,
+                                'message_id': full_response.get('message_id') or message_id, 
+                                'conversation_id': full_response.get('conversation_id') or conversation_id, 
+                                'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
+                                'file_operations': full_response.get('file_operations'),
+                                'ai_plan': full_response.get('ai_plan'),
+                                'activity_log': full_response.get('activity_log')
+                            })}\n\n"
+                        except Exception as process_error:
+                            # If process_message fails, at least send what we streamed
+                            logger.exception("Error processing full message flow")
+                            yield f"data: {json.dumps({
+                                'type': 'done', 
+                                'thinking': accumulated_thinking or None, 
+                                'response': accumulated_response,
+                                'message_id': message_id, 
+                                'conversation_id': conversation_id, 
+                                'timestamp': datetime.now().isoformat()
+                            })}\n\n"
+                        break
+                    elif chunk.get("type") == "error":
+                        yield f"data: {json.dumps({'type': 'error', 'content': chunk.get('content', 'Unknown error')})}\n\n"
+                        break
+            else:
+                # For non-Ollama providers, fall back to regular processing
+                response = await ai_service.process_message(
+                    request.message,
+                    context_payload,
+                    history
+                )
+                conversation_id = response.get("conversation_id") or str(uuid.uuid4())
+                message_id = response.get("message_id") or str(uuid.uuid4())
+                if response.get("thinking"):
+                    yield f"data: {json.dumps({'type': 'thinking', 'content': response['thinking']})}\n\n"
+                yield f"data: {json.dumps({'type': 'response', 'content': response.get('content', '')})}\n\n"
+                yield f"data: {json.dumps({
+                    'type': 'done', 
+                    'thinking': response.get('thinking'), 
+                    'response': response.get('content', ''),
+                    'message_id': message_id, 
+                    'conversation_id': conversation_id, 
+                    'timestamp': response.get('timestamp') or datetime.now().isoformat(),
+                    'file_operations': response.get('file_operations'),
+                    'ai_plan': response.get('ai_plan'),
+                    'activity_log': response.get('activity_log')
+                })}\n\n"
+        except Exception as e:
+            logger.exception("Error in streaming chat")
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+    
+    return StreamingResponse(generate_stream(), media_type="text/event-stream")
 
 
 @router.get("/models")
