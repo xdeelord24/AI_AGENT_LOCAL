@@ -719,21 +719,79 @@ class AIService:
                 cleaned_response = cleaned_response.replace(block, "").strip()
 
         # Inline fallback for responses that embed JSON without fences.
-        # These patterns intentionally allow nested braces by using a
-        # non-greedy "match anything" approach.
+        # Try to find and extract JSON objects more robustly, handling nested structures.
+        # We need to ensure we capture ALL file operations, even in large JSON objects.
+        
+        # Strategy: Find all potential JSON objects by looking for opening braces
+        # and matching them with closing braces, then check if they contain our metadata keys
+        def find_balanced_json_objects(text: str) -> List[Tuple[int, int, str]]:
+            """Find all balanced JSON objects in text, handling nested braces."""
+            results = []
+            i = 0
+            while i < len(text):
+                # Find next opening brace
+                brace_start = text.find('{', i)
+                if brace_start == -1:
+                    break
+                
+                # Find matching closing brace
+                brace_count = 0
+                brace_end = -1
+                in_string = False
+                escape_next = False
+                
+                for j in range(brace_start, len(text)):
+                    if escape_next:
+                        escape_next = False
+                        continue
+                    char = text[j]
+                    if char == '\\':
+                        escape_next = True
+                        continue
+                    if char == '"' and not escape_next:
+                        in_string = not in_string
+                    if not in_string:
+                        if char == '{':
+                            brace_count += 1
+                        elif char == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                brace_end = j + 1
+                                break
+                
+                if brace_end > 0:
+                    json_candidate = text[brace_start:brace_end]
+                    # Check if this JSON contains our metadata keys
+                    if (re.search(rf'"{FILE_OP_METADATA_PATTERN}"', json_candidate, re.IGNORECASE) or
+                        re.search(rf'"{AI_PLAN_METADATA_PATTERN}"', json_candidate, re.IGNORECASE) or
+                        re.search(r'"summary"[\s\S]*"tasks"', json_candidate, re.IGNORECASE)):
+                        results.append((brace_start, brace_end, json_candidate))
+                    i = brace_end
+                else:
+                    i = brace_start + 1
+            return results
+        
+        # Find all JSON objects that might contain metadata
+        json_objects = find_balanced_json_objects(cleaned_response)
+        
+        # Extract from found objects (process from end to start to preserve indices)
+        json_objects.sort(key=lambda x: x[0], reverse=True)
+        for start, end, json_candidate in json_objects:
+            if extract_from_json(json_candidate):
+                cleaned_response = cleaned_response[:start] + cleaned_response[end:]
+        
+        # Fallback: Try simpler patterns for single file operation objects
+        # (in case they weren't caught by the balanced matching)
         inline_patterns = [
-            # Canonical metadata object
-            rf'\{{[\s\S]*?"{FILE_OP_METADATA_PATTERN}"[\s\S]*?\}}',
-            rf'\{{[\s\S]*?"{AI_PLAN_METADATA_PATTERN}"[\s\S]*?\}}',
             r'\{[\s\S]*?"summary"\s*:\s*".*?"[\s\S]*?"tasks"\s*:\s*\[[\s\S]*?\]\s*\}',
-            # Convenience: any JSON object that looks like a file operation
+            # Convenience: any JSON object that looks like a single file operation
             r'\{[\s\S]*?"type"\s*:\s*"[a-zA-Z_]+?"[\s\S]*?"path"\s*:\s*"[^\"]+"[\s\S]*?\}',
         ]
         for pattern in inline_patterns:
             for match in re.finditer(pattern, cleaned_response, re.DOTALL):
                 json_candidate = match.group(0).strip()
                 if extract_from_json(json_candidate):
-                    cleaned_response = cleaned_response.replace(json_candidate, "").strip()
+                    cleaned_response = cleaned_response.replace(json_candidate, "", 1).strip()
 
         cleaned_response = re.sub(
             rf'(?mi)^\s*(?:{AI_PLAN_METADATA_PATTERN}|{FILE_OP_METADATA_PATTERN})\s*:?\s*$',

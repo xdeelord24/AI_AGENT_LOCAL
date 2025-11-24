@@ -613,7 +613,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [projectRoot, setProjectRoot] = useState(DEFAULT_WORKSPACE_STATE);
   const [currentPath, setCurrentPath] = useState(null);
   const [recentWorkspaces, setRecentWorkspaces] = useState(() => readRecentWorkspacesFromStorage());
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedFiles, setSelectedFiles] = useState(new Set());
+  const [lastSelectedFile, setLastSelectedFile] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState(new Set());
   const [isFileTreeLoading, setIsFileTreeLoading] = useState(false);
   const [fileContextMenu, setFileContextMenu] = useState({ visible: false, x: 0, y: 0, target: null });
@@ -773,13 +774,26 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           : null;
       };
 
-      const normalizedSelectedFile = selectedFile ? normalizeEditorPath(selectedFile) : null;
-      if (normalizedSelectedFile && !hasPath(normalizedSelectedFile)) {
-        const fallbackSelection = getFallbackPath();
-        if (normalizedSelectedFile !== fallbackSelection) {
-          setSelectedFile(fallbackSelection);
+      // Check if any selected file is invalid and update if needed
+      const fallbackSelection = getFallbackPath();
+      setSelectedFiles(prev => {
+        const newSet = new Set();
+        let hasInvalid = false;
+        prev.forEach(path => {
+          const normalized = normalizeEditorPath(path);
+          if (hasPath(normalized)) {
+            newSet.add(normalized);
+          } else {
+            hasInvalid = true;
+          }
+        });
+        // If we had invalid selections and there's a fallback, add it
+        if (hasInvalid && fallbackSelection && newSet.size === 0) {
+          newSet.add(fallbackSelection);
+          setLastSelectedFile(fallbackSelection);
         }
-      }
+        return newSet;
+      });
 
       let nextActive = activeTab ? normalizeEditorPath(activeTab) : null;
 
@@ -816,12 +830,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     },
     [
       activeTab,
-      selectedFile,
+      selectedFiles,
       setActiveTab,
       setEditorContent,
       setEditorLanguage,
       setOpenFiles,
-      setSelectedFile,
+      setSelectedFiles,
     ]
   );
   const [editorOptions, setEditorOptions] = useState({
@@ -1001,8 +1015,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             if (openMatch && typeof openMatch.content === 'string') {
               beforeContent = openMatch.content;
             } else {
-              const existing = await ApiService.readFile(targetPath);
-              beforeContent = existing?.content || '';
+              try {
+                const existing = await ApiService.readFile(targetPath);
+                beforeContent = existing?.content || '';
+              } catch (readError) {
+                // Skip if it's a directory (400 error) or file not found (404)
+                if (readError.response?.status === 400 || readError.response?.status === 404) {
+                  beforeContent = '';
+                } else {
+                  throw readError;
+                }
+              }
             }
             afterContent = normalizedOp.content || '';
           } else if (opType === 'delete_file') {
@@ -1010,8 +1033,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             if (openMatch && typeof openMatch.content === 'string') {
               beforeContent = openMatch.content;
             } else {
-              const existing = await ApiService.readFile(targetPath);
-              beforeContent = existing?.content || '';
+              try {
+                const existing = await ApiService.readFile(targetPath);
+                beforeContent = existing?.content || '';
+              } catch (readError) {
+                // Skip if it's a directory (400 error) or file not found (404)
+                if (readError.response?.status === 400 || readError.response?.status === 404) {
+                  beforeContent = '';
+                } else {
+                  throw readError;
+                }
+              }
             }
             afterContent = '';
           } else {
@@ -1318,9 +1350,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   // Terminal states
   const [terminalSessionId, setTerminalSessionId] = useState(() => {
     if (typeof window !== 'undefined') {
-      const storedId = window.localStorage.getItem('terminalSessionId');
-      if (storedId) {
-        return storedId;
+      try {
+        const storedId = window.localStorage.getItem('terminalSessionId');
+        if (storedId) {
+          return storedId;
+        }
+      } catch (error) {
+        console.warn('Failed to read terminal session ID from localStorage:', error);
       }
     }
     return generateTerminalSessionId();
@@ -1989,17 +2025,24 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setEditorLanguage(fileInfo.language);
       toast.success(`Opened ${fileInfo.name}`);
     } catch (error) {
+      // Don't show error for directories (400) - they should be handled by folder expansion
+      if (error.response?.status === 400 && error.response?.data?.detail?.includes('directory')) {
+        console.warn('Attempted to load directory as file:', filePath);
+        return;
+      }
       console.error('Error loading file:', error);
       toast.error(`Failed to load file: ${error.response?.data?.detail || error.message}`);
     }
   }, [getLanguageFromPath, openFiles, upsertOpenFile]);
 
   useEffect(() => {
-    const normalizedSelectedFile = selectedFile ? normalizeEditorPath(selectedFile) : null;
+    // Handle the first selected file (for backward compatibility with single file selection behavior)
+    const firstSelected = selectedFiles.size > 0 ? Array.from(selectedFiles)[0] : null;
+    const normalizedSelectedFile = firstSelected ? normalizeEditorPath(firstSelected) : null;
     if (normalizedSelectedFile && !openFiles.find(f => normalizeEditorPath(f.path) === normalizedSelectedFile)) {
       loadFile(normalizedSelectedFile);
-    } else if (selectedFile && openFiles.find(f => normalizeEditorPath(f.path) === normalizeEditorPath(selectedFile))) {
-      const normalizedSelectedFile = normalizeEditorPath(selectedFile);
+    } else if (firstSelected && openFiles.find(f => normalizeEditorPath(f.path) === normalizeEditorPath(firstSelected))) {
+      const normalizedSelectedFile = normalizeEditorPath(firstSelected);
       const file = openFiles.find(f => normalizeEditorPath(f.path) === normalizedSelectedFile);
       if (file) {
         setActiveTab(normalizeEditorPath(file.path));
@@ -2007,7 +2050,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         setEditorLanguage(file.language);
       }
     }
-  }, [selectedFile, openFiles, loadFile]);
+  }, [selectedFiles, openFiles, loadFile]);
 
   // Deduplicate and normalize all paths in openFiles
   useEffect(() => {
@@ -2287,8 +2330,20 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       if (activeTab === filePath) {
         setActiveTab(targetPath);
       }
-      if (selectedFile === filePath) {
-        setSelectedFile(targetPath);
+      // Update selected files if the renamed file was selected
+      setSelectedFiles(prev => {
+        const newSet = new Set();
+        prev.forEach(path => {
+          if (path === filePath) {
+            newSet.add(targetPath);
+          } else {
+            newSet.add(path);
+          }
+        });
+        return newSet;
+      });
+      if (lastSelectedFile === filePath) {
+        setLastSelectedFile(targetPath);
       }
 
       toast.success(filePath !== targetPath ? `Saved as ${targetPath}` : `Saved ${file.name}`);
@@ -2297,7 +2352,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       console.error('Error saving file:', error);
       toast.error(`Failed to save file: ${error.response?.data?.detail || error.message}`);
     }
-  }, [openFiles, activeTab, selectedFile, refreshFileTree]);
+  }, [openFiles, activeTab, selectedFiles, refreshFileTree]);
 
   const appendTerminalLine = useCallback((text, type = 'stdout') => {
     if (typeof text !== 'string') {
@@ -2995,6 +3050,121 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
   }, [chatAbortController]);
 
+  // Helper function to get all files and folders in a flat list for range selection
+  const getAllTreeItems = useCallback((tree, accumulator = []) => {
+    tree.forEach((item) => {
+      accumulator.push(item);
+      if (item.children && item.children.length > 0) {
+        getAllTreeItems(item.children, accumulator);
+      }
+    });
+    return accumulator;
+  }, []);
+
+  // Helper function to find a file/folder in the tree by path
+  const findItemInTree = useCallback((tree, targetPath) => {
+    for (const item of tree) {
+      if (normalizeEditorPath(item.path) === normalizeEditorPath(targetPath)) {
+        return item;
+      }
+      if (item.children && item.children.length > 0) {
+        const found = findItemInTree(item.children, targetPath);
+        if (found) return found;
+      }
+    }
+    return null;
+  }, []);
+
+  const removePathReferences = useCallback((targetPath) => {
+    if (!targetPath) return;
+    const normalized = normalizeEditorPath(targetPath);
+    setOpenFiles(prev => prev.filter(file => !file.path.startsWith(normalized)));
+    // Remove all selected files that start with the removed path
+    setSelectedFiles(prev => {
+      const newSet = new Set();
+      prev.forEach(path => {
+        if (!path.startsWith(normalized)) {
+          newSet.add(path);
+        }
+      });
+      return newSet;
+    });
+    if (lastSelectedFile?.startsWith(normalized)) {
+      setLastSelectedFile(null);
+    }
+    if (activeTab?.startsWith(normalized)) {
+      setActiveTab(null);
+      setEditorContent('');
+    }
+    setExpandedFolders(prev => {
+      const next = new Set();
+      prev.forEach((path) => {
+        if (!path.startsWith(normalized)) {
+          next.add(path);
+        }
+      });
+      return next;
+    });
+  }, [activeTab, selectedFiles, lastSelectedFile]);
+
+  const handleDeletePath = useCallback(async (target) => {
+    if (!target) return;
+    
+    // Check if we have multiple selections
+    const hasMultipleSelections = selectedFiles.size > 1;
+    const isTargetSelected = target && selectedFiles.has(normalizeEditorPath(target.path));
+    
+    let itemsToDelete = [];
+    
+    if (hasMultipleSelections && isTargetSelected) {
+      // Delete all selected items
+      const allItems = getAllTreeItems(fileTree);
+      selectedFiles.forEach(selectedPath => {
+        const item = findItemInTree(fileTree, selectedPath) || 
+                     allItems.find(item => normalizeEditorPath(item.path) === normalizeEditorPath(selectedPath));
+        if (item) {
+          itemsToDelete.push(item);
+        }
+      });
+    } else {
+      // Delete only the target item
+      itemsToDelete = [target];
+    }
+    
+    if (itemsToDelete.length === 0) return;
+    
+    const itemNames = itemsToDelete.map(item => item.name).join(', ');
+    const confirmMessage = itemsToDelete.length === 1
+      ? `Delete ${itemsToDelete[0].name}? This cannot be undone.`
+      : `Delete ${itemsToDelete.length} items (${itemNames})? This cannot be undone.`;
+    
+    const confirmed = window.confirm(confirmMessage);
+    if (!confirmed) return;
+    
+    try {
+      // Delete all items
+      const deletePromises = itemsToDelete.map(item => ApiService.deleteFile(item.path));
+      await Promise.all(deletePromises);
+      
+      // Remove all deleted paths from references
+      itemsToDelete.forEach(item => {
+        removePathReferences(item.path);
+      });
+      
+      // Clear selections
+      setSelectedFiles(new Set());
+      setLastSelectedFile(null);
+      
+      toast.success(`Deleted ${itemsToDelete.length} item${itemsToDelete.length > 1 ? 's' : ''} successfully`);
+      await refreshFileTree();
+    } catch (error) {
+      console.error('Delete failed:', error);
+      toast.error(error.response?.data?.detail || 'Failed to delete');
+    } finally {
+      closeFileContextMenu();
+    }
+  }, [closeFileContextMenu, refreshFileTree, removePathReferences, selectedFiles, getAllTreeItems, findItemInTree, fileTree]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -3052,11 +3222,25 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           terminalInputRef.current.focus();
         }
       }
+
+      // Delete key: Delete selected files/folders (only when not typing in inputs)
+      if (e.key === 'Delete' && selectedFiles.size > 0 && 
+          e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        // Get the first selected item to use as target for handleDeletePath
+        const allItems = getAllTreeItems(fileTree);
+        const firstSelectedPath = Array.from(selectedFiles)[0];
+        const targetItem = findItemInTree(fileTree, firstSelectedPath) || 
+                          allItems.find(item => normalizeEditorPath(item.path) === normalizeEditorPath(firstSelectedPath));
+        if (targetItem) {
+          handleDeletePath(targetItem);
+        }
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTab, saveFile, focusSearchInput, ensureTerminalVisible, handleStopChat]);
+  }, [activeTab, saveFile, focusSearchInput, ensureTerminalVisible, handleStopChat, selectedFiles, getAllTreeItems, findItemInTree, fileTree, handleDeletePath]);
 
   const resolvePathInput = (inputPath) => {
     if (!inputPath) return null;
@@ -3504,9 +3688,22 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         };
       })
     );
-    if (selectedFile?.startsWith(normalizedOld)) {
-      const suffix = selectedFile.slice(normalizedOld.length);
-      setSelectedFile(`${normalizedNew}${suffix}`);
+    // Update all selected files that start with the old path
+    setSelectedFiles(prev => {
+      const newSet = new Set();
+      prev.forEach(path => {
+        if (path.startsWith(normalizedOld)) {
+          const suffix = path.slice(normalizedOld.length);
+          newSet.add(`${normalizedNew}${suffix}`);
+        } else {
+          newSet.add(path);
+        }
+      });
+      return newSet;
+    });
+    if (lastSelectedFile?.startsWith(normalizedOld)) {
+      const suffix = lastSelectedFile.slice(normalizedOld.length);
+      setLastSelectedFile(`${normalizedNew}${suffix}`);
     }
     if (activeTab?.startsWith(normalizedOld)) {
       const suffix = activeTab.slice(normalizedOld.length);
@@ -3527,29 +3724,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       }
       return next;
     });
-  }, [activeTab, selectedFile]);
-
-  const removePathReferences = useCallback((targetPath) => {
-    if (!targetPath) return;
-    const normalized = normalizeEditorPath(targetPath);
-    setOpenFiles(prev => prev.filter(file => !file.path.startsWith(normalized)));
-    if (selectedFile?.startsWith(normalized)) {
-      setSelectedFile(null);
-    }
-    if (activeTab?.startsWith(normalized)) {
-      setActiveTab(null);
-      setEditorContent('');
-    }
-    setExpandedFolders(prev => {
-      const next = new Set();
-      prev.forEach((path) => {
-        if (!path.startsWith(normalized)) {
-          next.add(path);
-        }
-      });
-      return next;
-    });
-  }, [activeTab, selectedFile]);
+  }, [activeTab, selectedFiles, lastSelectedFile]);
 
   const expandPathAncestors = useCallback((targetPath) => {
     if (!targetPath) return;
@@ -3579,9 +3754,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       const normalized = normalizeEditorPath(path);
       setLeftSidebarVisible(true);
       expandPathAncestors(normalized);
-      setSelectedFile(normalized);
+      setSelectedFiles(new Set([normalized]));
+      setLastSelectedFile(normalized);
     },
-    [expandPathAncestors, setLeftSidebarVisible, setSelectedFile]
+    [expandPathAncestors, setLeftSidebarVisible, setSelectedFiles]
   );
 
   const closeTabByPath = useCallback(
@@ -3734,23 +3910,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
   }, [applyPathRename, closeFileContextMenu, getParentDirectory, joinPaths, refreshFileTree]);
 
-  const handleDeletePath = useCallback(async (target) => {
-    if (!target) return;
-    const confirmed = window.confirm(`Delete ${target.name}? This cannot be undone.`);
-    if (!confirmed) return;
-    try {
-      await ApiService.deleteFile(target.path);
-      removePathReferences(target.path);
-      toast.success('Deleted successfully');
-      await refreshFileTree();
-    } catch (error) {
-      console.error('Delete failed:', error);
-      toast.error(error.response?.data?.detail || 'Failed to delete');
-    } finally {
-      closeFileContextMenu();
-    }
-  }, [closeFileContextMenu, refreshFileTree, removePathReferences]);
-
   const handleRunTestsForPath = useCallback((target, mode = 'run') => {
     if (!target?.path) return;
     const normalized = normalizeEditorPath(target.path);
@@ -3895,7 +4054,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         action: () => handleRenamePath(target),
       },
       {
-        label: 'Delete',
+        label: selectedFiles.size > 1 && selectedFiles.has(normalizeEditorPath(target.path))
+          ? `Delete ${selectedFiles.size} items`
+          : 'Delete',
         shortcut: 'Delete',
         action: () => handleDeletePath(target),
       },
@@ -3919,6 +4080,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     handleRenamePath,
     handleRevealInExplorer,
     handleRunTestsForPath,
+    selectedFiles,
   ]);
 
   const tabContextMenuItems = useMemo(() => {
@@ -4290,6 +4452,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   ];
 
   const handleFileClick = (file, e) => {
+    const normalizedPath = file.path.replace(/\\/g, '/');
+    const isShiftClick = e?.shiftKey === true;
+
     if (file.is_directory) {
       // Only act on the first click to avoid accidental navigation or double-toggle
       if (e?.detail && e.detail > 1) {
@@ -4297,16 +4462,76 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         e.stopPropagation();
         return;
       }
-      toggleFolder(file.path);
+
+      if (isShiftClick && lastSelectedFile) {
+        // Range selection for folders
+        const allItems = getAllTreeItems(fileTree);
+        const currentIndex = allItems.findIndex(item => normalizeEditorPath(item.path) === normalizeEditorPath(normalizedPath));
+        const lastIndex = allItems.findIndex(item => normalizeEditorPath(item.path) === normalizeEditorPath(lastSelectedFile));
+        
+        if (currentIndex !== -1 && lastIndex !== -1) {
+          const startIndex = Math.min(currentIndex, lastIndex);
+          const endIndex = Math.max(currentIndex, lastIndex);
+          const rangeItems = allItems.slice(startIndex, endIndex + 1);
+          
+          setSelectedFiles(prev => {
+            const newSet = new Set(prev);
+            rangeItems.forEach(item => {
+              newSet.add(normalizeEditorPath(item.path));
+            });
+            return newSet;
+          });
+          setLastSelectedFile(normalizedPath);
+        } else {
+          // Fallback: just select this folder
+          setSelectedFiles(prev => new Set([...prev, normalizeEditorPath(normalizedPath)]));
+          setLastSelectedFile(normalizedPath);
+        }
+      } else {
+        // Normal click: clear previous selections and select only this folder
+        const normalized = normalizeEditorPath(normalizedPath);
+        setSelectedFiles(new Set([normalized]));
+        setLastSelectedFile(normalizedPath);
+      }
+      
+      // Always toggle folder expansion on click (unless it's a range selection)
+      if (!isShiftClick) {
+        toggleFolder(file.path);
+      }
     } else {
       // For files, single click selects, double click opens
-      const normalizedPath = file.path.replace(/\\/g, '/');
       if (e && e.detail === 2) {
         // Double click opens file
         loadFile(normalizedPath);
+      } else if (isShiftClick && lastSelectedFile) {
+        // Range selection for files
+        const allItems = getAllTreeItems(fileTree);
+        const currentIndex = allItems.findIndex(item => normalizeEditorPath(item.path) === normalizeEditorPath(normalizedPath));
+        const lastIndex = allItems.findIndex(item => normalizeEditorPath(item.path) === normalizeEditorPath(lastSelectedFile));
+        
+        if (currentIndex !== -1 && lastIndex !== -1) {
+          const startIndex = Math.min(currentIndex, lastIndex);
+          const endIndex = Math.max(currentIndex, lastIndex);
+          const rangeItems = allItems.slice(startIndex, endIndex + 1);
+          
+          setSelectedFiles(prev => {
+            const newSet = new Set(prev);
+            rangeItems.forEach(item => {
+              newSet.add(normalizeEditorPath(item.path));
+            });
+            return newSet;
+          });
+          setLastSelectedFile(normalizedPath);
+        } else {
+          // Fallback: just select this file
+          setSelectedFiles(prev => new Set([...prev, normalizeEditorPath(normalizedPath)]));
+          setLastSelectedFile(normalizedPath);
+        }
       } else {
-        // Single click selects
-        setSelectedFile(normalizedPath);
+        // Normal click: clear previous selections and select only this file
+        const normalized = normalizeEditorPath(normalizedPath);
+        setSelectedFiles(new Set([normalized]));
+        setLastSelectedFile(normalizedPath);
       }
     }
   };
@@ -6550,11 +6775,14 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
             const normalizedFilePath = normalizeEditorPath(file.path);
             const normalizedCreatingParentPath = creatingItem?.parentPath ? normalizeEditorPath(creatingItem.parentPath) : null;
             const isCreatingInThisFolder = creatingItem && normalizedFilePath === normalizedCreatingParentPath;
+            const isSelected = selectedFiles.has(normalizedFilePath);
             
             return (
               <div key={file.path}>
                 <div
-                  className="flex items-center px-2 py-1 hover:bg-dark-700 cursor-pointer text-sm"
+                  className={`flex items-center px-2 py-1 hover:bg-dark-700 cursor-pointer text-sm ${
+                    isSelected ? 'bg-dark-700' : ''
+                  }`}
                   style={{ paddingLeft: `${8 + depth * 16}px` }}
                   onClick={(e) => handleFileClick(file, e)}
                   onContextMenu={(e) => handleFileContextMenu(e, file)}
@@ -6613,11 +6841,14 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
               </div>
             );
           } else {
+            const normalizedFilePath = normalizeEditorPath(file.path);
+            const isSelected = selectedFiles.has(normalizedFilePath);
+            
             return (
                 <div
                   key={file.path}
                   className={`flex items-center px-2 py-1 hover:bg-dark-700 cursor-pointer text-sm ${
-                    selectedFile === file.path ? 'bg-dark-700' : ''
+                    isSelected ? 'bg-dark-700' : ''
                   }`}
                   style={{ paddingLeft: `${8 + depth * 16}px` }}
                   onClick={(e) => handleFileClick(file, e)}

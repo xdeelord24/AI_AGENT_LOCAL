@@ -358,8 +358,8 @@ class FileService:
                     entries = []
 
                 for entry in entries:
-                    if entry.startswith('.'):
-                        continue
+                    # Show hidden files (files starting with .) - user requested this feature
+                    # Removed: if entry.startswith('.'): continue
                     entry_path = os.path.join(current_path, entry)
                     if self._should_skip_tree_entry(entry):
                         continue

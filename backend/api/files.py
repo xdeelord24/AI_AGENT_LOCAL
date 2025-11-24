@@ -87,6 +87,8 @@ async def read_file(
         )
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
+    except IsADirectoryError:
+        raise HTTPException(status_code=400, detail=f"Path is a directory, not a file: {path}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
 
