@@ -5,7 +5,7 @@ import {
   Folder, File, FilePlus, FolderPlus,
   ChevronRight as ChevronRightIcon, ChevronDown, ChevronUp,
   Send, User, Loader2, CheckCircle, AlertCircle,
-  Infinity, AtSign, Globe, Image, Mic, Square, Plus, Clock, History, MoreVertical,
+  Infinity, AtSign, Globe, Image, Mic, Square, Plus, Clock, ArrowDownCircle, History, MoreVertical,
   RefreshCw, Minimize2, Workflow, Trash2,
   Sparkles, Brain, ListChecks, FileSearch, Milestone, PenTool,
   Activity, ShieldCheck, Megaphone, AlertTriangle,
@@ -226,65 +226,68 @@ const definePhaseMeta = (label, summary, options = {}) => ({
 const THINKING_PHASE_META = {
   thinking: definePhaseMeta(
     'Understanding the ask',
-    'Re-reading your prompt, extracting goals, constraints, and prior context.'
+    'Re-reading your prompt, extracting goals, constraints, and prior context.',
+    { detail: 'Clarifies deliverables, constraints, and prior attempts before acting.' }
   ),
   analysis: definePhaseMeta(
     'Analyzing context',
     'Reviewing conversation history, loaded files, and agent settings.',
-    { tone: 'info' }
+    { tone: 'info', detail: 'Maps prior conversation, repo topology, and selected buffers.' }
   ),
   grepping: definePhaseMeta(
     'Searching workspace',
     'Scanning relevant directories and files for code, references, or examples.',
-    { tone: 'info' }
+    { tone: 'info', detail: 'Pattern-matches code, tests, and configs that relate to the task.' }
   ),
   context: definePhaseMeta(
     'Collecting structure',
     'Snapshots workspace layout, open buffers, dependencies, and active files.',
-    { tone: 'muted' }
+    { tone: 'muted', detail: 'Builds a quick mental model of file tree, deps, and tooling.' }
   ),
   web_lookup: definePhaseMeta(
     'Reviewing the web',
     'Running quick web lookups for APIs, docs, or current references.',
-    { tone: 'info' }
+    { tone: 'info', detail: 'Surfaces docs or release notes that influence implementation.' }
   ),
   subtasks: definePhaseMeta(
     'Planning work',
-    'Breaking the request into concrete TODOs and acceptance checks.'
+    'Breaking the request into concrete TODOs and acceptance checks.',
+    { detail: 'Creates checklist of atomic TODOs plus validation gates.' }
   ),
   planning: definePhaseMeta(
     'Sequencing plan',
-    'Ordering tasks for safe execution, noting prerequisites and blockers.'
+    'Ordering tasks for safe execution, noting prerequisites and blockers.',
+    { detail: 'Prioritizes steps, notes dependencies, and highlights risky areas.' }
   ),
   drafting: definePhaseMeta(
     'Drafting changes',
     'Writing code edits, explanations, and response scaffolding.',
-    { tone: 'accent' }
+    { tone: 'accent', detail: 'Applies edits, composes diffs, and drafts narrative answers.' }
   ),
   progress: definePhaseMeta(
     'Tracking progress',
     'Checking TODO completion and updating plan status.',
-    { tone: 'muted' }
+    { tone: 'muted', detail: 'Updates plan state, highlights done/blocked work, and next actions.' }
   ),
   verification: definePhaseMeta(
     'Verifying work',
     'Reviewing changes, self-testing, and running lightweight sanity checks.',
-    { tone: 'success' }
+    { tone: 'success', detail: 'Runs tests or reasoning checks before finalizing.' }
   ),
   reporting: definePhaseMeta(
     'Summarizing results',
     'Packaging findings, next steps, and any follow-up recommendations.',
-    { tone: 'success' }
+    { tone: 'success', detail: 'Drafts summary, test notes, and follow-up suggestions.' }
   ),
   responding: definePhaseMeta(
     'Finalizing reply',
     'Polishing natural-language response and stitching in artifacts.',
-    { tone: 'accent' }
+    { tone: 'accent', detail: 'Stitches together explanation, code snippets, and instructions.' }
   ),
   error: definePhaseMeta(
     'Issue detected',
     'An unexpected problem interrupted the workflow; surfacing the details.',
-    { tone: 'danger' }
+    { tone: 'danger', detail: 'Captures stack traces or blockers so you can react quickly.' }
   )
 };
 
@@ -332,6 +335,7 @@ const buildPhaseStep = (status = {}, activatedAt = Date.now()) => {
     phase,
     label: status.label || meta.label || 'Working…',
     description: meta.description || null,
+    detail: meta.detail || null,
     tone: meta.tone || 'primary',
     status: 'active',
     activatedAt,
@@ -349,6 +353,106 @@ const formatDuration = (ms = 0) => {
   }
   const seconds = Math.max(1, Math.round(ms / 1000));
   return `${seconds}s`;
+};
+
+const normalizeDetailValue = (value) => {
+  if (value == null) return null;
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value);
+  }
+  if (value.path) return value.path;
+  if (value.name) return value.name;
+  if (value.label) return value.label;
+  if (value.title) return value.title;
+  return null;
+};
+
+const formatListPreview = (items = [], limit = 3) => {
+  const normalized = (Array.isArray(items) ? items : [items])
+    .map(normalizeDetailValue)
+    .filter(Boolean);
+  if (normalized.length === 0) {
+    return null;
+  }
+  const preview = normalized.slice(0, limit).join(', ');
+  const remaining = normalized.length - limit;
+  return remaining > 0 ? `${preview} +${remaining} more` : preview;
+};
+
+const getDurationFromStep = (step = {}) => {
+  const explicit =
+    step.durationMs ??
+    step.duration_ms ??
+    step.elapsedMs ??
+    step.elapsed_ms ??
+    null;
+  if (explicit != null) {
+    return explicit;
+  }
+  if (step.completedAt && step.activatedAt) {
+    return Math.max(0, step.completedAt - step.activatedAt);
+  }
+  if (step.status === 'active' && step.activatedAt) {
+    return Math.max(0, Date.now() - step.activatedAt);
+  }
+  return null;
+};
+
+const buildStepDetailEntries = (step = {}, meta = {}) => {
+  const entries = [];
+  const summary =
+    step.summary ||
+    (step.description && step.description !== step.label ? step.description : null) ||
+    (meta.description && meta.description !== step.label ? meta.description : null);
+  if (summary) {
+    entries.push({ label: 'Summary', value: summary });
+  }
+
+  const focus = step.detail || meta.detail;
+  if (focus && focus !== summary) {
+    entries.push({ label: 'Focus', value: focus });
+  }
+
+  const filesText = formatListPreview(step.files || step.targets);
+  if (filesText) {
+    entries.push({ label: 'Files', value: filesText });
+  }
+
+  const commandsText = formatListPreview(step.commands || step.actions || step.operations);
+  if (commandsText) {
+    entries.push({ label: 'Commands', value: commandsText });
+  }
+
+  const progressValue =
+    typeof step.progress === 'number'
+      ? `${Math.round(Math.min(Math.max(step.progress, 0), 1) * 100)}%`
+      : step.progress_text || null;
+  if (progressValue) {
+    entries.push({ label: 'Progress', value: progressValue });
+  }
+
+  const metrics = step.metrics || step.stats;
+  if (metrics && typeof metrics === 'object') {
+    Object.entries(metrics)
+      .filter(([, value]) => value != null)
+      .slice(0, 2)
+      .forEach(([key, value]) => {
+        const label = key.replace(/_/g, ' ');
+        entries.push({ label, value: String(value) });
+      });
+  }
+
+  const detailNote = step.note || step.message || step.result;
+  if (detailNote) {
+    entries.push({ label: 'Note', value: detailNote });
+  }
+
+  const duration = getDurationFromStep(step);
+  if (duration != null) {
+    entries.push({ label: 'Duration', value: formatDuration(duration) });
+  }
+
+  return entries;
 };
 
 const escapeHtml = (text = '') =>
@@ -856,9 +960,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [messageFeedback, setMessageFeedback] = useState({});
   const [feedbackSubmitting, setFeedbackSubmitting] = useState({});
   const [collapsedThinking, setCollapsedThinking] = useState(new Set());
+  const chatContainerRef = useRef(null);
+  const handleSendChatRef = useRef(null);
   const [chatInput, setChatInput] = useState('');
   const [composerInput, setComposerInput] = useState('');
   const [followUpInput, setFollowUpInput] = useState('');
+  const [queuedFollowUps, setQueuedFollowUps] = useState([]);
+  const [isChatPinnedToBottom, setIsChatPinnedToBottom] = useState(true);
   const [isLoadingChat, setIsLoadingChat] = useState(false);
   const [chatAbortController, setChatAbortController] = useState(null);
   const [chatTabs, setChatTabs] = useState([{ id: 1, title: 'New Chat', isActive: true }]);
@@ -2089,6 +2197,27 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     });
   }, [openFiles.length]); // Only check when length changes to avoid infinite loops
 
+  const scrollChatToBottom = useCallback((behavior = 'auto') => {
+    if (!chatContainerRef.current) {
+      return;
+    }
+    chatContainerRef.current.scrollTo({
+      top: chatContainerRef.current.scrollHeight,
+      behavior,
+    });
+  }, []);
+
+  const handleChatScroll = useCallback(() => {
+    const container = chatContainerRef.current;
+    if (!container) {
+      return;
+    }
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    const threshold = 48;
+    setIsChatPinnedToBottom(distanceFromBottom <= threshold);
+  }, []);
+
   // Normalize activeTab whenever it changes
   useEffect(() => {
     if (activeTab) {
@@ -2099,13 +2228,18 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
   }, [activeTab]);
 
-  // Auto-scroll chat to bottom
+  // Auto-scroll chat to bottom when user is pinned
   useEffect(() => {
-    const chatContainer = document.querySelector('.chat-messages-container');
-    if (chatContainer) {
-      chatContainer.scrollTop = chatContainer.scrollHeight;
+    if (!isChatPinnedToBottom) {
+      return;
     }
-  }, [chatMessages]);
+    scrollChatToBottom('auto');
+  }, [chatMessages, agentStatuses, isLoadingChat, isChatPinnedToBottom, scrollChatToBottom]);
+
+  // Keep pinned state fresh when message count changes (e.g., thinking updates)
+  useEffect(() => {
+    handleChatScroll();
+  }, [chatMessages.length, handleChatScroll]);
 
   // Load past chats on mount
   const loadPastChats = useCallback(async () => {
@@ -4676,12 +4810,37 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     return suggestions;
   }, [openFiles, flattenedFileNodes, formatDisplayPath]);
 
-  const planStatusStyles = {
+const planStatusStyles = {
     completed: 'border-green-700 bg-green-500/10 text-green-300',
     in_progress: 'border-primary-600 bg-primary-600/10 text-primary-300',
     pending: 'border-dark-600 bg-dark-800/70 text-dark-200',
     blocked: 'border-red-700 bg-red-600/10 text-red-300'
   };
+
+const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return null;
+  }
+
+  const palette =
+    variant === 'primary'
+      ? 'border-primary-700/50 bg-primary-900/20 text-primary-100'
+      : 'border-dark-700 bg-dark-900/40 text-dark-200';
+
+  return (
+    <div className="mt-2 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
+      {entries.map(({ label, value }, idx) => (
+        <div
+          key={`${label}-${idx}`}
+          className={`rounded-md border px-2 py-1.5 ${palette}`}
+        >
+          <p className="text-[10px] uppercase tracking-wide opacity-70">{label}</p>
+          <p className="mt-0.5 truncate">{value}</p>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
   if (!Array.isArray(steps) || steps.length === 0) {
@@ -4712,6 +4871,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
               const duration = step.activatedAt ? formatDuration(Math.max(0, now - step.activatedAt)) : null;
               const toneClass = toneClasses[step.tone] || toneClasses.primary;
               const meta = THINKING_PHASE_META[step.phase] || {};
+              const detailEntries = buildStepDetailEntries(step, meta);
 
               return (
                 <li
@@ -4732,6 +4892,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                             {step.description || meta.description}
                           </p>
                         )}
+                      <StepDetailGrid entries={detailEntries} variant="primary" />
                       </div>
                     </div>
                     <span className="text-[11px] text-primary-400 font-mono uppercase whitespace-nowrap">
@@ -4756,6 +4917,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
               const duration = step.durationMs ? formatDuration(step.durationMs) : null;
               const toneClass = toneClasses[step.tone] || toneClasses.muted;
               const meta = THINKING_PHASE_META[step.phase] || {};
+              const detailEntries = buildStepDetailEntries(step, meta);
 
               return (
                 <li
@@ -4776,6 +4938,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                             {step.description || meta.description}
                           </p>
                         )}
+                        <StepDetailGrid entries={detailEntries} />
                       </div>
                     </div>
                     <span className="text-[10px] text-dark-500 font-mono uppercase whitespace-nowrap">
@@ -4798,6 +4961,8 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
             {pendingSteps.map((step) => {
               const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
               const toneClass = toneClasses.muted;
+              const meta = THINKING_PHASE_META[step.phase] || {};
+              const detailEntries = buildStepDetailEntries(step, meta);
 
               return (
                 <li
@@ -4810,7 +4975,10 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                     >
                       <Icon className="w-3.5 h-3.5" />
                     </div>
-                    <span className="text-sm text-dark-400">{step.label}</span>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm text-dark-400">{step.label}</span>
+                      <StepDetailGrid entries={detailEntries} />
+                    </div>
                   </div>
                 </li>
               );
@@ -5332,13 +5500,52 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
     }
   };
 
+  useEffect(() => {
+    handleSendChatRef.current = handleSendChat;
+  }, [handleSendChat]);
+
+  useEffect(() => {
+    if (isLoadingChat || queuedFollowUps.length === 0) {
+      return;
+    }
+    const [next, ...rest] = queuedFollowUps;
+    setQueuedFollowUps(rest);
+    const send = handleSendChatRef.current;
+    if (!send) {
+      return;
+    }
+    send(next.content, next.isComposer).catch((error) => {
+      console.error('Failed to send queued follow-up:', error);
+      toast.error('Failed to send queued follow-up');
+    });
+  }, [isLoadingChat, queuedFollowUps]);
+
   const handleFollowUpSubmit = async (e) => {
     e.preventDefault();
-    if (!followUpInput.trim() || isLoadingChat) return;
+    const trimmed = followUpInput.trim();
+    if (!trimmed) {
+      return;
+    }
     const shouldUseComposer = agentMode !== 'ask';
-    await handleSendChat(followUpInput, shouldUseComposer);
     setFollowUpInput('');
+    if (isLoadingChat) {
+      setQueuedFollowUps((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          content: trimmed,
+          isComposer: shouldUseComposer,
+        },
+      ]);
+      toast.success('Follow-up queued and will send once the current reply finishes.');
+      return;
+    }
+    await handleSendChat(trimmed, shouldUseComposer);
   };
+
+  const removeQueuedFollowUp = useCallback((queuedId) => {
+    setQueuedFollowUps((prev) => prev.filter((item) => item.id !== queuedId));
+  }, []);
 
   const handleCopyMessage = useCallback(async (message) => {
     try {
@@ -7845,7 +8052,11 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
             </div>
 
             {/* Chat Messages */}
-            <div className="flex-1 overflow-y-auto bg-dark-900 chat-messages-container min-h-0">
+            <div
+              ref={chatContainerRef}
+              onScroll={handleChatScroll}
+              className="relative flex-1 overflow-y-auto bg-dark-900 chat-messages-container min-h-0"
+            >
               {chatMessages.length === 0 ? (
                 <div className="flex items-center justify-center h-full">
                   <p className="text-sm text-dark-400">Start a conversation with AI</p>
@@ -7862,265 +8073,289 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                       {message.role === 'assistant' && (
                         <Bot className="w-5 h-5 text-primary-500 mt-1 flex-shrink-0" />
                       )}
-                    {(() => {
-                      const normalizedContent = normalizeChatInput(
-                        message.rawContent ?? message.content
-                      );
-                      const webReferences = message.web_references || message.webReferences || null;
-                      const formattedHtml = formatMessageContent(normalizedContent, webReferences);
-                      const currentFeedback =
-                        message.messageId && messageFeedback[message.messageId]
-                          ? messageFeedback[message.messageId]
-                          : null;
-                      const isSubmittingFeedback =
-                        message.messageId && feedbackSubmitting[message.messageId];
-                      const feedbackButtonBase =
-                        'flex items-center gap-1 px-2 py-1 rounded-md border text-xs transition-colors';
-                      
-                      // Determine if thinking should be collapsed
-                      const hasThinking = message.thinking && message.role === 'assistant';
-                      const hasContent = normalizedContent && normalizedContent.trim().length > 0;
-                      const messageKey = message.messageId || message.id;
-                      const isExplicitlyExpanded = collapsedThinking.has(`expanded-${messageKey}`);
-                      const isExplicitlyCollapsed = collapsedThinking.has(`collapsed-${messageKey}`);
-                      
-                      // Auto-collapse if there's content and user hasn't manually toggled
-                      // Default to collapsed if there's content, expanded if no content
-                      const shouldBeCollapsed = hasContent 
-                        ? (isExplicitlyCollapsed || (!isExplicitlyExpanded && !isExplicitlyCollapsed))
-                        : false;
-                      
-                      const toggleThinking = () => {
-                        setCollapsedThinking(prev => {
-                          const next = new Set(prev);
-                          if (shouldBeCollapsed) {
-                            // Currently collapsed, expand it
-                            next.delete(`collapsed-${messageKey}`);
-                            next.add(`expanded-${messageKey}`);
-                          } else {
-                            // Currently expanded, collapse it
-                            next.delete(`expanded-${messageKey}`);
-                            next.add(`collapsed-${messageKey}`);
-                          }
-                          return next;
-                        });
-                      };
+                        {(() => {
+                          const normalizedContent = normalizeChatInput(
+                            message.rawContent ?? message.content
+                          );
+                          const webReferences = message.web_references || message.webReferences || null;
+                          const formattedHtml = formatMessageContent(normalizedContent, webReferences);
+                          const currentFeedback =
+                            message.messageId && messageFeedback[message.messageId]
+                              ? messageFeedback[message.messageId]
+                              : null;
+                          const isSubmittingFeedback =
+                            message.messageId && feedbackSubmitting[message.messageId];
+                          const feedbackButtonBase =
+                            'flex items-center gap-1 px-2 py-1 rounded-md border text-xs transition-colors';
+                          
+                          const hasThinking = message.thinking && message.role === 'assistant';
+                          const hasContent = normalizedContent && normalizedContent.trim().length > 0;
+                          const messageKey = message.messageId || message.id;
+                          const isExplicitlyExpanded = collapsedThinking.has(`expanded-${messageKey}`);
+                          const isExplicitlyCollapsed = collapsedThinking.has(`collapsed-${messageKey}`);
+                          const shouldBeCollapsed = hasContent 
+                            ? (isExplicitlyCollapsed || (!isExplicitlyExpanded && !isExplicitlyCollapsed))
+                            : false;
+                          
+                          const toggleThinking = () => {
+                            setCollapsedThinking(prev => {
+                              const next = new Set(prev);
+                              if (shouldBeCollapsed) {
+                                next.delete(`collapsed-${messageKey}`);
+                                next.add(`expanded-${messageKey}`);
+                              } else {
+                                next.delete(`expanded-${messageKey}`);
+                                next.add(`collapsed-${messageKey}`);
+                              }
+                              return next;
+                            });
+                          };
+                          
+                          return (
+                            <div
+                              className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
+                                message.role === 'user'
+                                  ? 'bg-primary-600 text-white'
+                                  : 'bg-dark-700 text-dark-200'
+                              }`}
+                            >
+                              {hasThinking && (
+                                <div className="mb-3 rounded-lg border border-primary-800/30 bg-primary-900/10 p-3">
+                                  <div className="flex items-center justify-between gap-2 mb-2">
+                                    <div className="flex items-center gap-2">
+                                      <Sparkles className="w-4 h-4 text-primary-400" />
+                                      <span className="text-xs font-semibold text-primary-300 uppercase tracking-wide">
+                                        Thinking
+                                      </span>
+                                    </div>
+                                    {hasContent && (
+                                      <button
+                                        type="button"
+                                        onClick={toggleThinking}
+                                        className="flex items-center gap-1 px-2 py-1 text-xs text-primary-300 hover:text-primary-200 hover:bg-primary-800/20 rounded transition-colors"
+                                        title={shouldBeCollapsed ? "Expand thinking" : "Collapse thinking"}
+                                      >
+                                        {shouldBeCollapsed ? (
+                                          <>
+                                            <ChevronDown className="w-3 h-3" />
+                                            <span>Show</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <ChevronUp className="w-3 h-3" />
+                                            <span>Hide</span>
+                                          </>
+                                        )}
+                                      </button>
+                                    )}
+                                  </div>
+                                  {!shouldBeCollapsed && (
+                                    <div className="text-xs text-primary-200/80 leading-relaxed whitespace-pre-wrap">
+                                      {message.thinking}
+                                    </div>
+                                  )}
+                                  {shouldBeCollapsed && (
+                                    <div className="text-xs text-primary-300/60 italic">
+                                      Thinking process collapsed. Click "Show" to expand.
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              {hasContent && (
+                                <div
+                                  className="prose prose-invert max-w-none"
+                                  dangerouslySetInnerHTML={{
+                                    __html: formattedHtml,
+                                  }}
+                                  ref={(el) => {
+                                    if (el) {
+                                      setTimeout(() => {
+                                        highlightCodeBlocks(el);
+                                      }, 0);
+                                    }
+                                  }}
+                                />
+                              )}
+                              {message.plan &&
+                                message.role === 'assistant' && (
+                                  <div className="mt-3">
+                                    {renderAiPlan(message.plan)}
+                                  </div>
+                                )}
+                              {message.activityLog &&
+                                Array.isArray(message.activityLog) &&
+                                message.activityLog.length > 0 &&
+                                message.role === 'assistant' && (
+                                  <div className={`mt-3 ${message.plan ? '' : ''}`}>
+                                    <div className="rounded-xl border border-primary-800/40 bg-dark-900/70 p-4 space-y-3">
+                                      <div className="flex items-center gap-2 text-xs text-dark-400 uppercase tracking-wide">
+                                        <Activity className="w-4 h-4" />
+                                        <span>Process Steps</span>
+                                      </div>
+                                      <ol className="space-y-2">
+                                        {message.activityLog.map((log, logIdx) => {
+                                          const stepPhase = log.phase || 'unknown';
+                                          const Icon = PHASE_ICON_MAP[stepPhase] || Sparkles;
+                                          const meta = THINKING_PHASE_META[stepPhase] || {};
+                                          const toneClass = toneClasses[log.tone] || toneClasses.primary;
+                                          const durationValue = getDurationFromStep(log);
+                                          const durationLabel =
+                                            durationValue != null
+                                              ? formatDuration(durationValue)
+                                              : log.status === 'done'
+                                                ? '—'
+                                                : 'in flight';
+                                          const primaryLabel = log.label || meta.label || stepPhase;
+                                          const secondaryLabel =
+                                            log.description && log.description !== log.label
+                                              ? log.description
+                                              : meta.description;
+                                          const detailEntries = buildStepDetailEntries(log, meta);
+                                          const filteredEntries = secondaryLabel
+                                            ? detailEntries.filter((entry) => entry.label !== 'Summary')
+                                            : detailEntries;
+                                          const statusLabel = (log.status || 'active').toString().replace(/_/g, ' ');
+                                          
+                                          return (
+                                            <li
+                                              key={logIdx}
+                                              className="rounded-lg border border-dark-700 bg-dark-800/40 px-3 py-2.5 text-sm"
+                                            >
+                                              <div className="flex items-center justify-between gap-2">
+                                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                  <div
+                                                    className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass}`}
+                                                  >
+                                                    <Icon className="w-3.5 h-3.5" />
+                                                  </div>
+                                                  <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                      <div className="text-sm text-dark-200 font-medium">
+                                                        {primaryLabel}
+                                                      </div>
+                                                      <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border border-dark-600 text-dark-400">
+                                                        {`Step ${logIdx + 1} • ${statusLabel}`}
+                                                      </span>
+                                                    </div>
+                                                    {secondaryLabel && (
+                                                      <p className="text-xs text-dark-400 mt-0.5">
+                                                        {secondaryLabel}
+                                                      </p>
+                                                    )}
+                                                  </div>
+                                                </div>
+                                                <div className="text-[10px] text-dark-500 font-mono uppercase whitespace-nowrap">
+                                                  {durationLabel}
+                                                </div>
+                                              </div>
+                                              <StepDetailGrid entries={filteredEntries} />
+                                            </li>
+                                          );
+                                        })}
+                                      </ol>
+                                    </div>
+                                  </div>
+                                )}
+                              {message.role === 'assistant' && message.messageId && (
+                                <div className="mt-3 flex items-center gap-3 text-xs text-dark-400">
+                                  <span>Was this helpful?</span>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopyMessage(message)}
+                                      className={`${feedbackButtonBase} border-dark-600 text-dark-300 hover:text-dark-100`}
+                                      title="Copy message to clipboard"
+                                    >
+                                      <Copy className="w-3.5 h-3.5" />
+                                      Copy
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={Boolean(isSubmittingFeedback)}
+                                      onClick={() => handleMessageFeedback(message, 'like')}
+                                      className={`${feedbackButtonBase} ${
+                                        currentFeedback === 'like'
+                                          ? 'bg-primary-600/20 border-primary-500 text-primary-100'
+                                          : 'border-dark-600 text-dark-300 hover:text-dark-100'
+                                      } ${isSubmittingFeedback ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                      title="Mark response as helpful"
+                                      aria-pressed={currentFeedback === 'like'}
+                                    >
+                                      <ThumbsUp
+                                        className="w-3.5 h-3.5"
+                                        fill={currentFeedback === 'like' ? 'currentColor' : 'none'}
+                                      />
+                                      Like
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={Boolean(isSubmittingFeedback)}
+                                      onClick={() => handleMessageFeedback(message, 'dislike')}
+                                      className={`${feedbackButtonBase} ${
+                                        currentFeedback === 'dislike'
+                                          ? 'bg-red-600/20 border-red-500 text-red-200'
+                                          : 'border-dark-600 text-dark-300 hover:text-dark-100'
+                                      } ${isSubmittingFeedback ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                      title="Mark response as not helpful"
+                                      aria-pressed={currentFeedback === 'dislike'}
+                                    >
+                                      <ThumbsDown
+                                        className="w-3.5 h-3.5"
+                                        fill={currentFeedback === 'dislike' ? 'currentColor' : 'none'}
+                                      />
+                                      Dislike
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                        {message.role === 'user' && (
+                          <User className="w-5 h-5 text-dark-400 mt-1 flex-shrink-0" />
+                        )}
+                      </div>
+                    ))}
+                    {isLoadingChat && (() => {
+                      const lastAssistantMessage = [...chatMessages].reverse().find(msg => msg.role === 'assistant');
+                      const streamingPlan = lastAssistantMessage?.plan || thinkingAiPlan;
                       
                       return (
-                        <div
-                          className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
-                            message.role === 'user'
-                              ? 'bg-primary-600 text-white'
-                              : 'bg-dark-700 text-dark-200'
-                          }`}
-                        >
-                          {/* Show thinking first */}
-                          {hasThinking && (
-                            <div className="mb-3 rounded-lg border border-primary-800/30 bg-primary-900/10 p-3">
-                              <div className="flex items-center justify-between gap-2 mb-2">
-                                <div className="flex items-center gap-2">
-                                  <Sparkles className="w-4 h-4 text-primary-400" />
-                                  <span className="text-xs font-semibold text-primary-300 uppercase tracking-wide">
-                                    Thinking
-                                  </span>
-                                </div>
-                                {hasContent && (
-                                  <button
-                                    type="button"
-                                    onClick={toggleThinking}
-                                    className="flex items-center gap-1 px-2 py-1 text-xs text-primary-300 hover:text-primary-200 hover:bg-primary-800/20 rounded transition-colors"
-                                    title={shouldBeCollapsed ? "Expand thinking" : "Collapse thinking"}
-                                  >
-                                    {shouldBeCollapsed ? (
-                                      <>
-                                        <ChevronDown className="w-3 h-3" />
-                                        <span>Show</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <ChevronUp className="w-3 h-3" />
-                                        <span>Hide</span>
-                                      </>
-                                    )}
-                                  </button>
-                                )}
-                              </div>
-                              {!shouldBeCollapsed && (
-                                <div className="text-xs text-primary-200/80 leading-relaxed whitespace-pre-wrap">
-                                  {message.thinking}
-                                </div>
-                              )}
-                              {shouldBeCollapsed && (
-                                <div className="text-xs text-primary-300/60 italic">
-                                  Thinking process collapsed. Click "Show" to expand.
-                                </div>
-                              )}
+                        <div className="flex space-x-2">
+                          <Bot className="w-5 h-5 text-primary-500 mt-1" />
+                          <div className="bg-dark-700 px-3 py-3 rounded-lg space-y-3">
+                            <div className="flex items-center gap-2 text-sm text-dark-300">
+                              <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
+                              <span>
+                                AI is thinking… {Math.max(1, Math.round(Math.max(thinkingElapsed, 1000) / 1000))}s elapsed
+                              </span>
                             </div>
-                          )}
-                          {/* Show response content after thinking */}
-                          {hasContent && (
-                            <div
-                              className="prose prose-invert max-w-none"
-                              dangerouslySetInnerHTML={{
-                                __html: formattedHtml,
-                              }}
-                              ref={(el) => {
-                                if (el) {
-                                  // Highlight code blocks after render
-                                  setTimeout(() => {
-                                    highlightCodeBlocks(el);
-                                  }, 0);
-                                }
-                              }}
-                            />
-                          )}
-                          {message.plan &&
-                            message.role === 'assistant' && (
-                              <div className="mt-3">
-                                {renderAiPlan(message.plan)}
+                            {streamingPlan && (
+                              <div className="border-t border-dark-600 pt-3">
+                                {renderAiPlan(streamingPlan)}
                               </div>
                             )}
-                          {message.activityLog &&
-                            Array.isArray(message.activityLog) &&
-                            message.activityLog.length > 0 &&
-                            message.role === 'assistant' && (
-                              <div className={`mt-3 ${message.plan ? '' : ''}`}>
-                                <div className="rounded-xl border border-primary-800/40 bg-dark-900/70 p-4 space-y-3">
-                                  <div className="flex items-center gap-2 text-xs text-dark-400 uppercase tracking-wide">
-                                    <Activity className="w-4 h-4" />
-                                    <span>Process Steps</span>
-                                  </div>
-                                  <ol className="space-y-2">
-                                    {message.activityLog.map((log, logIdx) => {
-                                      const stepPhase = log.phase || 'unknown';
-                                      const Icon = PHASE_ICON_MAP[stepPhase] || Sparkles;
-                                      const meta = THINKING_PHASE_META[stepPhase] || {};
-                                      const toneClass = toneClasses[log.tone] || toneClasses.primary;
-                                      
-                                      return (
-                                        <li
-                                          key={logIdx}
-                                          className="rounded-lg border border-dark-700 bg-dark-800/40 px-3 py-2.5 text-sm"
-                                        >
-                                          <div className="flex items-center gap-2">
-                                            <div
-                                              className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass}`}
-                                            >
-                                              <Icon className="w-3.5 h-3.5" />
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                              <div className="text-sm text-dark-200">
-                                                {log.label || log.description || meta.label || stepPhase}
-                                              </div>
-                                              {(log.description || meta.description) && log.label !== log.description && (
-                                                <p className="text-xs text-dark-400 mt-0.5">
-                                                  {log.description || meta.description}
-                                                </p>
-                                              )}
-                                              {log.durationMs && (
-                                                <span className="text-[10px] text-dark-500 font-mono mt-1 inline-block">
-                                                  {formatDuration(log.durationMs)}
-                                                </span>
-                                              )}
-                                            </div>
-                                          </div>
-                                        </li>
-                                      );
-                                    })}
-                                  </ol>
-                                </div>
+                            {agentStatuses.length > 0 && (
+                              <div className={streamingPlan ? 'border-t border-dark-600 pt-3' : ''}>
+                                <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
                               </div>
                             )}
-                          {message.role === 'assistant' && message.messageId && (
-                            <div className="mt-3 flex items-center gap-3 text-xs text-dark-400">
-                              <span>Was this helpful?</span>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => handleCopyMessage(message)}
-                                  className={`${feedbackButtonBase} border-dark-600 text-dark-300 hover:text-dark-100`}
-                                  title="Copy message to clipboard"
-                                >
-                                  <Copy className="w-3.5 h-3.5" />
-                                  Copy
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={Boolean(isSubmittingFeedback)}
-                                  onClick={() => handleMessageFeedback(message, 'like')}
-                                  className={`${feedbackButtonBase} ${
-                                    currentFeedback === 'like'
-                                      ? 'bg-primary-600/20 border-primary-500 text-primary-100'
-                                      : 'border-dark-600 text-dark-300 hover:text-dark-100'
-                                  } ${isSubmittingFeedback ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                  title="Mark response as helpful"
-                                  aria-pressed={currentFeedback === 'like'}
-                                >
-                                  <ThumbsUp
-                                    className="w-3.5 h-3.5"
-                                    fill={currentFeedback === 'like' ? 'currentColor' : 'none'}
-                                  />
-                                  Like
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={Boolean(isSubmittingFeedback)}
-                                  onClick={() => handleMessageFeedback(message, 'dislike')}
-                                  className={`${feedbackButtonBase} ${
-                                    currentFeedback === 'dislike'
-                                      ? 'bg-red-600/20 border-red-500 text-red-200'
-                                      : 'border-dark-600 text-dark-300 hover:text-dark-100'
-                                  } ${isSubmittingFeedback ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                  title="Mark response as not helpful"
-                                  aria-pressed={currentFeedback === 'dislike'}
-                                >
-                                  <ThumbsDown
-                                    className="w-3.5 h-3.5"
-                                    fill={currentFeedback === 'dislike' ? 'currentColor' : 'none'}
-                                  />
-                                  Dislike
-                                </button>
-                              </div>
-                            </div>
-                          )}
+                          </div>
                         </div>
                       );
                     })()}
-                      {message.role === 'user' && (
-                        <User className="w-5 h-5 text-dark-400 mt-1 flex-shrink-0" />
-                      )}
-                    </div>
-                  ))}
-                  {isLoadingChat && (() => {
-                    // Find the last assistant message (the one being streamed)
-                    const lastAssistantMessage = [...chatMessages].reverse().find(msg => msg.role === 'assistant');
-                    const streamingPlan = lastAssistantMessage?.plan || thinkingAiPlan;
-                    
-                    return (
-                      <div className="flex space-x-2">
-                        <Bot className="w-5 h-5 text-primary-500 mt-1" />
-                        <div className="bg-dark-700 px-3 py-3 rounded-lg space-y-3">
-                          <div className="flex items-center gap-2 text-sm text-dark-300">
-                            <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
-                            <span>
-                              AI is thinking… {Math.max(1, Math.round(Math.max(thinkingElapsed, 1000) / 1000))}s elapsed
-                            </span>
-                          </div>
-                          {streamingPlan && (
-                            <div className="border-t border-dark-600 pt-3">
-                              {renderAiPlan(streamingPlan)}
-                            </div>
-                          )}
-                          {agentStatuses.length > 0 && (
-                            <div className={streamingPlan ? 'border-t border-dark-600 pt-3' : ''}>
-                              <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </div>
+                  </div>
+                )}
+              {!isChatPinnedToBottom && (
+                <button
+                  type="button"
+                  onClick={() => scrollChatToBottom('smooth')}
+                  className="absolute bottom-4 right-4 flex items-center gap-1 rounded-full border border-dark-600 bg-dark-800/90 px-3 py-1.5 text-xs text-dark-100 shadow-lg hover:bg-dark-700 transition-colors"
+                  title="Jump to the latest reply"
+                >
+                  <ArrowDownCircle className="w-4 h-4" />
+                  <span>Jump to latest</span>
+                </button>
               )}
             </div>
 
@@ -8134,7 +8369,6 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                     onChange={(e) => setFollowUpInput(e.target.value)}
                     placeholder="Add a follow-up"
                     className="flex-1 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm"
-                    disabled={isLoadingChat}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
@@ -8146,13 +8380,41 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                   />
                   <button
                     type="submit"
-                    disabled={!followUpInput.trim() || isLoadingChat}
+                    disabled={!followUpInput.trim()}
                     className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    title="Send follow-up"
+                    title={isLoadingChat ? 'Queue follow-up for later' : 'Send follow-up now'}
                   >
                     <Send className="w-4 h-4" />
                   </button>
                 </form>
+                {queuedFollowUps.length > 0 && (
+                  <div className="mt-2 space-y-1 text-[11px] text-dark-400">
+                    <div className="flex items-center gap-2 text-dark-300">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>
+                        {queuedFollowUps.length} follow-up{queuedFollowUps.length > 1 ? 's' : ''} queued
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {queuedFollowUps.map((item) => (
+                        <div
+                          key={item.id}
+                          className="flex items-center gap-1 px-2 py-1 rounded-full bg-dark-700/80 border border-dark-600 text-dark-100 max-w-full"
+                        >
+                          <span className="truncate max-w-[180px]">{item.content}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeQueuedFollowUp(item.id)}
+                            className="text-dark-300 hover:text-dark-100 transition-colors"
+                            title="Remove from queue"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
