@@ -100,6 +100,11 @@ class ApiService {
       payload.metadata = options.metadata;
     }
 
+    // Add images if provided
+    if (options.images && Array.isArray(options.images) && options.images.length > 0) {
+      payload.images = options.images;
+    }
+
     const config = {};
     if (options.signal) {
       config.signal = options.signal;
@@ -114,6 +119,7 @@ class ApiService {
     conversationHistory = [],
     signal,
     onChunk,
+    images = null,
   }) {
     if (typeof onChunk !== 'function') {
       throw new Error('sendMessageStream requires an onChunk callback');
@@ -124,6 +130,11 @@ class ApiService {
       context,
       conversation_history: conversationHistory
     };
+
+    // Add images if provided
+    if (images && Array.isArray(images) && images.length > 0) {
+      payload.images = images;
+    }
 
     const response = await fetch(`${API_BASE_URL}/api/chat/send/stream`, {
       method: 'POST',

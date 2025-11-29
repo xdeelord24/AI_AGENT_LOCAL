@@ -34,9 +34,12 @@ import os
 import subprocess
 import time
 import logging
+import aiofiles
+import aiohttp
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 from datetime import datetime
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +320,29 @@ class MCPServerTools:
                     "required": ["command"]
                 }
             ),
+            Tool(
+                name="download_file",
+                description="Download a file from a URL and save it to the workspace. Supports HTTP and HTTPS URLs.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "URL of the file to download (must be HTTP or HTTPS)"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Path where to save the file (relative to workspace or absolute). If not provided, filename will be extracted from URL."
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Download timeout in seconds (default: 60)",
+                            "default": 60
+                        }
+                    },
+                    "required": ["url"]
+                }
+            ),
         ]
         
         if self.web_search_enabled:
@@ -448,6 +474,17 @@ class MCPServerTools:
                     arguments.get("query", ""),
                     arguments.get("max_results", 5),
                     arguments.get("search_type", "text")
+                )
+            elif tool_name == "download_file":
+                if not allow_write:
+                    return [TextContent(
+                        type="text",
+                        text="ERROR: File downloads are disabled in ASK mode. Switch to Agent mode to download files."
+                    )]
+                return await self._download_file(
+                    arguments.get("url", ""),
+                    arguments.get("path"),
+                    arguments.get("timeout", 60)
                 )
             else:
                 execution_time = time.time() - execution_start
@@ -683,6 +720,86 @@ class MCPServerTools:
                 )]
         except Exception as e:
             return [TextContent(type="text", text=f"Error executing command: {str(e)}")]
+    
+    async def _download_file(self, url: str, path: Optional[str] = None, timeout: int = 60) -> List[TextContent]:
+        """Download a file from a URL and save it to the workspace"""
+        if not self.file_service:
+            return [TextContent(type="text", text="File service not available")]
+        
+        try:
+            # Validate URL
+            parsed_url = urlparse(url)
+            if parsed_url.scheme not in ('http', 'https'):
+                return [TextContent(type="text", text=f"ERROR: Invalid URL scheme. Only HTTP and HTTPS are supported. Got: {parsed_url.scheme}")]
+            
+            # Determine save path
+            if not path:
+                # Extract filename from URL
+                filename = os.path.basename(parsed_url.path) or "downloaded_file"
+                # Remove query parameters from filename
+                if '?' in filename:
+                    filename = filename.split('?')[0]
+                if not filename or filename == '/':
+                    filename = "downloaded_file"
+                path = filename
+            
+            # Normalize path
+            if not os.path.isabs(path):
+                path = os.path.join(self.workspace_root, path)
+            
+            # Create directory if it doesn't exist
+            directory = os.path.dirname(path)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+            
+            # Download the file
+            logger.info(f"Downloading file from {url} to {path}")
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        return [TextContent(
+                            type="text",
+                            text=f"ERROR: Failed to download file. HTTP status: {response.status}"
+                        )]
+                    
+                    # Check content length if available
+                    content_length = response.headers.get('Content-Length')
+                    if content_length:
+                        size_mb = int(content_length) / (1024 * 1024)
+                        if size_mb > 100:  # Limit to 100MB
+                            return [TextContent(
+                                type="text",
+                                text=f"ERROR: File too large ({size_mb:.1f}MB). Maximum size is 100MB."
+                            )]
+                    
+                    # Read content in chunks and write to file
+                    content = await response.read()
+                    
+                    # Check size after download
+                    size_mb = len(content) / (1024 * 1024)
+                    if size_mb > 100:
+                        return [TextContent(
+                            type="text",
+                            text=f"ERROR: Downloaded file too large ({size_mb:.1f}MB). Maximum size is 100MB."
+                        )]
+                    
+                    # Write file
+                    async with aiofiles.open(path, 'wb') as f:
+                        await f.write(content)
+                    
+                    self._invalidate_structure_caches()
+                    file_size_kb = len(content) / 1024
+                    return [TextContent(
+                        type="text",
+                        text=f"Successfully downloaded file from {url}\nSaved to: {path}\nSize: {file_size_kb:.1f} KB"
+                    )]
+        except aiohttp.ClientError as e:
+            return [TextContent(type="text", text=f"ERROR: Network error downloading file: {str(e)}")]
+        except asyncio.TimeoutError:
+            return [TextContent(type="text", text=f"ERROR: Download timed out after {timeout} seconds")]
+        except Exception as e:
+            logger.error(f"Error downloading file: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"ERROR: Failed to download file: {str(e)}")]
     
     async def _web_search(self, query: str, max_results: int, search_type: str = "text") -> List[TextContent]:
         """Perform web search using enhanced web search service"""

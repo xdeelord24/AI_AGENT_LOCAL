@@ -1687,7 +1687,8 @@ class AIService:
         self, 
         message: str, 
         context: Dict[str, Any] = None,
-        conversation_history: List[Dict[str, str]] = None
+        conversation_history: List[Dict[str, str]] = None,
+        images: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Process a message and get AI response"""
         
@@ -1952,11 +1953,11 @@ class AIService:
             # The response will continue normally regardless of search status
         
         # Prepare the prompt with context
-        prompt = self._build_prompt(message, context, conversation_history or [])
+        prompt = self._build_prompt(message, context, conversation_history or [], images=images)
         
         # Get initial response from configured provider
         # accumulated_thinking is already initialized to None at function start
-        response, thinking = await self._call_model(prompt)
+        response, thinking = await self._call_model(prompt, images=images)
         # Always assign to ensure variable is set (even if thinking is None)
         accumulated_thinking = thinking if thinking else None
         
@@ -2664,9 +2665,17 @@ class AIService:
         self, 
         message: str, 
         context: Dict[str, Any], 
-        history: List[Dict[str, str]]
+        history: List[Dict[str, str]],
+        images: Optional[List[str]] = None
     ) -> str:
-        """Build a comprehensive prompt with context"""
+        """Build a comprehensive prompt with context
+        
+        Args:
+            message: The user's message
+            context: Context dictionary with mode, workspace info, etc.
+            history: Conversation history
+            images: Optional list of base64-encoded image data URLs
+        """
         
         mode_value = (context.get("mode") or "").lower()
         chat_mode_value = (context.get("chat_mode") or "").lower()
@@ -2684,6 +2693,28 @@ class AIService:
             "- Best practices and patterns",
             "",
         ]
+        
+        # Add image information if provided
+        # Note: For full vision model support, images would need to be passed to Ollama's /api/chat endpoint
+        # For now, we include image references in the prompt
+        if images and len(images) > 0:
+            prompt_parts.extend([
+                "",
+                "=" * 80,
+                f"IMAGES ATTACHED: {len(images)} image(s) included with this message",
+                "=" * 80,
+                "",
+                "The user has attached image(s) to their message. The image data is available in base64 format.",
+                "If you are using a vision-capable model, you can process these images.",
+                "If the images contain code, diagrams, screenshots, UI elements, or other visual content,",
+                "please analyze and incorporate that information into your response.",
+                "",
+                f"Number of images: {len(images)}",
+                "Image format: base64 data URLs (data:image/...)",
+                "",
+                "=" * 80,
+                "",
+            ])
         
         # Add MCP tools description if enabled
         if self.is_mcp_enabled():
@@ -3944,12 +3975,12 @@ class AIService:
         
         return self._parse_response_metadata(fallback_response, context)
     
-    async def _call_model(self, prompt: str) -> Tuple[str, Optional[str]]:
+    async def _call_model(self, prompt: str, images: Optional[List[str]] = None) -> Tuple[str, Optional[str]]:
         """Call the AI model, returns (response, thinking) tuple"""
         if self.provider == "huggingface":
             response = await self._call_huggingface(prompt)
             return response, None  # Hugging Face doesn't support thinking yet
-        return await self._call_ollama(prompt)
+        return await self._call_ollama(prompt, images=images)
 
     async def _call_huggingface(self, prompt: str) -> str:
         loop = asyncio.get_event_loop()
@@ -4003,25 +4034,73 @@ class AIService:
         except Exception as error:
             raise Exception(f"Hugging Face API error: {error}") from error
 
-    async def _call_ollama(self, prompt: str) -> Tuple[str, Optional[str]]:
+    def _extract_base64_from_data_url(self, data_url: str) -> Tuple[str, str]:
+        """Extract base64 data and media type from data URL"""
+        if not data_url or not data_url.startswith("data:"):
+            return data_url, "image/png"
+        
+        # Parse data:image/png;base64,<data>
+        header, data = data_url.split(",", 1)
+        media_type = "image/png"  # default
+        if "image/" in header:
+            # Extract the image type (png, jpeg, gif, etc.)
+            img_type = header.split("image/")[1].split(";")[0]
+            media_type = f"image/{img_type}"
+        
+        return data, media_type
+    
+    async def _call_ollama(self, prompt: str, images: Optional[List[str]] = None) -> Tuple[str, Optional[str]]:
         """Make API call to Ollama, returns (response, thinking) tuple"""
         generation_options, keep_alive = self._build_generation_options_for_model()
-        payload = {
-            "model": self.current_model,
-            "prompt": prompt,
-            "stream": True,  # Enable streaming to capture thinking
-            "options": generation_options
-        }
-        if keep_alive:
-            payload["keep_alive"] = keep_alive
         
         # Choose URL based on connection method
         url = self.ollama_url if self.use_proxy else self.ollama_direct
         
+        # Use /api/chat endpoint if images are provided (for vision support)
+        if images and len(images) > 0:
+            logger.info(f"[IMAGE DEBUG] Processing {len(images)} image(s) for Ollama chat API")
+            # Build messages format for chat API with images
+            # Ollama expects images as base64 strings in an images array
+            images_base64 = []
+            for idx, img_data_url in enumerate(images):
+                base64_data, media_type = self._extract_base64_from_data_url(img_data_url)
+                images_base64.append(base64_data)
+                logger.info(f"[IMAGE DEBUG] Image {idx+1}: extracted {len(base64_data)} chars, media_type={media_type}")
+            
+            messages = [{
+                "role": "user",
+                "content": prompt,
+                "images": images_base64
+            }]
+            
+            payload = {
+                "model": self.current_model,
+                "messages": messages,
+                "stream": True,
+                "options": generation_options
+            }
+            if keep_alive:
+                payload["keep_alive"] = keep_alive
+            
+            logger.info(f"[IMAGE DEBUG] Using /api/chat endpoint with {len(images_base64)} image(s)")
+            endpoint = "/api/chat"
+        else:
+            # Use /api/generate endpoint for text-only requests
+            payload = {
+                "model": self.current_model,
+                "prompt": prompt,
+                "stream": True,  # Enable streaming to capture thinking
+                "options": generation_options
+            }
+            if keep_alive:
+                payload["keep_alive"] = keep_alive
+            
+            endpoint = "/api/generate"
+        
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{url}/api/generate",
+                    f"{url}{endpoint}",
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=self.request_timeout)
                 ) as response:
@@ -4048,13 +4127,20 @@ class AIService:
                                     # Parse each JSON line from the stream
                                     data = json.loads(line)
                                     
-                                    # Capture thinking if present
-                                    if "thinking" in data and data["thinking"]:
-                                        thinking_parts.append(data["thinking"])
-                                    
-                                    # Capture response if present
-                                    if "response" in data and data["response"]:
-                                        response_parts.append(data["response"])
+                                    # Handle chat API format (message.content) vs generate API format (response)
+                                    if endpoint == "/api/chat":
+                                        # Chat API uses message.content
+                                        if "message" in data and "content" in data["message"]:
+                                            response_parts.append(data["message"]["content"])
+                                        # Chat API may also have thinking
+                                        if "thinking" in data and data["thinking"]:
+                                            thinking_parts.append(data["thinking"])
+                                    else:
+                                        # Generate API uses response
+                                        if "thinking" in data and data["thinking"]:
+                                            thinking_parts.append(data["thinking"])
+                                        if "response" in data and data["response"]:
+                                            response_parts.append(data["response"])
                                     
                                     # Check if done
                                     if data.get("done", False):
@@ -4076,7 +4162,7 @@ class AIService:
                             # Retry with non-streaming
                             payload["stream"] = False
                             async with session.post(
-                                f"{url}/api/generate",
+                                f"{url}{endpoint}",
                                 json=payload,
                                 timeout=aiohttp.ClientTimeout(total=self.request_timeout)
                             ) as fallback_response:
@@ -4111,24 +4197,57 @@ class AIService:
             logger.exception(f"Error calling Ollama. Model: {self.current_model}, URL: {url}")
             raise Exception(f"Error calling Ollama: {str(e)}")
     
-    async def _stream_ollama(self, prompt: str) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _stream_ollama(self, prompt: str, images: Optional[List[str]] = None) -> AsyncGenerator[Dict[str, Any], None]:
         """Stream Ollama response, yielding chunks as they arrive"""
         generation_options, keep_alive = self._build_generation_options_for_model()
-        payload = {
-            "model": self.current_model,
-            "prompt": prompt,
-            "stream": True,
-            "options": generation_options
-        }
-        if keep_alive:
-            payload["keep_alive"] = keep_alive
         
         url = self.ollama_url if self.use_proxy else self.ollama_direct
+        
+        # Use /api/chat endpoint if images are provided (for vision support)
+        if images and len(images) > 0:
+            logger.info(f"[IMAGE DEBUG] Streaming: Processing {len(images)} image(s) for Ollama chat API")
+            # Build messages format for chat API with images
+            # Ollama expects images as base64 strings in an images array
+            images_base64 = []
+            for idx, img_data_url in enumerate(images):
+                base64_data, media_type = self._extract_base64_from_data_url(img_data_url)
+                images_base64.append(base64_data)
+                logger.info(f"[IMAGE DEBUG] Streaming Image {idx+1}: extracted {len(base64_data)} chars, media_type={media_type}")
+            
+            messages = [{
+                "role": "user",
+                "content": prompt,
+                "images": images_base64
+            }]
+            
+            payload = {
+                "model": self.current_model,
+                "messages": messages,
+                "stream": True,
+                "options": generation_options
+            }
+            if keep_alive:
+                payload["keep_alive"] = keep_alive
+            
+            logger.info(f"[IMAGE DEBUG] Streaming: Using /api/chat endpoint with {len(images_base64)} image(s)")
+            endpoint = "/api/chat"
+        else:
+            # Use /api/generate endpoint for text-only requests
+            payload = {
+                "model": self.current_model,
+                "prompt": prompt,
+                "stream": True,
+                "options": generation_options
+            }
+            if keep_alive:
+                payload["keep_alive"] = keep_alive
+            
+            endpoint = "/api/generate"
         
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{url}/api/generate",
+                    f"{url}{endpoint}",
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=self.request_timeout)
                 ) as response:
@@ -4148,13 +4267,20 @@ class AIService:
                                 try:
                                     data = json.loads(line)
                                     
-                                    # Yield thinking chunks
-                                    if "thinking" in data and data["thinking"]:
-                                        yield {"type": "thinking", "content": data["thinking"]}
-                                    
-                                    # Yield response chunks
-                                    if "response" in data and data["response"]:
-                                        yield {"type": "response", "content": data["response"]}
+                                    # Handle chat API format (message.content) vs generate API format (response)
+                                    if endpoint == "/api/chat":
+                                        # Chat API uses message.content
+                                        if "message" in data and "content" in data["message"]:
+                                            yield {"type": "response", "content": data["message"]["content"]}
+                                        # Chat API may also have thinking
+                                        if "thinking" in data and data["thinking"]:
+                                            yield {"type": "thinking", "content": data["thinking"]}
+                                    else:
+                                        # Generate API uses response
+                                        if "thinking" in data and data["thinking"]:
+                                            yield {"type": "thinking", "content": data["thinking"]}
+                                        if "response" in data and data["response"]:
+                                            yield {"type": "response", "content": data["response"]}
                                     
                                     # Yield done signal
                                     if data.get("done", False):

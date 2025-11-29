@@ -886,6 +886,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [chatInput, setChatInput] = useState('');
   const [composerInput, setComposerInput] = useState('');
   const [followUpInput, setFollowUpInput] = useState('');
+  const [attachedImages, setAttachedImages] = useState([]); // Array of {id, dataUrl, file}
+  const imageInputRef = useRef(null);
   const [queuedFollowUps, setQueuedFollowUps] = useState([]);
   const [isChatPinnedToBottom, setIsChatPinnedToBottom] = useState(true);
   const [isLoadingChat, setIsLoadingChat] = useState(false);
@@ -2334,6 +2336,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setChatInput('');
     setComposerInput('');
     setFollowUpInput('');
+    setAttachedImages([]);
     setPendingFileOperations(null);
     setThinkingAiPlan(null);
     // Clear the save ref map to allow new saves for new conversations
@@ -2427,7 +2430,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       console.error('Error saving file:', error);
       toast.error(`Failed to save file: ${error.response?.data?.detail || error.message}`);
     }
-  }, [openFiles, activeTab, selectedFiles, refreshFileTree, lastSelectedFile, setLastSelectedFile]);
+  }, [openFiles, activeTab, refreshFileTree, lastSelectedFile, setLastSelectedFile]);
 
   const appendTerminalLine = useCallback((text, type = 'stdout') => {
     if (typeof text !== 'string') {
@@ -5072,12 +5075,14 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     await new Promise((resolve) => setTimeout(resolve, PLAN_PREVIEW_DELAY_MS));
   }, [setThinkingAiPlan]);
 
-  const handleSendChat = useCallback(async (message, isComposer = false) => {
+  const handleSendChat = useCallback(async (message, isComposer = false, imagesToInclude = null) => {
     const originalMessage = message;
     const normalizedMessage = normalizeChatInput(message);
     const safeRawContent =
       typeof originalMessage === 'string' ? originalMessage : normalizedMessage;
-    if (!normalizedMessage.trim() || isLoadingChat) return;
+    // Allow sending if there's either a message or images
+    const hasImages = imagesToInclude && Array.isArray(imagesToInclude) && imagesToInclude.length > 0;
+    if ((!normalizedMessage.trim() && !hasImages) || isLoadingChat) return;
 
     const sanitizedHistory = chatMessages
       .filter(msg => msg.role === 'user' || msg.role === 'assistant')
@@ -5091,7 +5096,8 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     const isAgentLikeMode = modePayload === 'agent' || modePayload === 'plan';
     const shouldEnableComposerMode = isComposer || isAgentLikeMode;
 
-    let finalMessage = normalizedMessage;
+    let finalMessage = normalizedMessage || "";
+    // Allow empty message when images are present
     if (activeTab) {
       const activeTag = `@${activeTab}`;
       finalMessage = finalMessage
@@ -5151,13 +5157,20 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       }
     }
 
+    // Extract images for the message (use provided images or fall back to attachedImages)
+    const imagesToUseForMessage = imagesToInclude || attachedImages;
+    const messageImages = imagesToUseForMessage.map(img => {
+      return typeof img === 'string' ? { id: Date.now() + Math.random(), dataUrl: img } : img;
+    }).filter(img => img && img.dataUrl);
+    
     const userMessage = {
       id: Date.now(),
       role: 'user',
       content: finalMessage,
       rawContent: safeRawContent,
       timestamp: new Date().toISOString(),
-      isComposer: isComposer
+      isComposer: isComposer,
+      images: messageImages.length > 0 ? messageImages : null
     };
 
     setChatMessages(prev => [...prev, userMessage]);
@@ -5268,11 +5281,19 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       setChatMessages(prev => [...prev, assistantMessage]);
       
       try {
+        // Extract base64 data URLs from attached images (use provided images or fall back to attachedImages)
+        const imagesToUse = imagesToInclude || attachedImages;
+        const imageDataUrls = imagesToUse.map(img => {
+          // Handle both object format {dataUrl, ...} and direct string format
+          return typeof img === 'string' ? img : (img.dataUrl || img);
+        }).filter(Boolean);
+        
         await ApiService.sendMessageStream({
           message: finalMessage,
           context: context,
           conversationHistory: sanitizedHistory,
           signal: abortController.signal,
+          images: imageDataUrls.length > 0 ? imageDataUrls : null,
           onChunk: async (chunk) => {
             // DEBUG: Log all chunks to track web_search flow
             const debugInfo = {
@@ -5557,11 +5578,16 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           return;
         }
         // Fall back to non-streaming if streaming fails
+        const imageDataUrls = attachedImages.map(img => img.dataUrl);
         const response = await ApiService.sendMessage(
           finalMessage,
           context,
           sanitizedHistory,
-          { mode: modePayload, signal: abortController.signal }
+          { 
+            mode: modePayload, 
+            signal: abortController.signal,
+            images: imageDataUrls.length > 0 ? imageDataUrls : null
+          }
         );
         
         if (abortController.signal.aborted) {
@@ -5711,7 +5737,9 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     buildFileOperationPreviews,
     previewAiPlanBeforeAnswer,
     clearAgentStatuses,
-    scheduleAgentStatuses
+    scheduleAgentStatuses,
+    attachedImages,
+    projectRootPath
   ]);
 
   useEffect(() => {
@@ -5728,20 +5756,97 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     if (!send) {
       return;
     }
-    send(next.content, next.isComposer).catch((error) => {
+    send(next.content, next.isComposer, next.images || null).catch((error) => {
       console.error('Failed to send queued follow-up:', error);
       toast.error('Failed to send queued follow-up');
     });
   }, [isLoadingChat, queuedFollowUps]);
 
+  // Image handling functions
+  const handleImageUpload = useCallback((e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    
+    files.forEach(file => {
+      if (!file.type.startsWith('image/')) {
+        toast.error(`${file.name} is not an image file`);
+        return;
+      }
+      
+      if (file.size > 10 * 1024 * 1024) { // 10MB limit
+        toast.error(`${file.name} is too large. Maximum size is 10MB.`);
+        return;
+      }
+      
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const dataUrl = event.target.result;
+        setAttachedImages(prev => [...prev, {
+          id: Date.now() + Math.random(),
+          dataUrl,
+          file
+        }]);
+      };
+      reader.onerror = () => {
+        toast.error(`Failed to read ${file.name}`);
+      };
+      reader.readAsDataURL(file);
+    });
+    
+    // Reset input
+    if (imageInputRef.current) {
+      imageInputRef.current.value = '';
+    }
+  }, []);
+  
+  const handleImagePaste = useCallback((e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file && file.size > 10 * 1024 * 1024) {
+          toast.error('Image is too large. Maximum size is 10MB.');
+          return;
+        }
+        
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const dataUrl = event.target.result;
+          setAttachedImages(prev => [...prev, {
+            id: Date.now() + Math.random(),
+            dataUrl,
+            file
+          }]);
+          toast.success('Image pasted');
+        };
+        reader.onerror = () => {
+          toast.error('Failed to read pasted image');
+        };
+        reader.readAsDataURL(file);
+        break;
+      }
+    }
+  }, []);
+  
+  const removeImage = useCallback((imageId) => {
+    setAttachedImages(prev => prev.filter(img => img.id !== imageId));
+  }, []);
+
   const handleFollowUpSubmit = async (e) => {
     e.preventDefault();
     const trimmed = followUpInput.trim();
-    if (!trimmed) {
+    if (!trimmed && attachedImages.length === 0) {
       return;
     }
     const shouldUseComposer = agentMode !== 'ask';
+    // Capture images before clearing
+    const imagesToSend = [...attachedImages];
     setFollowUpInput('');
+    setAttachedImages([]);
     if (isLoadingChat) {
       setQueuedFollowUps((prev) => [
         ...prev,
@@ -5749,12 +5854,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           id: Date.now(),
           content: trimmed,
           isComposer: shouldUseComposer,
+          images: imagesToSend.length > 0 ? imagesToSend : null,
         },
       ]);
       toast.success('Follow-up queued and will send once the current reply finishes.');
       return;
     }
-    await handleSendChat(trimmed, shouldUseComposer);
+    await handleSendChat(trimmed, shouldUseComposer, imagesToSend.length > 0 ? imagesToSend : null);
   };
 
   const removeQueuedFollowUp = useCallback((queuedId) => {
@@ -6025,7 +6131,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
   const handleComposerSubmit = async (e) => {
     e.preventDefault();
     setShowFileSuggestions(false);
-    await handleSendChat(composerInput, true);
+    if (!composerInput.trim() && attachedImages.length === 0) {
+      return;
+    }
+    // Capture images before clearing
+    const imagesToSend = [...attachedImages];
+    setAttachedImages([]);
+    await handleSendChat(composerInput, true, imagesToSend.length > 0 ? imagesToSend : null);
   };
 
   const openOperationPreview = useCallback(
@@ -8025,11 +8137,34 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             {/* Main Composer Input Area */}
             <div className="p-3 border-b border-dark-700 bg-dark-800">
               <form onSubmit={handleComposerSubmit} className="relative">
+                {/* Attached Images Preview for Composer */}
+                {attachedImages.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    {attachedImages.map((img) => (
+                      <div key={img.id} className="relative group">
+                        <img
+                          src={img.dataUrl}
+                          alt="Attached"
+                          className="w-16 h-16 object-cover rounded-lg border border-dark-600"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeImage(img.id)}
+                          className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Remove image"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="flex items-start gap-2 mb-3">
                   <textarea
                     ref={composerInputRef}
                     value={composerInput}
                     onChange={handleComposerInputChange}
+                    onPaste={handleImagePaste}
                     placeholder="Plan, @ for context, / for commands"
                     rows={1}
                     className="flex-1 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] max-h-32 overflow-y-auto"
@@ -8187,6 +8322,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   </div>
                   <button
                     type="button"
+                    onClick={() => imageInputRef.current?.click()}
                     className="hover:text-dark-200 transition-colors"
                     title="Upload Image"
                   >
@@ -8416,6 +8552,20 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                   )}
                                 </div>
                               )}
+                              {/* Display images for user messages */}
+                              {message.images && Array.isArray(message.images) && message.images.length > 0 && message.role === 'user' && (
+                                <div className="mb-3 flex flex-wrap gap-2">
+                                  {message.images.map((img) => (
+                                    <div key={img.id || img.dataUrl} className="relative group">
+                                      <img
+                                        src={typeof img === 'string' ? img : img.dataUrl}
+                                        alt="Attached"
+                                        className="max-w-full max-h-64 rounded-lg border border-white/20 object-contain"
+                                      />
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                               {hasContent && (
                                 <div
                                   className="prose prose-invert max-w-none"
@@ -8636,12 +8786,35 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             {/* Follow-up Input */}
             {chatMessages.length > 0 && (
               <div className="border-t border-dark-700 bg-dark-800 p-3 flex-shrink-0">
+                {/* Attached Images Preview for Follow-up */}
+                {attachedImages.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    {attachedImages.map((img) => (
+                      <div key={img.id} className="relative group">
+                        <img
+                          src={img.dataUrl}
+                          alt="Attached"
+                          className="w-16 h-16 object-cover rounded-lg border border-dark-600"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeImage(img.id)}
+                          className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Remove image"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <form onSubmit={handleFollowUpSubmit} className="flex items-center gap-2">
                   <input
                     type="text"
                     value={followUpInput}
                     onChange={(e) => setFollowUpInput(e.target.value)}
-                    placeholder="Add a follow-up"
+                    onPaste={handleImagePaste}
+                    placeholder="Add a follow-up (or paste an image)"
                     className="flex-1 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
@@ -8652,9 +8825,25 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                       }
                     }}
                   />
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handleImageUpload}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => imageInputRef.current?.click()}
+                    className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
+                    title="Attach image"
+                  >
+                    <Image className="w-4 h-4" />
+                  </button>
                   <button
                     type="submit"
-                    disabled={!followUpInput.trim()}
+                    disabled={!followUpInput.trim() && attachedImages.length === 0}
                     className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     title={isLoadingChat ? 'Queue follow-up for later' : 'Send follow-up now'}
                   >

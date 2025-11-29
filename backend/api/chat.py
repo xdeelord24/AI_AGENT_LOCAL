@@ -29,6 +29,7 @@ class ChatRequest(BaseModel):
     message: str
     context: Optional[Dict[str, Any]] = None
     conversation_history: Optional[List[ChatMessage]] = None
+    images: Optional[List[str]] = None  # List of base64-encoded images (data URLs)
 
 
 class ChatResponse(BaseModel):
@@ -317,7 +318,8 @@ async def send_message(
             response = await ai_service.process_message(
                 message=current_message,
                 context=context_payload,
-                conversation_history=working_history
+                conversation_history=working_history,
+                images=request.images if auto_continue_rounds == 0 else None
             )
             _record_activity_event(
                 activity_events,
@@ -476,6 +478,10 @@ async def send_message_stream(
             
             working_history = list(history)
             current_message = request.message
+            images = request.images or []  # Extract images from request
+            if images:
+                logger.info(f"[IMAGE DEBUG] Received {len(images)} image(s) in request")
+                logger.info(f"[IMAGE DEBUG] First image preview: {images[0][:100] if images[0] else 'empty'}...")
             auto_continue_rounds = 0
             accumulated_thinking = ""
             accumulated_responses = []  # Accumulate responses from all rounds
@@ -486,8 +492,13 @@ async def send_message_stream(
             accumulated_web_references = []  # Track web references from web_search tool results
             
             while True:
-                # Build prompt for current message
-                prompt = ai_service._build_prompt(current_message, context_payload, working_history)
+                # Build prompt for current message (include images if provided, only on first round)
+                prompt = ai_service._build_prompt(
+                    current_message, 
+                    context_payload, 
+                    working_history,
+                    images=images if auto_continue_rounds == 0 else None
+                )
                 
                 # DEBUG: Log if MCP tools are included in prompt
                 has_mcp_tools_in_prompt = "MCP TOOLS AVAILABLE" in prompt or "web_search" in prompt
@@ -526,7 +537,7 @@ async def send_message_stream(
                 accumulated_response_round = ""
                 
                 if ai_service.provider == "ollama":
-                    async for chunk in ai_service._stream_ollama(prompt):
+                    async for chunk in ai_service._stream_ollama(prompt, images=images if auto_continue_rounds == 0 else None):
                         if chunk.get("type") == "thinking":
                             thinking_chunk = chunk.get("content", "")
                             accumulated_thinking_round += thinking_chunk
