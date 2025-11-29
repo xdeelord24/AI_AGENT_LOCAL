@@ -99,6 +99,61 @@ export WEB_SEARCH_CACHE_TTL=3600
 results, metadata = await web_service.search("python async programming")
 ```
 
+### Search with Deduplication
+```python
+# Search with automatic deduplication
+results, metadata = await web_service.search(
+    "python tutorial",
+    deduplicate=True  # Default: True
+)
+```
+
+### Search with Domain Filtering
+```python
+# Only include results from specific domains
+results, metadata = await web_service.search(
+    "react hooks",
+    filter_domains=["github.com", "react.dev"]
+)
+
+# Exclude specific domains
+results, metadata = await web_service.search(
+    "javascript tutorial",
+    exclude_domains=["spam-site.com", "ad-site.com"]
+)
+```
+
+### Multi-Query Search
+```python
+# Search multiple related queries
+results, metadata = await web_service.search_multiple(
+    queries=[
+        "python async programming",
+        "python asyncio tutorial",
+        "python concurrent programming"
+    ],
+    max_results_per_query=5,
+    combine_results=True  # Combine and deduplicate
+)
+```
+
+### Result Summarization
+```python
+# Get a summary of search results
+results, metadata = await web_service.search("fastapi tutorial")
+summary = web_service.summarize_results(results, max_length=500)
+print(summary)
+```
+
+### Search with Retry Logic
+```python
+# Automatic retry on failure (built-in)
+results, metadata = await web_service.search(
+    "python web framework",
+    # Retry logic is automatic - no configuration needed
+)
+```
+
 ### News Search
 ```python
 # Search for news articles
@@ -205,6 +260,29 @@ results, metadata = await web_service.search("your query")
 formatted = web_service.format_results(results, "your query")
 ```
 
+### 4. API Endpoints
+Use the REST API endpoints for web search:
+```bash
+# Basic search
+curl -X POST http://localhost:8000/api/web-search/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "python async", "max_results": 10}'
+
+# Multi-query search
+curl -X POST http://localhost:8000/api/web-search/search/multiple \
+  -H "Content-Type: application/json" \
+  -d '{"queries": ["python async", "python asyncio"], "combine_results": true}'
+
+# Get search history
+curl http://localhost:8000/api/web-search/search/history?limit=10
+
+# Get cache statistics
+curl http://localhost:8000/api/web-search/search/cache/stats
+
+# Clear cache
+curl -X DELETE http://localhost:8000/api/web-search/search/cache
+```
+
 ## Best Practices
 
 1. **Use caching**: Enable caching for better performance
@@ -230,14 +308,68 @@ formatted = web_service.format_results(results, "your query")
 - Use caching to reduce API calls
 - Batch related searches
 
+## New Enhancements (Latest Update)
+
+### 1. **Result Deduplication** ✅
+- Automatically removes duplicate URLs
+- Filters similar content based on title similarity
+- Normalizes URLs for better duplicate detection
+- Configurable via `deduplicate` parameter
+
+### 2. **Retry Logic with Exponential Backoff** ✅
+- Automatic retries on failure (up to 3 attempts)
+- Exponential backoff: 1s, 2s, 4s delays
+- Maximum delay cap of 10 seconds
+- Better handling of transient network errors
+
+### 3. **Query Expansion** ✅
+- Synonym-based query expansion
+- Multiple query variations for better coverage
+- Configurable expansion dictionary
+- Smart phrase extraction
+
+### 4. **Enhanced Relevance Scoring** ✅
+- Improved title matching with position weighting
+- Phrase matching for consecutive words
+- Multiple occurrence detection
+- Enhanced domain authority scoring
+- Date-based relevance boosting
+- Quality penalties for short/low-quality content
+
+### 5. **Domain Filtering** ✅
+- Whitelist filtering (`filter_domains`)
+- Blacklist filtering (`exclude_domains`)
+- Works with cached results
+- URL parsing and normalization
+
+### 6. **Multi-Query Search** ✅
+- Search multiple queries simultaneously
+- Option to combine and deduplicate results
+- Cross-query relevance scoring
+- Useful for comprehensive research
+
+### 7. **Result Summarization** ✅
+- Automatic summarization of search results
+- Configurable summary length
+- Highlights top results
+- Clean, readable format
+
+### 8. **Dedicated API Endpoints** ✅
+- `/web-search/search` - Main search endpoint
+- `/web-search/search/multiple` - Multi-query search
+- `/web-search/search/summarize` - Result summarization
+- `/web-search/search/history` - Search history
+- `/web-search/search/cache/stats` - Cache statistics
+- `/web-search/search/cache` - Cache management (DELETE)
+
 ## Future Enhancements
 
-- [ ] Search result summarization
-- [ ] Multi-query search (search multiple related queries)
 - [ ] Search result clustering
 - [ ] Personalized search based on history
 - [ ] Integration with other search engines
 - [ ] Search result preview/thumbnail support
+- [ ] Advanced query understanding (NLP)
+- [ ] Result ranking based on user preferences
 
 ## Technical Details
 
@@ -247,16 +379,33 @@ formatted = web_service.format_results(results, "your query")
 - Persistence: Survives application restarts
 
 ### Relevance Algorithm
-The relevance scoring algorithm considers:
-1. Word matches in title (weight: 2.0)
+The enhanced relevance scoring algorithm considers:
+1. Word matches in title (weight: 2.5)
 2. Word matches in body (weight: 1.0)
-3. Exact phrase matches (bonus: +3.0 title, +2.0 body)
-4. Domain authority (bonus: +1.5 for trusted domains)
+3. Query words at start of title (bonus: +1.0)
+4. Multiple word occurrences in body (bonus: +0.2 per extra occurrence)
+5. Exact phrase matches (bonus: +4.0 title, +2.5 body)
+6. Partial phrase matches (2+ consecutive words) (bonus: +2.0 title, +1.0 body)
+7. Domain authority (bonus: +2.0 for trusted domains, +1.0 for partial matches)
+8. Recent content (bonus: +0.5 if date contains current year)
+9. Quality penalties (-0.5 for very short titles, -0.3 for very short bodies)
 
 ### Rate Limiting
 - Minimum interval: 0.5 seconds
 - Prevents API abuse
 - Smooths out search requests
+
+### Retry Logic
+- Maximum retries: 3 attempts
+- Exponential backoff: 1s, 2s, 4s delays
+- Maximum delay cap: 10 seconds
+- Automatic retry on transient failures
+
+### Deduplication
+- URL normalization for duplicate detection
+- Title similarity matching (90% threshold)
+- Configurable via `deduplicate` parameter
+- Works across multi-query searches
 
 ## Performance Metrics
 
