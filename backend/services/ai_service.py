@@ -529,10 +529,8 @@ class AIService:
         if self.mcp_client and self.is_mcp_enabled():
             cleaned_response = self.mcp_client.remove_tool_calls_from_text(cleaned_response)
         
-        # In ASK mode, never extract file operations or plans
+        # Check if in ASK mode - we'll still extract plans but not file operations
         is_ask_mode = context and self._is_ask_context(context)
-        if is_ask_mode:
-            return cleaned_response, metadata
 
         def to_snake_case(value: str) -> str:
             if not isinstance(value, str):
@@ -695,29 +693,32 @@ class AIService:
                     elif normalized_key == "ai_plan":
                         ai_plan_value = value
 
-                normalized_ops = normalize_file_operations(file_ops_value)
-                if normalized_ops:
-                    metadata["file_operations"].extend(normalized_ops)
-                    found = True
+                # In ASK mode, skip file operations but still extract plans
+                if not is_ask_mode:
+                    normalized_ops = normalize_file_operations(file_ops_value)
+                    if normalized_ops:
+                        metadata["file_operations"].extend(normalized_ops)
+                        found = True
 
+                # Always extract plans, even in ASK mode
                 if isinstance(ai_plan_value, dict) and is_plan_object(ai_plan_value):
                     metadata["ai_plan"] = ai_plan_value
                     found = True
 
-                # Convenience: single file operation object at top level
-                if not found and is_file_op(data):
+                # Convenience: single file operation object at top level (skip in ASK mode)
+                if not is_ask_mode and not found and is_file_op(data):
                     normalized_op = normalize_file_operation(data)
                     if normalized_op:
                         metadata["file_operations"].append(normalized_op)
                         found = True
 
-                # Convenience: plan object at top level without ai_plan key
+                # Convenience: plan object at top level without ai_plan key (always extract)
                 if not found and is_plan_object(data):
                     metadata["ai_plan"] = data
                     found = True
 
-            # Convenience: top-level list of file-operations
-            if isinstance(data, list):
+            # Convenience: top-level list of file-operations (skip in ASK mode)
+            if not is_ask_mode and isinstance(data, list):
                 ops = [op for op in data if is_file_op(op)]
                 if ops:
                     normalized_ops = normalize_file_operations(ops)
@@ -2781,15 +2782,16 @@ class AIService:
                 "ASK mode is STRICTLY read-only. You MUST follow these rules:",
                 "",
                 "1. NEVER create, edit, delete, or modify ANY files in ASK mode.",
-                "2. NEVER include file_operations or ai_plan metadata in your response (not in JSON, not in code blocks, not anywhere).",
-                "3. NEVER include JSON objects with 'file_operations' or 'ai_plan' keys.",
+                "2. NEVER include file_operations metadata in your response (not in JSON, not in code blocks, not anywhere).",
+                "3. NEVER include JSON objects with 'file_operations' keys.",
                 "4. NEVER generate code blocks that look like file operation metadata.",
                 "5. If the user asks for file modifications, explain that ASK mode is read-only and suggest switching to Agent mode.",
-                "6. Provide only a direct, concise answer to the user's question.",
-                "7. DO NOT include thinking, planning, or reasoning prose—just the answer.",
+                "6. You MAY include ai_plan metadata to show your thinking process and task breakdown (this is allowed and will be displayed).",
+                "7. Provide a direct, concise answer to the user's question.",
                 "8. You may include small code snippets for illustration, but never instruct the IDE to modify files.",
                 "",
                 "SYSTEM ENFORCEMENT: Even if you generate file_operations, they will be automatically stripped and ignored in ASK mode.",
+                "However, ai_plan metadata will be extracted and displayed to help users understand your approach.",
                 "",
             ])
         else:
