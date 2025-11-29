@@ -5126,6 +5126,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         mode: modePayload,
         chat_mode: modePayload,
         web_search_mode: webSearchMode,
+        workspace_path: projectRootPath || getWorkspaceRootPath() || '.', // Include workspace path for MCP tools
         default_target_file: activeFileForContext,
         active_file: activeFileForContext,
         active_file_content: activeFileForContext

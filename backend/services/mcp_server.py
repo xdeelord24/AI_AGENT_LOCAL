@@ -87,11 +87,11 @@ class MCPServerTools:
     any MCP-compliant AI model or client.
     """
     
-    def __init__(self, file_service=None, code_analyzer=None, web_search_enabled=True, web_search_service=None):
+    def __init__(self, file_service=None, code_analyzer=None, web_search_enabled=True, web_search_service=None, workspace_root=None):
         self.file_service = file_service
         self.code_analyzer = code_analyzer
         self.web_search_enabled = web_search_enabled
-        self.workspace_root = os.getcwd()
+        self.workspace_root = os.path.abspath(workspace_root) if workspace_root else os.getcwd()
         self._web_search_service = web_search_service  # Shared web search service instance
         try:
             self._cache_ttl_seconds = max(1, int(os.getenv("MCP_CACHE_TTL_SECONDS", "4")))
@@ -128,6 +128,38 @@ class MCPServerTools:
     def _invalidate_structure_caches(self) -> None:
         self._dir_cache.clear()
         self._tree_cache.clear()
+    
+    def set_workspace_root(self, workspace_path: str) -> None:
+        """
+        Update the workspace root path for MCP tool operations.
+        This ensures tools operate within the correct workspace directory.
+        """
+        if workspace_path and workspace_path.strip():
+            # Normalize the path - handle both absolute and relative paths
+            normalized = workspace_path.strip().replace('\\', '/')
+            # If it's a relative path, resolve it relative to current working directory
+            if not os.path.isabs(normalized):
+                resolved_path = os.path.abspath(os.path.join(os.getcwd(), normalized))
+            else:
+                resolved_path = os.path.abspath(normalized)
+            
+            # Verify the path exists and is a directory
+            if os.path.exists(resolved_path) and os.path.isdir(resolved_path):
+                old_root = self.workspace_root
+                self.workspace_root = resolved_path
+                # Invalidate caches when workspace changes
+                if old_root != self.workspace_root:
+                    self._invalidate_structure_caches()
+                    logger.info(f"[MCP] Workspace root updated: {old_root} -> {self.workspace_root}")
+            else:
+                logger.warning(f"[MCP] Workspace path does not exist or is not a directory: {workspace_path} (resolved: {resolved_path}), keeping current: {self.workspace_root}")
+        else:
+            # Reset to default (current working directory) if no path provided
+            old_root = self.workspace_root
+            self.workspace_root = os.getcwd()
+            if old_root != self.workspace_root:
+                self._invalidate_structure_caches()
+                logger.info(f"[MCP] Workspace root reset to default: {self.workspace_root}")
     
     def get_tools(self) -> List[Tool]:
         """

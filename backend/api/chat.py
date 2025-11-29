@@ -454,6 +454,15 @@ async def send_message_stream(
             
             context_payload: Dict[str, Any] = dict(request.context or {})
             
+            # Update MCP server workspace root if provided in context
+            workspace_path = context_payload.get("workspace_path")
+            if workspace_path and ai_service.mcp_client and ai_service.mcp_client.mcp_tools:
+                try:
+                    ai_service.mcp_client.mcp_tools.set_workspace_root(workspace_path)
+                    logger.info(f"[DEBUG] Updated MCP workspace root to: {workspace_path}")
+                except Exception as e:
+                    logger.warning(f"[DEBUG] Failed to update MCP workspace root: {e}")
+            
             # Detect ASK mode - never auto-continue in ASK mode
             mode_value = (context_payload.get("mode") or "").lower()
             chat_mode_value = (context_payload.get("chat_mode") or "").lower()
