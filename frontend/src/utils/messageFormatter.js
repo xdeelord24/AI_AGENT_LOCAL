@@ -651,9 +651,79 @@ export const formatMessageContent = (content, webReferences = null) => {
       tempContent = tempContent.substring(0, match.index) + replacement + tempContent.substring(match.index + match.length);
     }
     
-    formattedContent = tempContent;
+  formattedContent = tempContent;
   }
-
+  
+  // Fallback: Convert any remaining markdown link patterns [text](url) to HTML links
+  // This catches links that the markdown parser might have missed
+  // Only process if the link pattern is not already inside an <a> tag
+  const markdownLinkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
+  let linkMatch;
+  const linkReplacements = [];
+  
+  // First, find all markdown link patterns and check if they're inside existing links
+  while ((linkMatch = markdownLinkPattern.exec(formattedContent)) !== null) {
+    const matchIndex = linkMatch.index;
+    const matchText = linkMatch[0];
+    const linkText = linkMatch[1];
+    const linkUrl = linkMatch[2];
+    
+    // Check if we're inside an existing <a> tag
+    const beforeMatch = formattedContent.substring(0, matchIndex);
+    const lastATag = beforeMatch.lastIndexOf('<a');
+    const lastCloseATag = beforeMatch.lastIndexOf('</a>');
+    
+    // If there's an unclosed <a> tag before this match, we're inside a link - skip it
+    if (lastATag !== -1 && (lastCloseATag === -1 || lastCloseATag < lastATag)) {
+      continue; // Skip this match, it's already inside a link
+    }
+    
+    // Also check if this is already part of an HTML link (check if it's between <a> and </a>)
+    const afterMatch = formattedContent.substring(matchIndex + matchText.length);
+    const nextATag = afterMatch.indexOf('<a');
+    const nextCloseATag = afterMatch.indexOf('</a>');
+    
+    // If there's a closing </a> before the next <a>, and we're after an <a>, skip
+    if (nextCloseATag !== -1 && (nextATag === -1 || nextCloseATag < nextATag)) {
+      // Check if there's an opening <a> before us
+      const beforeText = formattedContent.substring(Math.max(0, matchIndex - 200), matchIndex);
+      if (beforeText.lastIndexOf('<a') > beforeText.lastIndexOf('</a>')) {
+        continue; // We're inside an existing link
+      }
+    }
+    
+    // Escape the URL and text for safety
+    const safeUrl = escapeHtml(linkUrl.trim());
+    const safeText = escapeHtml(linkText.trim());
+    
+    // Only create link if URL looks valid
+    if (safeUrl && (
+      safeUrl.startsWith('http://') || 
+      safeUrl.startsWith('https://') || 
+      safeUrl.startsWith('//') ||
+      safeUrl.startsWith('/') || 
+      safeUrl.startsWith('./') || 
+      safeUrl.startsWith('../') || 
+      safeUrl.startsWith('#') ||
+      safeUrl.startsWith('mailto:') ||
+      safeUrl.startsWith('tel:')
+    )) {
+      linkReplacements.push({
+        index: matchIndex,
+        length: matchText.length,
+        replacement: `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="markdown-link">${safeText}</a>`
+      });
+    }
+  }
+  
+  // Apply replacements in reverse order to maintain correct indices
+  linkReplacements.sort((a, b) => b.index - a.index);
+  for (const replacement of linkReplacements) {
+    formattedContent = formattedContent.substring(0, replacement.index) + 
+                      replacement.replacement + 
+                      formattedContent.substring(replacement.index + replacement.length);
+  }
+  
   // If something in the markdown pipeline produced [object Object],
   // fall back to a very simple escaped HTML representation so the
   // user at least sees the actual text instead of the JS object tag.
