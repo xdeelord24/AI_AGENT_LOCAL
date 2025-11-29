@@ -22,22 +22,43 @@ class ApiService {
     // Extract custom options that aren't axios config
     const { suppress404, ...axiosConfig } = config;
     
+    // Configure axios to not throw errors for 404s when suppress404 is true
+    // This prevents axios from logging the error to console
+    const axiosRequestConfig = {
+      ...axiosConfig,
+      validateStatus: suppress404 === true 
+        ? (status) => status < 500  // Don't throw for 4xx errors when suppress404 is true
+        : undefined  // Use default axios behavior otherwise
+    };
+    
     try {
       const response = await axios({
         method,
         url: `${API_BASE_URL}${url}`,
         data,
-        ...axiosConfig
+        ...axiosRequestConfig
       });
+      
+      // If suppress404 is true and we got a 404, return null instead of throwing
+      if (suppress404 === true && response.status === 404) {
+        return null;
+      }
+      
       return response.data;
     } catch (error) {
       if (error.name === 'CanceledError' || error.name === 'AbortError') {
         throw error;
       }
+      
       // Suppress console errors for expected 404s (e.g., when checking for non-existent sessions)
       // Only log unexpected errors
       if (error.response?.status !== 404 || suppress404 !== true) {
         console.error(`API ${method} ${url} failed:`, error);
+      } else {
+        // For suppressed 404s, return null instead of throwing
+        if (suppress404 === true) {
+          return null;
+        }
       }
       throw error;
     }
@@ -150,6 +171,25 @@ class ApiService {
             const data = chunk.slice(6); // Remove 'data: ' prefix
             try {
               const payload = JSON.parse(data);
+              // DEBUG: Log all received chunks to track web_search flow
+              if (payload.type === 'continue' || payload.type === 'done' || payload.type === 'response' || payload.type === 'plan') {
+                const apiDebug = {
+                  type: payload.type,
+                  round: payload.round,
+                  hasContent: !!payload.content,
+                  contentLength: payload.content?.length || 0,
+                  timestamp: new Date().toISOString()
+                };
+                if (payload.type === 'continue') {
+                  apiDebug.message = payload.message;
+                }
+                if (payload.type === 'done') {
+                  apiDebug.hasResponse = !!payload.response;
+                  apiDebug.hasWebRefs = !!payload.web_references;
+                  apiDebug.webRefsCount = payload.web_references?.length || 0;
+                }
+                console.log('[DEBUG API] Received chunk:', JSON.stringify(apiDebug, null, 2));
+              }
               await Promise.resolve(onChunk(payload));
             } catch (error) {
               console.warn('Skipping malformed stream chunk', data, error);
@@ -166,6 +206,16 @@ class ApiService {
             const data = line.slice(6);
             try {
               const payload = JSON.parse(data);
+              // DEBUG: Log all received chunks to track web_search flow
+              if (payload.type === 'continue' || payload.type === 'done' || payload.type === 'response' || payload.type === 'plan') {
+                console.log('[DEBUG API] Received final chunk:', {
+                  type: payload.type,
+                  round: payload.round,
+                  hasContent: !!payload.content,
+                  contentLength: payload.content?.length || 0,
+                  timestamp: new Date().toISOString()
+                });
+              }
               await Promise.resolve(onChunk(payload));
             } catch (error) {
               console.warn('Skipping malformed stream chunk', data, error);

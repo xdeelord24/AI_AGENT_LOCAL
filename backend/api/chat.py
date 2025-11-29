@@ -178,6 +178,79 @@ def _append_feedback_entry(entry: Dict[str, Any]) -> None:
         feedback_file.write(json.dumps(entry) + "\n")
 
 
+def _extract_web_references_from_text(result_text: str) -> List[Dict[str, Any]]:
+    """Extract web references (URLs and titles) from formatted web search result text"""
+    web_references = []
+    if not result_text:
+        return web_references
+    
+    try:
+        import re
+        # Pattern to match URLs
+        url_pattern = r'https?://[^\s\)\]\>]+'
+        
+        # Split into lines for better parsing
+        lines = result_text.split('\n')
+        current_title = None
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                current_title = None
+                continue
+            
+            # Look for numbered items (1. Title, 2. Title, etc.)
+            title_match = re.match(r'^\d+\.\s*(.+)$', line)
+            if title_match:
+                current_title = title_match.group(1).strip()
+                continue
+            
+            # Look for "Source:" or "URL:" labels
+            if line.lower().startswith(('source:', 'url:', 'link:')):
+                url_match = re.search(url_pattern, line)
+                if url_match:
+                    url = url_match.group(0).rstrip('.,;')
+                    if url not in [ref.get("url") for ref in web_references]:
+                        web_references.append({
+                            "index": len(web_references) + 1,
+                            "url": url,
+                            "title": current_title or url
+                        })
+                current_title = None
+                continue
+            
+            # Look for URLs in the line
+            url_matches = re.findall(url_pattern, line)
+            for url in url_matches:
+                url = url.rstrip('.,;')
+                if url not in [ref.get("url") for ref in web_references]:
+                    # Use current_title if available, otherwise use part of the line as title
+                    title = current_title
+                    if not title:
+                        # Try to extract title from the line (text before the URL)
+                        title_part = line[:line.find(url)].strip()
+                        if title_part and len(title_part) < 200:
+                            title = title_part
+                        else:
+                            title = url
+                    
+                    web_references.append({
+                        "index": len(web_references) + 1,
+                        "url": url,
+                        "title": title
+                    })
+            
+            # Reset current_title after processing a line with URL
+            if url_matches:
+                current_title = None
+        
+        # Limit to 10 references
+        return web_references[:10]
+    except Exception as e:
+        logger.warning(f"Error extracting web_references from text: {e}")
+        return []
+
+
 async def get_ai_service(request: Request):
     """Dependency to get AI service instance"""
     return request.app.state.ai_service
@@ -395,10 +468,43 @@ async def send_message_stream(
             message_id = None
             final_ai_plan = None
             accumulated_file_ops = []
+            accumulated_web_references = []  # Track web references from web_search tool results
             
             while True:
                 # Build prompt for current message
                 prompt = ai_service._build_prompt(current_message, context_payload, working_history)
+                
+                # DEBUG: Log if MCP tools are included in prompt
+                has_mcp_tools_in_prompt = "MCP TOOLS AVAILABLE" in prompt or "web_search" in prompt
+                
+                # Get detailed MCP status
+                mcp_client_available = False
+                mcp_tools_in_client = False
+                if ai_service.mcp_client:
+                    mcp_client_available = ai_service.mcp_client.is_available()
+                    mcp_tools_in_client = ai_service.mcp_client.mcp_tools is not None
+                
+                mcp_status = {
+                    "is_enabled": ai_service.is_mcp_enabled(),
+                    "has_client": ai_service.mcp_client is not None,
+                    "client_is_available": mcp_client_available,
+                    "has_tools_in_client": mcp_tools_in_client,
+                    "has_tools_in_prompt": has_mcp_tools_in_prompt,
+                    "prompt_length": len(prompt),
+                    "_enable_mcp": ai_service._enable_mcp if hasattr(ai_service, '_enable_mcp') else None
+                }
+                logger.info(f"[DEBUG] Prompt built - length: {len(prompt)}, has_mcp_tools: {has_mcp_tools_in_prompt}, is_mcp_enabled: {ai_service.is_mcp_enabled()}")
+                logger.info(f"[DEBUG] MCP details - _enable_mcp: {ai_service._enable_mcp if hasattr(ai_service, '_enable_mcp') else 'N/A'}, client_available: {mcp_client_available}, tools_in_client: {mcp_tools_in_client}")
+                
+                # Send MCP status to frontend for debugging
+                yield f"data: {json.dumps({'type': 'debug', 'mcp_status': mcp_status})}\n\n"
+                
+                if has_mcp_tools_in_prompt:
+                    # Log a snippet showing MCP tools section
+                    mcp_section_start = prompt.find("MCP TOOLS AVAILABLE")
+                    if mcp_section_start >= 0:
+                        mcp_snippet = prompt[mcp_section_start:min(mcp_section_start + 500, len(prompt))]
+                        logger.info(f"[DEBUG] MCP tools section in prompt (first 500 chars): {mcp_snippet[:500]}")
                 
                 # Stream from Ollama directly
                 accumulated_thinking_round = ""
@@ -414,7 +520,16 @@ async def send_message_stream(
                         elif chunk.get("type") == "response":
                             response_chunk = chunk.get("content", "")
                             accumulated_response_round += response_chunk
-                            yield f"data: {json.dumps({'type': 'response', 'content': response_chunk, 'round': auto_continue_rounds + 1})}\n\n"
+                            # Don't stream response chunks yet if MCP is enabled - we'll check for tool calls after streaming completes
+                            # and stream the follow-up response instead if tool calls are found
+                            # This prevents showing the user tool call syntax
+                            mcp_enabled = ai_service.is_mcp_enabled() and ai_service.mcp_client
+                            if not mcp_enabled:
+                                # MCP not enabled, stream normally
+                                yield f"data: {json.dumps({'type': 'response', 'content': response_chunk, 'round': auto_continue_rounds + 1})}\n\n"
+                            else:
+                                # MCP enabled - suppress response chunks to check for tool calls first
+                                logger.info(f"[DEBUG] Suppressing response chunk (MCP enabled): {len(response_chunk)} chars, total accumulated: {len(accumulated_response_round)} chars")
                         elif chunk.get("type") == "done":
                             break
                         elif chunk.get("type") == "error":
@@ -424,72 +539,424 @@ async def send_message_stream(
                     # After streaming, parse metadata from the streamed response to get file operations, plans, etc.
                     # This ensures we use the actual streamed content, not a regenerated response
                     try:
+                        # Generate conversation and message IDs if not set (before parsing)
+                        if not conversation_id:
+                            conversation_id = str(uuid.uuid4())
+                        if not message_id:
+                            message_id = str(uuid.uuid4())
+                        
+                        # Check for tool calls in the ORIGINAL response BEFORE cleaning
+                        # This is critical for web_search and other MCP tools
+                        tool_calls = []
+                        if ai_service.is_mcp_enabled() and ai_service.mcp_client:
+                            # Log full response for debugging (first 1000 chars)
+                            response_preview = accumulated_response_round[:1000].replace('\n', '\\n')
+                            logger.info(f"[DEBUG] Full response preview (first 1000 chars): {response_preview}")
+                            
+                            tool_calls = ai_service.mcp_client.parse_tool_calls_from_response(accumulated_response_round)
+                            logger.info(f"[DEBUG] Parsed tool calls from response: {len(tool_calls)} found")
+                            
+                            # Send tool call detection status to frontend
+                            tool_call_debug = {
+                                "tool_calls_found": len(tool_calls),
+                                "tool_call_names": [tc.get('name') for tc in tool_calls] if tool_calls else [],
+                                "response_length": len(accumulated_response_round),
+                                "has_tool_call_pattern": '<tool_call' in accumulated_response_round or 'tool_call' in accumulated_response_round.lower()
+                            }
+                            yield f"data: {json.dumps({'type': 'debug', 'tool_call_status': tool_call_debug})}\n\n"
+                            
+                            if tool_calls:
+                                logger.info(f"[DEBUG] Tool call names: {[tc.get('name') for tc in tool_calls]}")
+                                for i, tc in enumerate(tool_calls):
+                                    logger.info(f"[DEBUG] Tool call {i+1}: name={tc.get('name')}, args={tc.get('arguments')}")
+                            else:
+                                # No tool calls found - check if response contains tool call patterns
+                                has_tool_call_pattern = '<tool_call' in accumulated_response_round or 'tool_call' in accumulated_response_round.lower()
+                                logger.info(f"[DEBUG] No tool calls detected. Response contains 'tool_call' pattern: {has_tool_call_pattern}")
+                                if has_tool_call_pattern:
+                                    # Try to find where tool calls might be
+                                    import re
+                                    tool_call_matches = re.findall(r'<tool_call[^>]*>', accumulated_response_round, re.IGNORECASE)
+                                    logger.info(f"[DEBUG] Found potential tool_call tags: {tool_call_matches}")
+                        else:
+                            logger.info(f"[DEBUG] MCP not enabled or client not available - is_mcp_enabled: {ai_service.is_mcp_enabled()}, mcp_client: {ai_service.mcp_client is not None}")
+                        
                         # Parse metadata from the streamed response content
                         cleaned_response, metadata = ai_service._parse_response_metadata(
                             accumulated_response_round,
                             context_payload
                         )
                         
-                        # Generate conversation and message IDs if not set
-                        if not conversation_id:
-                            conversation_id = str(uuid.uuid4())
-                        if not message_id:
-                            message_id = str(uuid.uuid4())
-                        
                         # Extract file operations and plans from metadata
                         file_ops = metadata.get("file_operations", []) if not is_ask_mode else []
-                        ai_plan = metadata.get("ai_plan") if not is_ask_mode else None
+                        ai_plan = metadata.get("ai_plan")  # Extract plan regardless of mode
                         
                         if not is_ask_mode:
                             if file_ops:
                                 accumulated_file_ops.extend(file_ops)
-                            if ai_plan:
-                                final_ai_plan = ai_plan
-                                # Send plan update during streaming so frontend can display it
-                                yield f"data: {json.dumps({
-                                    'type': 'plan',
-                                    'ai_plan': final_ai_plan
-                                })}\n\n"
+                        
+                        # Always update final_ai_plan if a plan is found (even in ask_mode)
+                        if ai_plan:
+                            final_ai_plan = ai_plan
+                            # Send plan update during streaming so frontend can display it
+                            yield f"data: {json.dumps({
+                                'type': 'plan',
+                                'ai_plan': final_ai_plan
+                            })}\n\n"
                         
                         # Use the streamed response (cleaned of metadata) for consistency
                         # This ensures what was streamed matches what's in the final response
-                        final_round_response = cleaned_response if cleaned_response else accumulated_response_round
+                        # If cleaned_response is empty or None, fall back to accumulated_response_round
+                        final_round_response = cleaned_response if cleaned_response and cleaned_response.strip() else accumulated_response_round
+                        
+                        # Log for debugging
+                        logger.info(f"[DEBUG] Response after metadata parsing: cleaned={len(cleaned_response) if cleaned_response else 0} chars, accumulated={len(accumulated_response_round)} chars, final={len(final_round_response)} chars, tool_calls found: {len(tool_calls) if tool_calls else 0}")
+                        if tool_calls:
+                            logger.info(f"[DEBUG] Tool calls detected: {[tc.get('name') for tc in tool_calls]}")
+                        else:
+                            logger.info(f"[DEBUG] No tool calls detected in response. Response length: {len(accumulated_response_round)} chars")
+                            # Log a sample of the response to help debug why tool calls aren't detected
+                            if accumulated_response_round:
+                                sample = accumulated_response_round[:300].replace('\n', '\\n')
+                                logger.info(f"[DEBUG] Response sample (first 300 chars): {sample}")
+                        
+                        # Track if we've updated accumulated_responses during tool execution
+                        tool_execution_updated_responses = False
+                        
+                        # Execute tool calls if found
+                        if tool_calls:
+                            logger.info(f"Found {len(tool_calls)} tool call(s) in streamed response, executing...")
+                            logger.info(f"[DEBUG] Tool calls: {[tc.get('name') for tc in tool_calls]}")
+                            # Execute tool calls
+                            allow_write = not is_ask_mode
+                            try:
+                                # Add timeout for tool execution (especially important for web_search)
+                                try:
+                                    tool_results = await asyncio.wait_for(
+                                        ai_service.mcp_client.execute_tool_calls(tool_calls, allow_write=allow_write),
+                                        timeout=60.0  # 60 second timeout for tool execution
+                                    )
+                                    logger.info(f"Tool execution completed: {len(tool_results) if tool_results else 0} result(s)")
+                                    
+                                    # Log detailed tool execution results for debugging
+                                    for i, result in enumerate(tool_results or []):
+                                        tool_name = result.get("tool", "unknown")
+                                        has_error = result.get("error", False)
+                                        error_type = result.get("error_type")
+                                        result_length = len(result.get("result", ""))
+                                        logger.info(f"[DEBUG] Tool result {i+1}: tool={tool_name}, error={has_error}, error_type={error_type}, result_length={result_length}")
+                                        if has_error:
+                                            error_msg = result.get("result", "")[:200]  # First 200 chars of error
+                                            logger.error(f"[DEBUG] Tool {tool_name} error details: {error_msg}")
+                                    
+                                    # Send tool execution status to frontend
+                                    tool_exec_status = {
+                                        "tool_calls_executed": len(tool_calls),
+                                        "tool_results_count": len(tool_results) if tool_results else 0,
+                                        "has_errors": any(r.get("error", False) for r in (tool_results or [])),
+                                        "error_details": [
+                                            {
+                                                "tool": r.get("tool"),
+                                                "error_type": r.get("error_type"),
+                                                "error_msg": r.get("result", "")[:100] if r.get("error") else None
+                                            }
+                                            for r in (tool_results or []) if r.get("error", False)
+                                        ]
+                                    }
+                                    yield f"data: {json.dumps({'type': 'debug', 'tool_execution_status': tool_exec_status})}\n\n"
+                                except asyncio.TimeoutError:
+                                    logger.error("Tool execution timed out after 60 seconds")
+                                    tool_results = [{
+                                        "tool": tc.get("name", "unknown"),
+                                        "arguments": tc.get("arguments", {}),
+                                        "result": "Tool execution timed out after 60 seconds. Please try again.",
+                                        "error": True,
+                                        "error_type": "TIMEOUT"
+                                    } for tc in tool_calls]
+                                
+                                # Check if we have any successful results
+                                has_successful_results = tool_results and any(not r.get("error", False) for r in tool_results)
+                                has_any_results = tool_results and len(tool_results) > 0
+                                logger.info(f"Tool execution results: {len(tool_results) if tool_results else 0} total, {sum(1 for r in tool_results if not r.get('error', False)) if tool_results else 0} successful")
+                                logger.info(f"[DEBUG] Tool execution - has_any_results: {has_any_results}, has_successful_results: {has_successful_results}")
+                                
+                                # Extract web_references from web_search tool results
+                                for tool_result in (tool_results or []):
+                                    if tool_result.get("tool") == "web_search" and not tool_result.get("error", False):
+                                        result_text = tool_result.get("result", "")
+                                        if result_text:
+                                            extracted_refs = _extract_web_references_from_text(result_text)
+                                            # Merge with existing, avoiding duplicates
+                                            existing_urls = {ref.get("url") for ref in accumulated_web_references}
+                                            for ref in extracted_refs:
+                                                if ref.get("url") and ref.get("url") not in existing_urls:
+                                                    accumulated_web_references.append(ref)
+                                                    existing_urls.add(ref.get("url"))
+                                            if extracted_refs:
+                                                logger.info(f"[DEBUG] Extracted {len(extracted_refs)} web references from web_search tool result")
+                                
+                                # Always generate a follow-up response if we have tool results (even if some failed)
+                                # This ensures the process doesn't stop
+                                if has_any_results:
+                                    logger.info(f"[DEBUG] Generating follow-up response after tool execution (round {auto_continue_rounds + 1})")
+                                    # Save original response before replacing (in case follow-up is empty)
+                                    original_response_before_tools = final_round_response
+                                    
+                                    # Format tool results and get follow-up response
+                                    tool_results_text = ai_service.mcp_client.format_tool_results_for_prompt(tool_results)
+                                    
+                                    # Build follow-up prompt with tool results
+                                    if has_successful_results:
+                                        follow_up_prompt = f"{prompt}\n\nInitial AI response:\n{final_round_response}\n\n{tool_results_text}\n\n🚨 CRITICAL INSTRUCTIONS 🚨\n\nThe tool execution results above contain the ACTUAL data from the tools. The tools have ALREADY been executed.\n\nYou MUST:\n1. Use the tool results to provide a direct, complete answer to the user's question\n2. Do NOT say you will search, need to search, or should search - the search is DONE\n3. Do NOT include thinking about using tools - just provide the answer using the results\n4. Extract relevant information from the tool results and present it clearly\n5. If the tool results contain the answer, use them directly\n\nDo NOT repeat phrases like:\n- 'I'll search for...'\n- 'Let me search...'\n- 'I need to search...'\n- 'I should use the web_search tool...'\n\nInstead, directly answer the question using the tool results provided above."
+                                    else:
+                                        # All tools failed - still generate a response explaining the error
+                                        # Extract error details for better context
+                                        error_summary = []
+                                        for result in tool_results:
+                                            if result.get("error"):
+                                                tool_name = result.get("tool", "unknown")
+                                                error_type = result.get("error_type", "UNKNOWN")
+                                                error_msg = result.get("result", "Unknown error")
+                                                error_summary.append(f"- {tool_name} ({error_type}): {error_msg[:200]}")
+                                        
+                                        error_details = "\n".join(error_summary) if error_summary else "Unknown error occurred"
+                                        logger.warning(f"[DEBUG] All tools failed. Error details: {error_details}")
+                                        
+                                        follow_up_prompt = f"{prompt}\n\nInitial AI response:\n{final_round_response}\n\nTool execution encountered errors:\n{tool_results_text}\n\nError summary:\n{error_details}\n\nPlease provide a helpful response to the user. If the error suggests the tool is unavailable or there's a configuration issue, explain that clearly. If it's a temporary error, suggest the user try again."
+                                    
+                                    # Get follow-up response that incorporates tool results
+                                    logger.info("Getting follow-up response with tool results in streaming mode...")
+                                    logger.info(f"[DEBUG] Follow-up prompt length: {len(follow_up_prompt)}, tool_results_text length: {len(tool_results_text)}")
+                                    try:
+                                        follow_up_response, follow_up_thinking = await asyncio.wait_for(
+                                            ai_service._call_model(follow_up_prompt),
+                                            timeout=120.0  # 2 minute timeout for follow-up generation
+                                        )
+                                        logger.info(f"[DEBUG] Follow-up response generated - length: {len(follow_up_response) if follow_up_response else 0}, has_thinking: {bool(follow_up_thinking)}")
+                                    except asyncio.TimeoutError:
+                                        logger.error("Follow-up response generation timed out")
+                                        follow_up_response = "I apologize, but I encountered a timeout while processing the tool results. Please try asking your question again."
+                                        follow_up_thinking = None
+                                    
+                                    # Remove any tool calls from the follow-up response
+                                    follow_up_response = ai_service.mcp_client.remove_tool_calls_from_text(follow_up_response)
+                                    
+                                    # If follow-up is empty, use the original response (cleaned of tool calls)
+                                    if not follow_up_response or not follow_up_response.strip():
+                                        logger.warning("Follow-up response is empty, using original response without tool calls")
+                                        follow_up_response = ai_service.mcp_client.remove_tool_calls_from_text(original_response_before_tools)
+                                        if not follow_up_response or not follow_up_response.strip():
+                                            # Last resort: provide a generic message
+                                            follow_up_response = "I attempted to search for information, but encountered an issue. Please try rephrasing your question or try again later."
+                                    
+                                    # Update accumulated thinking if there's new thinking
+                                    if follow_up_thinking:
+                                        if accumulated_thinking:
+                                            accumulated_thinking = (accumulated_thinking + "\n" + follow_up_thinking).strip()
+                                        else:
+                                            accumulated_thinking = follow_up_thinking
+                                    
+                                    # Use the follow-up response instead of the original
+                                    final_round_response = follow_up_response
+                                    accumulated_response_round = follow_up_response
+                                    logger.info(f"Follow-up response received: {len(final_round_response)} chars, replacing original response")
+                                    
+                                    # CRITICAL: Re-parse metadata from follow-up response to get updated ai_plan
+                                    # The follow-up response may contain an updated plan after tool execution
+                                    try:
+                                        cleaned_follow_up, follow_up_metadata = ai_service._parse_response_metadata(
+                                            follow_up_response,
+                                            context_payload
+                                        )
+                                        # Update ai_plan if the follow-up response contains one
+                                        if follow_up_metadata.get("ai_plan"):
+                                            ai_plan = follow_up_metadata.get("ai_plan")
+                                            final_ai_plan = ai_plan
+                                            logger.info("Updated ai_plan from follow-up response after tool execution")
+                                            # Send plan update during streaming so frontend can display it
+                                            yield f"data: {json.dumps({
+                                                'type': 'plan',
+                                                'ai_plan': final_ai_plan
+                                            })}\n\n"
+                                        
+                                        # Also update file operations if present (but only if not in ask_mode)
+                                        if not is_ask_mode and follow_up_metadata.get("file_operations"):
+                                            follow_up_file_ops = follow_up_metadata.get("file_operations", [])
+                                            accumulated_file_ops.extend(follow_up_file_ops)
+                                            logger.info(f"Updated file_operations from follow-up response: {len(follow_up_file_ops)} operations")
+                                        
+                                        # Extract web_references from follow-up metadata if present
+                                        if follow_up_metadata.get("web_references"):
+                                            follow_up_web_refs = follow_up_metadata.get("web_references", [])
+                                            # Merge with existing, avoiding duplicates
+                                            existing_urls = {ref.get("url") for ref in accumulated_web_references}
+                                            for ref in follow_up_web_refs:
+                                                if ref.get("url") and ref.get("url") not in existing_urls:
+                                                    accumulated_web_references.append(ref)
+                                                    existing_urls.add(ref.get("url"))
+                                            logger.info(f"Updated web_references from follow-up response: {len(follow_up_web_refs)} references")
+                                    except Exception as parse_error:
+                                        logger.warning(f"Error parsing metadata from follow-up response: {parse_error}")
+                                        # Continue with existing ai_plan if parsing fails
+                                    
+                                    # Update accumulated_responses to replace the last entry (which had tool calls) with the follow-up
+                                    # Mark that we've updated accumulated_responses so we don't append again later
+                                    tool_execution_updated_responses = True
+                                    if accumulated_responses:
+                                        # Replace the last response (which contained tool calls) with the follow-up
+                                        accumulated_responses[-1] = follow_up_response
+                                    else:
+                                        # If no accumulated responses yet, add the follow-up
+                                        accumulated_responses.append(follow_up_response)
+                                    
+                                    # Stream the follow-up response to the frontend
+                                    # Since we suppressed the initial response chunks, just stream the follow-up normally
+                                    logger.info(f"Streaming follow-up response: {len(follow_up_response)} chars")
+                                    chunk_size = 100  # Characters per chunk
+                                    for i in range(0, len(follow_up_response), chunk_size):
+                                        chunk = follow_up_response[i:i + chunk_size]
+                                        yield f"data: {json.dumps({'type': 'response', 'content': chunk, 'round': auto_continue_rounds + 1})}\n\n"
+                                else:
+                                    # No tool results at all - this shouldn't happen, but handle it gracefully
+                                    logger.warning("Tool execution returned no results, cleaning and streaming original response")
+                                    if ai_service.mcp_client:
+                                        final_round_response = ai_service.mcp_client.remove_tool_calls_from_text(final_round_response)
+                                        accumulated_response_round = final_round_response
+                                        if accumulated_response_round and accumulated_response_round.strip():
+                                            chunk_size = 100
+                                            for i in range(0, len(accumulated_response_round), chunk_size):
+                                                chunk = accumulated_response_round[i:i + chunk_size]
+                                                yield f"data: {json.dumps({'type': 'response', 'content': chunk, 'round': auto_continue_rounds + 1})}\n\n"
+                            except Exception as tool_error:
+                                logger.error(f"Error executing tools in streaming mode: {tool_error}", exc_info=True)
+                                # Continue with original response if tool execution fails
+                                # But still remove tool calls from the response
+                                if ai_service.mcp_client:
+                                    final_round_response = ai_service.mcp_client.remove_tool_calls_from_text(final_round_response)
+                                    accumulated_response_round = final_round_response
+                                    
+                                    # Stream the cleaned response since we suppressed it earlier
+                                    if accumulated_response_round and accumulated_response_round.strip():
+                                        logger.info(f"Streaming response after tool execution error: {len(accumulated_response_round)} chars")
+                                        chunk_size = 100
+                                        for i in range(0, len(accumulated_response_round), chunk_size):
+                                            chunk = accumulated_response_round[i:i + chunk_size]
+                                            yield f"data: {json.dumps({'type': 'response', 'content': chunk, 'round': auto_continue_rounds + 1})}\n\n"
+                        else:
+                            # No tool calls, but still remove any that might be in the response
+                            if ai_service.is_mcp_enabled() and ai_service.mcp_client:
+                                final_round_response = ai_service.mcp_client.remove_tool_calls_from_text(final_round_response)
+                                accumulated_response_round = final_round_response
+                                
+                                # Since we suppressed response chunks during streaming, stream the cleaned response now
+                                # Always stream if there's any content, even if it's just whitespace (frontend will handle it)
+                                if accumulated_response_round:
+                                    content_preview = accumulated_response_round[:200].replace('\n', '\\n')
+                                    logger.info(f"Streaming suppressed response (no tool calls found): {len(accumulated_response_round)} chars, preview: {content_preview}")
+                                    chunk_size = 100
+                                    for i in range(0, len(accumulated_response_round), chunk_size):
+                                        chunk = accumulated_response_round[i:i + chunk_size]
+                                        yield f"data: {json.dumps({'type': 'response', 'content': chunk, 'round': auto_continue_rounds + 1})}\n\n"
+                                else:
+                                    # Response was empty after cleaning - this shouldn't happen but log it
+                                    logger.warning(f"No response content to stream after cleaning. Original accumulated_response_round length: {len(accumulated_response_round) if accumulated_response_round else 0}")
+                                    # Try to use the original response before cleaning as fallback
+                                    if accumulated_response_round and len(accumulated_response_round.strip()) == 0:
+                                        logger.warning("Response was empty or only whitespace after cleaning tool calls")
+                        
+                        # Ensure response is cleaned of tool calls before using it
+                        if ai_service.is_mcp_enabled() and ai_service.mcp_client:
+                            final_round_response = ai_service.mcp_client.remove_tool_calls_from_text(final_round_response)
+                            accumulated_response_round = final_round_response
                         
                         # Update working history with the actual streamed content
                         working_history.append({"role": "user", "content": current_message})
                         working_history.append({"role": "assistant", "content": final_round_response})
                         
                         # Accumulate response from this round - use what was actually streamed (cleaned)
+                        # Only append if we haven't already updated accumulated_responses during tool execution
                         round_response = final_round_response
-                        if round_response:
+                        if round_response and not tool_execution_updated_responses:
                             accumulated_responses.append(round_response)
+                        elif tool_execution_updated_responses:
+                            # Tool execution already updated accumulated_responses, just ensure round_response is set
+                            round_response = final_round_response
+                        
+                        # Log summary of this round
+                        logger.info(f"[DEBUG] Round {auto_continue_rounds + 1} summary: tool_calls={len(tool_calls) if tool_calls else 0}, has_plan={bool(ai_plan)}, has_final_plan={bool(final_ai_plan)}, response_length={len(final_round_response)}, web_refs={len(accumulated_web_references)}")
                         
                         # Check if we should continue
-                        if is_ask_mode:
-                            # Send final response and break
+                        # CRITICAL: After tool execution, allow continuation even in ask_mode if there are pending tasks
+                        # This ensures web_search and other tools can complete their work
+                        had_tool_execution = tool_execution_updated_responses
+                        logger.info(f"[DEBUG] Checking continuation - is_ask_mode: {is_ask_mode}, auto_continue_rounds: {auto_continue_rounds}, MAX_ROUNDS: {MAX_PLAN_AUTOCONTINUE_ROUNDS}, had_tool_execution: {had_tool_execution}")
+                        
+                        if is_ask_mode and not had_tool_execution:
+                            # In ask_mode without tool execution, send final response and break
+                            # Use round_response (which should be the follow-up if tool execution happened) or accumulated_responses
                             combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
+                            # Ensure response is cleaned of tool calls one more time before sending
+                            if ai_service.is_mcp_enabled() and ai_service.mcp_client and combined_response:
+                                combined_response = ai_service.mcp_client.remove_tool_calls_from_text(combined_response)
+                            # Finalize and include AI plan if it exists (even in ask_mode, plans can be generated)
+                            finalized_plan = _finalize_ai_plan(final_ai_plan) if final_ai_plan else None
+                            logger.info(f"[DEBUG] Breaking in ask_mode (no tool execution) - response length={len(combined_response) if combined_response else 0} chars")
+                            logger.info(f"Sending 'done' message in ask_mode: response length={len(combined_response) if combined_response else 0} chars, plan={finalized_plan is not None}, thinking length={len(accumulated_thinking) if accumulated_thinking else 0}")
+                            # Always include thinking if it exists (even if empty string, convert to None only if truly empty)
+                            thinking_to_send = accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None
                             yield f"data: {json.dumps({
                                 'type': 'done', 
-                                'thinking': accumulated_thinking or None, 
+                                'thinking': thinking_to_send, 
                                 'response': combined_response,
                                 'message_id': message_id, 
                                 'conversation_id': conversation_id, 
                                 'timestamp': datetime.now().isoformat(),
                                 'file_operations': None,
-                                'ai_plan': None,
+                                'ai_plan': finalized_plan,
                                 'activity_log': None,
-                                'web_references': None
+                                'web_references': accumulated_web_references if accumulated_web_references else None
                             })}\n\n"
                             break
                         
                         # Check if plan has pending tasks
-                        if not _plan_has_pending_tasks(ai_plan):
-                            # All tasks completed, finalize plan and send final response
+                        # Use final_ai_plan (which may have been updated from follow-up response) or ai_plan as fallback
+                        plan_to_check = final_ai_plan or ai_plan
+                        has_pending = _plan_has_pending_tasks(plan_to_check)
+                        logger.info(f"[DEBUG] Plan check - has_pending: {has_pending}, plan_to_check: {bool(plan_to_check)}, final_ai_plan: {bool(final_ai_plan)}, ai_plan: {bool(ai_plan)}, had_tool_execution: {had_tool_execution}")
+                        
+                        # In ask_mode, only break if no pending tasks AND no tool execution happened
+                        # If tool execution happened, allow continuation to complete the work
+                        if is_ask_mode and not has_pending and not had_tool_execution:
+                            # No pending tasks and no tool execution in ask_mode - complete
                             finalized_plan = _finalize_ai_plan(final_ai_plan) if final_ai_plan else None
                             combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
+                            if ai_service.is_mcp_enabled() and ai_service.mcp_client and combined_response:
+                                combined_response = ai_service.mcp_client.remove_tool_calls_from_text(combined_response)
+                            logger.info(f"[DEBUG] Breaking in ask_mode (no pending tasks, no tool execution) - response length={len(combined_response) if combined_response else 0} chars")
+                            thinking_to_send = accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None
                             yield f"data: {json.dumps({
                                 'type': 'done', 
-                                'thinking': accumulated_thinking or None, 
+                                'thinking': thinking_to_send, 
+                                'response': combined_response,
+                                'message_id': message_id, 
+                                'conversation_id': conversation_id, 
+                                'timestamp': datetime.now().isoformat(),
+                                'file_operations': None,
+                                'ai_plan': finalized_plan,
+                                'activity_log': None,
+                                'web_references': accumulated_web_references if accumulated_web_references else None
+                            })}\n\n"
+                            break
+                        
+                        if not has_pending:
+                            # All tasks completed, finalize plan and send final response
+                            logger.info(f"[DEBUG] No pending tasks - completing. had_tool_execution: {had_tool_execution}, is_ask_mode: {is_ask_mode}")
+                            finalized_plan = _finalize_ai_plan(final_ai_plan) if final_ai_plan else None
+                            combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
+                            logger.info(f"[DEBUG] Sending done message - response length: {len(combined_response) if combined_response else 0}, web_refs: {len(accumulated_web_references)}")
+                            yield f"data: {json.dumps({
+                                'type': 'done', 
+                                'thinking': accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None, 
                                 'response': combined_response,
                                 'message_id': message_id, 
                                 'conversation_id': conversation_id, 
@@ -497,17 +964,18 @@ async def send_message_stream(
                                 'file_operations': accumulated_file_ops if accumulated_file_ops else None,
                                 'ai_plan': finalized_plan,
                                 'activity_log': None,
-                                'web_references': None
+                                'web_references': accumulated_web_references if accumulated_web_references else None
                             })}\n\n"
                             break
                         
                         if auto_continue_rounds >= MAX_PLAN_AUTOCONTINUE_ROUNDS:
                             # Max rounds reached, finalize plan and send final response with warning
+                            logger.info(f"[DEBUG] Max rounds reached ({auto_continue_rounds} >= {MAX_PLAN_AUTOCONTINUE_ROUNDS}), breaking")
                             finalized_plan = _finalize_ai_plan(final_ai_plan) if final_ai_plan else None
                             combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                             yield f"data: {json.dumps({
                                 'type': 'done', 
-                                'thinking': accumulated_thinking or None, 
+                                'thinking': accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None, 
                                 'response': combined_response + "\n\nAuto-continue stopped after maximum retries. Some tasks may still be pending.",
                                 'message_id': message_id, 
                                 'conversation_id': conversation_id, 
@@ -515,17 +983,22 @@ async def send_message_stream(
                                 'file_operations': accumulated_file_ops if accumulated_file_ops else None,
                                 'ai_plan': finalized_plan,
                                 'activity_log': None,
-                                'web_references': None
+                                'web_references': accumulated_web_references if accumulated_web_references else None
                             })}\n\n"
                             break
                         
                         # Continue with next round
                         auto_continue_rounds += 1
-                        current_message = _build_auto_continue_prompt(ai_plan or {})
+                        # Use final_ai_plan (which may have been updated from follow-up response) or ai_plan as fallback
+                        plan_for_continue = final_ai_plan or ai_plan or {}
+                        logger.info(f"[DEBUG] Continuing to next round - round: {auto_continue_rounds}, has_plan: {bool(plan_for_continue)}, is_ask_mode: {is_ask_mode}")
+                        current_message = _build_auto_continue_prompt(plan_for_continue)
                         # Note: context_payload is maintained from previous rounds
                         
                         # Send a continuation marker
-                        yield f"data: {json.dumps({'type': 'continue', 'round': auto_continue_rounds + 1, 'message': 'Continuing with remaining tasks...'})}\n\n"
+                        continue_message = f"Continuing with remaining tasks (round {auto_continue_rounds})..."
+                        logger.info(f"[DEBUG] Sending continue message: {continue_message}")
+                        yield f"data: {json.dumps({'type': 'continue', 'round': auto_continue_rounds, 'message': continue_message})}\n\n"
                         
                     except Exception as process_error:
                         logger.exception("Error parsing metadata from streamed response")
@@ -536,7 +1009,7 @@ async def send_message_stream(
                         combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else accumulated_response_round
                         yield f"data: {json.dumps({
                             'type': 'done', 
-                            'thinking': accumulated_thinking or None, 
+                                'thinking': accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None,
                             'response': combined_response,
                             'message_id': message_id or str(uuid.uuid4()), 
                             'conversation_id': conversation_id or str(uuid.uuid4()), 
@@ -544,7 +1017,7 @@ async def send_message_stream(
                             'file_operations': accumulated_file_ops if accumulated_file_ops else None,
                             'ai_plan': _finalize_ai_plan(final_ai_plan) if final_ai_plan else None,
                             'activity_log': None,
-                            'web_references': None
+                            'web_references': accumulated_web_references if accumulated_web_references else None
                         })}\n\n"
                         break
                 else:
@@ -560,6 +1033,20 @@ async def send_message_stream(
                     if not message_id:
                         message_id = response.get("message_id") or str(uuid.uuid4())
                     
+                    # Send AI plan FIRST (before thinking and response) for proper sequencing
+                    if not is_ask_mode and response.get("ai_plan"):
+                        final_ai_plan = response.get("ai_plan")
+                        if response.get("file_operations"):
+                            accumulated_file_ops.extend(response.get("file_operations"))
+                        # Send plan immediately so frontend can display it first
+                        yield f"data: {json.dumps({
+                            'type': 'plan',
+                            'ai_plan': final_ai_plan
+                        })}\n\n"
+                    elif not is_ask_mode:
+                        if response.get("file_operations"):
+                            accumulated_file_ops.extend(response.get("file_operations"))
+                    
                     if response.get("thinking"):
                         if accumulated_thinking:
                             accumulated_thinking = accumulated_thinking + "\n" + response.get("thinking")
@@ -568,17 +1055,6 @@ async def send_message_stream(
                         yield f"data: {json.dumps({'type': 'thinking', 'content': response['thinking'], 'round': auto_continue_rounds + 1})}\n\n"
                     
                     yield f"data: {json.dumps({'type': 'response', 'content': response.get('content', ''), 'round': auto_continue_rounds + 1})}\n\n"
-                    
-                    if not is_ask_mode:
-                        if response.get("file_operations"):
-                            accumulated_file_ops.extend(response.get("file_operations"))
-                        if response.get("ai_plan"):
-                            final_ai_plan = response.get("ai_plan")
-                            # Send plan update during streaming so frontend can display it
-                            yield f"data: {json.dumps({
-                                'type': 'plan',
-                                'ai_plan': final_ai_plan
-                            })}\n\n"
                     
                     # Accumulate response from this round
                     round_response = response.get('content', '')
@@ -592,7 +1068,7 @@ async def send_message_stream(
                         combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                         yield f"data: {json.dumps({
                             'type': 'done', 
-                            'thinking': accumulated_thinking or None, 
+                                'thinking': accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None,
                             'response': combined_response,
                             'message_id': message_id, 
                             'conversation_id': conversation_id, 
@@ -610,7 +1086,7 @@ async def send_message_stream(
                         combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                         yield f"data: {json.dumps({
                             'type': 'done', 
-                            'thinking': accumulated_thinking or None, 
+                                'thinking': accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None,
                             'response': combined_response,
                             'message_id': message_id, 
                             'conversation_id': conversation_id, 
@@ -627,7 +1103,7 @@ async def send_message_stream(
                         combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                         yield f"data: {json.dumps({
                             'type': 'done', 
-                            'thinking': accumulated_thinking or None, 
+                                'thinking': accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None,
                             'response': combined_response + "\n\nAuto-continue stopped after maximum retries. Some tasks may still be pending.",
                             'message_id': message_id, 
                             'conversation_id': conversation_id, 

@@ -856,7 +856,6 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     },
     [
       activeTab,
-      selectedFiles,
       setActiveTab,
       setEditorContent,
       setEditorLanguage,
@@ -2250,16 +2249,18 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       if (conversationId) {
         try {
           const existingSession = await ApiService.getChatSessionByConversationId(conversationId);
-          // Session exists with this conversation_id, update it instead of creating a new one
-          await ApiService.updateChatSession(existingSession.id, null, messagesToSave);
-          setCurrentChatSessionId(existingSession.id);
-          // Reload past chats to update the time display
-          const sessions = await ApiService.listChatSessions();
-          setPastChats(sessions || []);
-          return; // Successfully updated, exit early
+          // If session exists (not null), update it instead of creating a new one
+          if (existingSession) {
+            await ApiService.updateChatSession(existingSession.id, null, messagesToSave);
+            setCurrentChatSessionId(existingSession.id);
+            // Reload past chats to update the time display
+            const sessions = await ApiService.listChatSessions();
+            setPastChats(sessions || []);
+            return; // Successfully updated, exit early
+          }
+          // existingSession is null (404 suppressed), continue to create new session
         } catch (error) {
-          // No session found with this conversation_id, will create a new one
-          // Suppress 404 errors as they're expected when no session exists yet
+          // Only log non-404 errors
           if (error.response?.status !== 404) {
             console.warn('Error checking for existing session by conversation_id:', error);
           }
@@ -2420,7 +2421,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       console.error('Error saving file:', error);
       toast.error(`Failed to save file: ${error.response?.data?.detail || error.message}`);
     }
-  }, [openFiles, activeTab, selectedFiles, refreshFileTree]);
+  }, [openFiles, activeTab, selectedFiles, refreshFileTree, lastSelectedFile, setLastSelectedFile]);
 
   const appendTerminalLine = useCallback((text, type = 'stdout') => {
     if (typeof text !== 'string') {
@@ -3173,7 +3174,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       });
       return next;
     });
-  }, [activeTab, selectedFiles, lastSelectedFile]);
+  }, [activeTab, lastSelectedFile, setLastSelectedFile, setActiveTab, setEditorContent]);
 
   const handleDeletePath = useCallback(async (target) => {
     if (!target) return;
@@ -3792,7 +3793,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       }
       return next;
     });
-  }, [activeTab, selectedFiles, lastSelectedFile]);
+  }, [activeTab, lastSelectedFile, setLastSelectedFile, setActiveTab]);
 
   const expandPathAncestors = useCallback((targetPath) => {
     if (!targetPath) return;
@@ -4744,12 +4745,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     return suggestions;
   }, [openFiles, flattenedFileNodes, formatDisplayPath]);
 
-const planStatusStyles = {
-    completed: 'border-green-700 bg-green-500/10 text-green-300',
-    in_progress: 'border-primary-600 bg-primary-600/10 text-primary-300',
-    pending: 'border-dark-600 bg-dark-800/70 text-dark-200',
-    blocked: 'border-red-700 bg-red-600/10 text-red-300'
-  };
+  // planStatusStyles - kept for potential future use
+  // const planStatusStyles = {
+  //   completed: 'border-green-700 bg-green-500/10 text-green-300',
+  //   in_progress: 'border-primary-600 bg-primary-600/10 text-primary-300',
+  //   pending: 'border-dark-600 bg-dark-800/70 text-dark-200',
+  //   blocked: 'border-red-700 bg-red-600/10 text-red-300'
+  // };
 
 const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -4995,7 +4997,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     await new Promise((resolve) => setTimeout(resolve, PLAN_PREVIEW_DELAY_MS));
   }, [setThinkingAiPlan]);
 
-  const handleSendChat = async (message, isComposer = false) => {
+  const handleSendChat = useCallback(async (message, isComposer = false) => {
     const originalMessage = message;
     const normalizedMessage = normalizeChatInput(message);
     const safeRawContent =
@@ -5166,18 +5168,6 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           });
       }
 
-      if (shouldEnableComposerMode) {
-        ApiService.previewAgentStatuses(finalMessage, context)
-          .then((preview) => {
-            if (preview?.agent_statuses?.length) {
-              scheduleAgentStatuses(preview.agent_statuses);
-            }
-          })
-          .catch((error) => {
-            console.warn('Failed to load agent status preview', error);
-          });
-      }
-
       // Use streaming for real-time thinking display
       let streamingThinking = "";
       let streamingResponse = "";
@@ -5208,6 +5198,36 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           conversationHistory: sanitizedHistory,
           signal: abortController.signal,
           onChunk: async (chunk) => {
+            // DEBUG: Log all chunks to track web_search flow
+            const debugInfo = {
+              type: chunk.type,
+              hasContent: !!chunk.content,
+              contentLength: chunk.content?.length || 0,
+              round: chunk.round,
+              isFollowup: chunk.is_followup,
+              reset: chunk.reset,
+              timestamp: new Date().toISOString()
+            };
+            // Add type-specific info
+            if (chunk.type === 'continue') {
+              debugInfo.continueMessage = chunk.message;
+              debugInfo.continueRound = chunk.round;
+            }
+            if (chunk.type === 'done') {
+              debugInfo.hasResponse = !!chunk.response;
+              debugInfo.responseLength = chunk.response?.length || 0;
+              debugInfo.hasPlan = !!chunk.ai_plan;
+              debugInfo.hasFileOps = !!chunk.file_operations;
+              debugInfo.fileOpsCount = chunk.file_operations?.length || 0;
+              debugInfo.hasWebRefs = !!chunk.web_references;
+              debugInfo.webRefsCount = chunk.web_references?.length || 0;
+            }
+            if (chunk.type === 'plan') {
+              debugInfo.planTasks = chunk.ai_plan?.tasks?.length || 0;
+              debugInfo.planSummary = chunk.ai_plan?.summary;
+            }
+            console.log('[DEBUG] Received chunk:', JSON.stringify(debugInfo, null, 2));
+            
             if (chunk.type === 'thinking') {
               streamingThinking += chunk.content || '';
               setChatMessages(prev => prev.map(msg => 
@@ -5216,17 +5236,46 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   : msg
               ));
             } else if (chunk.type === 'response') {
-              streamingResponse += chunk.content || '';
+              // Handle follow-up responses (after tool execution)
+              if (chunk.is_followup) {
+                if (chunk.reset) {
+                  // Reset the accumulated response for the first follow-up chunk
+                  streamingResponse = chunk.content || '';
+                } else {
+                  // Append to accumulated response for subsequent chunks
+                  streamingResponse += chunk.content || '';
+                }
+              } else {
+                // Regular response chunk - append normally
+                streamingResponse += chunk.content || '';
+              }
               const normalizedContent = normalizeChatInput(streamingResponse);
               setChatMessages(prev => prev.map(msg => 
                 msg.id === assistantMessageId
                   ? { ...msg, content: normalizedContent, rawContent: streamingResponse }
                   : msg
               ));
+            } else if (chunk.type === 'response_update') {
+              // Handle response update marker (indicates tool results are being incorporated)
+              // Reset streaming response to start fresh with the follow-up
+              streamingResponse = '';
+              // Keep thinking as it may contain useful context, but clear the response content
+              // Update the message to show we're processing tool results
+              setChatMessages(prev => prev.map(msg => 
+                msg.id === assistantMessageId
+                  ? { ...msg, content: '', rawContent: '' }
+                  : msg
+              ));
             } else if (chunk.type === 'plan') {
               // Update plan during streaming so it can be displayed immediately as a progress tracker
               const planData = chunk.ai_plan || chunk.plan || null;
               if (planData) {
+                console.log('[DEBUG] Plan chunk received:', {
+                  hasPlan: !!planData,
+                  tasks: planData?.tasks?.length || 0,
+                  summary: planData?.summary,
+                  timestamp: new Date().toISOString()
+                });
                 console.log('[AI Plan] Received plan chunk during streaming:', planData);
                 // Update both the message plan and thinking plan for immediate display
                 setChatMessages(prev => prev.map(msg => 
@@ -5239,6 +5288,14 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               }
             } else if (chunk.type === 'continue') {
               // AI is continuing with remaining tasks - append continuation message
+              const continueDebug = {
+                round: chunk.round,
+                currentRound,
+                message: chunk.message,
+                timestamp: new Date().toISOString(),
+                streamingResponseLength: streamingResponse.length
+              };
+              console.log('[DEBUG] Continue chunk received:', JSON.stringify(continueDebug, null, 2));
               currentRound = chunk.round || currentRound + 1;
               const continueMsg = `\n\n---\n\n**Continuing with remaining tasks (round ${currentRound})...**\n\n`;
               streamingResponse += continueMsg;
@@ -5249,7 +5306,57 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   : msg
               ));
               // Note: streamingResponse continues to accumulate across rounds
+              console.log('[DEBUG] After continue - streamingResponse length:', streamingResponse.length);
+            } else if (chunk.type === 'debug') {
+              // Debug information from backend
+              console.log('[DEBUG] Backend debug info:', JSON.stringify(chunk, null, 2));
+              if (chunk.mcp_status) {
+                console.log('[DEBUG] MCP Status:', JSON.stringify({
+                  isEnabled: chunk.mcp_status.is_enabled,
+                  hasClient: chunk.mcp_status.has_client,
+                  clientIsAvailable: chunk.mcp_status.client_is_available,
+                  hasToolsInClient: chunk.mcp_status.has_tools_in_client,
+                  hasToolsInPrompt: chunk.mcp_status.has_tools_in_prompt,
+                  promptLength: chunk.mcp_status.prompt_length
+                }, null, 2));
+              }
+              if (chunk.tool_call_status) {
+                console.log('[DEBUG] Tool Call Status:', JSON.stringify(chunk.tool_call_status, null, 2));
+                if (chunk.tool_call_status.tool_calls_found === 0) {
+                  console.warn('[DEBUG] ⚠️ No tool calls detected! Response length:', chunk.tool_call_status.response_length, 'Has pattern:', chunk.tool_call_status.has_tool_call_pattern);
+                } else {
+                  console.log('[DEBUG] ✅ Tool calls detected:', chunk.tool_call_status.tool_call_names);
+                }
+              }
+              if (chunk.tool_execution_status) {
+                console.log('[DEBUG] Tool Execution Status:', JSON.stringify(chunk.tool_execution_status, null, 2));
+                if (chunk.tool_execution_status.has_errors) {
+                  console.error('[DEBUG] ❌ Tool execution errors:', chunk.tool_execution_status.error_details);
+                } else {
+                  console.log('[DEBUG] ✅ Tool execution successful');
+                }
+              }
             } else if (chunk.type === 'done') {
+              const doneDebug = {
+                hasResponse: !!chunk.response,
+                responseLength: chunk.response?.length || 0,
+                hasThinking: !!chunk.thinking,
+                thinkingLength: chunk.thinking?.length || 0,
+                hasPlan: !!chunk.ai_plan,
+                planTasks: chunk.ai_plan?.tasks?.length || 0,
+                hasFileOps: !!chunk.file_operations,
+                fileOpsCount: chunk.file_operations?.length || 0,
+                hasWebRefs: !!chunk.web_references,
+                webRefsCount: chunk.web_references?.length || 0,
+                streamingResponseLength: streamingResponse.length,
+                conversationId: chunk.conversation_id,
+                messageId: chunk.message_id,
+                timestamp: new Date().toISOString()
+              };
+              console.log('[DEBUG] Done chunk received:', JSON.stringify(doneDebug, null, 2));
+              if (chunk.web_references && chunk.web_references.length > 0) {
+                console.log('[DEBUG] Web references:', chunk.web_references);
+              }
               // Finalize the message
               // Use chunk.response if provided (should match what was streamed), otherwise fall back to accumulated
               // This ensures consistency - the final response should match what was shown during streaming
@@ -5468,7 +5575,41 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       clearAgentStatuses();
       setThinkingStart(null);
     }
-  };
+  }, [
+    chatMessages,
+    isLoadingChat,
+    activeTab,
+    openFiles,
+    fileTree,
+    agentMode,
+    webSearchMode,
+    setChatMessages,
+    setComposerInput,
+    setChatInput,
+    setThinkingAiPlan,
+    setIsLoadingChat,
+    setShowFileSuggestions,
+    setThinkingStart,
+    setThinkingElapsed,
+    setChatAbortController,
+    setPendingFileOperations,
+    setActiveFileOperationIndex,
+    setShowReviewButton,
+    setReviewedOperations,
+    setAcceptedLines,
+    setDeclinedLines,
+    saveChatSession,
+    normalizeChatInput,
+    detectFileMentions,
+    detectNewScriptIntent,
+    simplifyFileTree,
+    normalizeEditorPath,
+    coalesceFileOperationsForEditor,
+    buildFileOperationPreviews,
+    previewAiPlanBeforeAnswer,
+    clearAgentStatuses,
+    scheduleAgentStatuses
+  ]);
 
   useEffect(() => {
     handleSendChatRef.current = handleSendChat;
@@ -6427,10 +6568,11 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         line.type === 'added' && typeof line.newNumber === 'number'
           ? line.newNumber
           : null;
-      const removedLineNumber =
-        line.type === 'removed' && typeof line.oldNumber === 'number'
-          ? line.oldNumber
-          : null;
+      // removedLineNumber is kept for potential future use
+      // const removedLineNumber =
+      //   line.type === 'removed' && typeof line.oldNumber === 'number'
+      //     ? line.oldNumber
+      //     : null;
       const addedLineKey =
         addedLineNumber !== null ? `${currentOpIndex}-${addedLineNumber}` : null;
       const isAddedAccepted = addedLineKey ? acceptedLines.has(addedLineKey) : false;

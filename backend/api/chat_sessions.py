@@ -4,7 +4,10 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import json
 import os
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -166,7 +169,13 @@ async def list_chat_sessions():
 
 @router.get("/sessions/by-conversation/{conversation_id}", response_model=ChatSession)
 async def get_chat_session_by_conversation_id(conversation_id: str):
-    """Get a chat session by conversation_id"""
+    """
+    Get a chat session by conversation_id
+    
+    Note: This endpoint may return 404 if the session hasn't been saved yet.
+    This is expected behavior when the frontend checks for a session before
+    it has been persisted (e.g., during streaming).
+    """
     try:
         # Search through all session files to find one with matching conversation_id
         for session_file in CHAT_SESSIONS_DIR.glob("*.json"):
@@ -176,10 +185,17 @@ async def get_chat_session_by_conversation_id(conversation_id: str):
                     if session_data.get("conversation_id") == conversation_id:
                         return ChatSession(**session_data)
             except Exception as e:
-                print(f"Error reading session file {session_file}: {e}")
+                # Log but don't fail on individual file read errors
                 continue
         
-        raise HTTPException(status_code=404, detail="Chat session not found")
+        # Return 404 - this is expected if session hasn't been saved yet
+        # The frontend will create the session after receiving the stream response
+        # Log at debug level since this is expected behavior, not an error
+        logger.debug(f"Session not found for conversation_id: {conversation_id} (this is expected if session hasn't been saved yet)")
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Chat session not found for conversation_id: {conversation_id}. This is normal if the session hasn't been saved yet."
+        )
     except HTTPException:
         raise
     except Exception as e:

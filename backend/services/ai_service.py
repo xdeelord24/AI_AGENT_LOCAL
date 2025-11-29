@@ -145,7 +145,10 @@ class AIService:
         self._hf_client = None
         self._hf_client_cache_key: Optional[Tuple[str, str, str]] = None
         
-        # MCP integration
+        # MCP (Model Context Protocol) integration
+        # The MCP server acts as a bridge between AI models and external systems,
+        # providing unified connectivity, real-time access, and scalable integration.
+        # See mcp_server.py and mcp_client.py for implementation details.
         self.mcp_tools = None
         self.mcp_client = None
         self._enable_mcp = os.getenv("ENABLE_MCP", "true").lower() in ("true", "1", "yes")
@@ -166,7 +169,28 @@ class AIService:
             self.current_model = self.hf_model
     
     def set_mcp_tools(self, mcp_tools: Optional[MCPServerTools]):
-        """Set MCP tools for the AI service"""
+        """
+        Set MCP tools for the AI service
+        
+        This method integrates the Model Context Protocol (MCP) server with the AI service,
+        enabling the AI model to access external tools and data sources through a
+        standardized protocol.
+        
+        The MCP integration provides:
+        - Unified connectivity to external systems (files, web, code analysis)
+        - Real-time data access instead of static training data
+        - Scalable architecture that can be extended with new tools
+        - Standardized tool discovery and execution
+        
+        When MCP is enabled, the AI model can:
+        1. Discover available tools through get_tools_description()
+        2. Make tool calls in standardized format (<tool_call name="..." args="..." />)
+        3. Receive real-time results from external systems
+        4. Access multiple data sources through one unified interface
+        
+        This removes the need for custom integrations for each external service,
+        making the AI assistant more useful by providing access to live, accurate information.
+        """
         self.mcp_tools = mcp_tools
         if mcp_tools and MCP_AVAILABLE:
             self.mcp_client = MCPClient(mcp_tools)
@@ -500,6 +524,10 @@ class AIService:
             "file_operations": [],
             "ai_plan": None
         }
+        
+        # Remove tool calls from response (they should be executed, not shown to user)
+        if self.mcp_client and self.is_mcp_enabled():
+            cleaned_response = self.mcp_client.remove_tool_calls_from_text(cleaned_response)
         
         # In ASK mode, never extract file operations or plans
         is_ask_mode = context and self._is_ask_context(context)
@@ -1388,7 +1416,7 @@ class AIService:
                     if len(para.strip()) > 20:
                         return para.strip()
             
-            # If still empty, try to extract any meaningful content (even if it looks like thinking)
+            # If still empty, try to extract meaningful content but avoid pure thinking
             # This prevents showing nothing when the model only generated thinking-like content
             if response.strip():
                 # Remove only the most obvious thinking prefixes but keep the content
@@ -1396,12 +1424,34 @@ class AIService:
                 # Remove common thinking prefixes but keep the rest
                 for pattern in [r'^(let me|i\'ll|i will)\s+', r'^(thinking|analyzing):\s*']:
                     cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
-                if cleaned.strip() and len(cleaned.strip()) > 10:
+                
+                # Check if what remains is still mostly thinking (starts with thinking patterns)
+                cleaned_lower = cleaned.lower().strip()
+                is_still_thinking = any(
+                    cleaned_lower.startswith(prefix) 
+                    for prefix in ['i need to', 'i should', 'i must', 'to understand', 'to analyze', 
+                                 'the user is asking', 'this is a question', 'i need to search']
+                )
+                
+                # Only return if it's not pure thinking and has meaningful length
+                if cleaned.strip() and len(cleaned.strip()) > 10 and not is_still_thinking:
                     return cleaned.strip()
             
             # Last resort: return original if filtering removed everything
-            # This ensures we always show something rather than nothing
-            return response.strip() if response.strip() else "I'm processing your request."
+            # But check if original is not just thinking
+            if response.strip():
+                response_lower = response.lower().strip()
+                is_thinking_only = any(
+                    response_lower.startswith(prefix) or response_lower.startswith('the user')
+                    for prefix in ['i need to', 'i should', 'i must', 'to understand', 'to analyze',
+                                 'thinking:', 'analyzing:', 'the user is asking', 'this is a question']
+                )
+                # If it's not just thinking, return it; otherwise return a generic message
+                if not is_thinking_only:
+                    return response.strip()
+            
+            # Final fallback: generic message (NEVER return thinking content as response)
+            return "I've processed your request. Please let me know if you need more information."
         
         # Remove duplicate price statements (AI sometimes mentions price twice - old then new)
         # Keep only the last (most recent) price mention
@@ -1772,14 +1822,14 @@ class AIService:
                                 "search_type": "text"
                             }
                         }
-                        # Use timeout to prevent blocking (5 seconds max)
+                        # Use longer timeout to allow MCP processes to complete (30 seconds)
                         try:
                             tool_results = await asyncio.wait_for(
                                 self.mcp_client.execute_tool_calls(
                                     [tool_call],
                                     allow_write=True
                                 ),
-                                timeout=5.0
+                                timeout=30.0
                             )
                             if tool_results and not tool_results[0].get("error", False):
                                 context["web_search_results_mcp"] = tool_results[0].get("result", "")
@@ -1794,13 +1844,13 @@ class AIService:
                     except Exception as error:
                         print(f"Web search error in {web_search_mode} mode: {error}")
                 else:
-                    # Fallback to direct search with timeout
+                    # Fallback to direct search with longer timeout (30 seconds)
                     try:
                         search_query = self._extract_search_query(message)
                         try:
                             search_results = await asyncio.wait_for(
                                 self.perform_web_search(search_query),
-                                timeout=5.0
+                                timeout=30.0
                             )
                             if search_results:
                                 context["web_search_results"] = search_results
@@ -1830,14 +1880,14 @@ class AIService:
                             }
                         }
                         
-                        # Add timeout to prevent blocking (3 seconds max - short timeout to avoid blocking)
+                        # Use longer timeout to allow MCP processes to complete (30 seconds)
                         try:
                             tool_results = await asyncio.wait_for(
                                 self.mcp_client.execute_tool_calls(
                                     [tool_call],
                                     allow_write=True
                                 ),
-                                timeout=3.0
+                                timeout=30.0
                             )
                             
                             if tool_results and not tool_results[0].get("error", False):
@@ -1857,11 +1907,11 @@ class AIService:
                     # Fallback to direct search with timeout
                     try:
                         search_query = self._extract_search_query(message)
-                        # Add timeout to prevent blocking (3 seconds max - short timeout to avoid blocking)
+                        # Use longer timeout to allow search to complete (30 seconds)
                         try:
                             search_results = await asyncio.wait_for(
                                 self.perform_web_search(search_query),
-                                timeout=3.0
+                                timeout=30.0
                             )
                             if search_results:
                                 context["web_search_results"] = search_results
@@ -1890,9 +1940,22 @@ class AIService:
         # Always assign to ensure variable is set (even if thinking is None)
         accumulated_thinking = thinking if thinking else None
         
+        # Extract ai_plan from initial response BEFORE tool execution
+        # This ensures the plan is preserved even if the follow-up response doesn't include it
+        initial_metadata = self._parse_response_metadata(response, context)[1]
+        initial_ai_plan = initial_metadata.get("ai_plan")
+        if initial_ai_plan:
+            logger.info(f"Extracted initial ai_plan with {len(initial_ai_plan.get('tasks', []))} tasks")
+        
+        # Initialize tool_calls - will be populated from MCP or auto-trigger logic
+        tool_calls = []
+        
         # Handle MCP tool calls if enabled
         if self.is_mcp_enabled():
             tool_calls = self.mcp_client.parse_tool_calls_from_response(response)
+            # Remove tool calls from response text if any were found
+            if tool_calls:
+                response = self.mcp_client.remove_tool_calls_from_text(response)
             
             # Check if user asked about directories but AI didn't use tools (just described what it would do)
             message_lower = (message or "").lower()
@@ -1931,76 +1994,359 @@ class AIService:
                 }
                 tool_calls = [auto_tool_call]
                 logger.info(f"Auto-triggered list_directory tool with path: {path}")
+        
+        # Check if user asked about web search topics but AI didn't use tools
+        # This works with or without MCP (has fallback)
+        message_lower = (message or "").lower()
+        response_lower = (response or "").lower()
+        
+        # Get web_search_mode from context to check if web search is enabled
+        web_search_mode = (context.get("web_search_mode") or "off").lower()
+        web_search_enabled = web_search_mode in ("browser_tab", "google_chrome", "auto")
+        
+        # Check if we already have search results (don't trigger again)
+        has_search_results = bool(context.get("web_search_results_mcp") or context.get("web_search_results"))
+        web_search_attempted = context.get("_web_search_attempted", False)
+        
+        # Auto-trigger web search for clear queries even if mode is "off"
+        # Check if we already have a web_search tool call
+        has_web_search_call = any(tc.get("name") == "web_search" for tc in tool_calls) if tool_calls else False
+        
+        # Auto-trigger if:
+        # 1. We don't already have a web_search tool call
+        # 2. We don't already have search results
+        # 3. The query clearly needs web search
+        if not has_web_search_call and not has_search_results:
+            # Keywords that clearly indicate web search is needed
+            web_search_keywords = ["who is", "what is", "current price", "latest news", "recent", "today", "now", "current", "find information", "search for", "look up", "tell me about", "information about"]
+            web_search_intent = any(keyword in message_lower for keyword in web_search_keywords)
             
-            if tool_calls:
+            # Also check for questions about people, places, companies, etc. (common web search queries)
+            # Questions typically start with who, what, when, where, why, how
+            is_question = message.strip().endswith("?") or any(message_lower.strip().startswith(q + " ") for q in ["who", "what", "when", "where", "why", "how"])
+            # Check if it's asking about a person (name pattern) or entity - matches "John Doe" or "Jundee Mark G. Molina"
+            has_name_pattern = bool(re.search(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+', message)) if message else False
+            
+            # If it's a question or has a name pattern, likely needs web search
+            if (is_question or has_name_pattern) and not web_search_intent:
+                web_search_intent = True
+                logger.info(f"Detected web search intent from question/name pattern: is_question={is_question}, has_name_pattern={has_name_pattern}, message='{message[:50]}'")
+            
+            # Check if AI said it will search (but didn't include tool call)
+            # Check both response and thinking content
+            thinking_lower = (accumulated_thinking or "").lower()
+            combined_text = (response_lower + " " + thinking_lower).lower()
+            
+            web_search_describing = any(phrase in combined_text for phrase in [
+                "i'll search", "i will search", "let me search", "i'll look up", "i will look up",
+                "let me look up", "i'll find", "i will find", "let me find", "i'll get information",
+                "i will get information", "let me get information", "using the web_search", "use the web_search",
+                "should search", "need to search", "will search", "search for information", "search the web",
+                "web_search tool", "search tool", "internet access", "search for information about",
+                "i need to search", "i should search", "need to use", "should use the web_search",
+                "will use the web_search", "going to search", "i'm going to search", "i need to get",
+                "current information", "up-to-date", "real-time", "latest information", "current data"
+            ])
+            
+            logger.info(f"[DEBUG] Web search detection: intent={web_search_intent}, describing={web_search_describing}, has_results={has_search_results}, attempted={web_search_attempted}")
+            
+            # Auto-trigger web search if user clearly needs it OR AI said it will search
+            # ALWAYS trigger for clear search intents, even if web_search_mode is "off"
+            # This ensures web search is used when needed, regardless of mode setting
+            should_auto_trigger = False
+            reason = ""
+            
+            if web_search_intent:
+                should_auto_trigger = True
+                reason = "user query requires web search"
+                # ALWAYS enable web search mode if it was off - force enable for clear queries
+                if web_search_mode == "off":
+                    web_search_mode = "auto"
+                    context["web_search_mode"] = "auto"
+                    web_search_enabled = True
+                    logger.info(f"Force-enabled web_search_mode to 'auto' for query: {message[:50]}")
+            elif web_search_describing:
+                should_auto_trigger = True
+                reason = "AI described search action without tool call"
+                # ALWAYS enable web search mode if it was off - force enable when AI wants to search
+                if web_search_mode == "off":
+                    web_search_mode = "auto"
+                    context["web_search_mode"] = "auto"
+                    web_search_enabled = True
+                    logger.info(f"Force-enabled web_search_mode to 'auto' because AI described search: {message[:50]}")
+            
+            # ALWAYS trigger for questions about people, places, or current information
+            # This is a catch-all to ensure web search is used when appropriate
+            if not should_auto_trigger and (is_question or has_name_pattern):
+                # Double-check: if it's a question or has a name, it likely needs web search
+                should_auto_trigger = True
+                reason = "question or name pattern detected - likely needs web search"
+                if web_search_mode == "off":
+                    web_search_mode = "auto"
+                    context["web_search_mode"] = "auto"
+                    web_search_enabled = True
+                    logger.info(f"Force-enabled web_search_mode to 'auto' for question/name pattern: {message[:50]}")
+            
+            if should_auto_trigger:
+                logger.info(f"Auto-triggering web_search tool - reason: {reason}, query: {message[:100]}")
+                # Extract search query from message
+                search_query = self._extract_search_query(message)
+                if not search_query or len(search_query.strip()) < 3:
+                    # Fallback: use the message itself as query
+                    search_query = message.strip()
+                
+                # Auto-trigger web_search tool
+                auto_tool_call = {
+                    "name": "web_search",
+                    "arguments": {
+                        "query": search_query,
+                        "max_results": self.web_search_max_results,
+                        "search_type": "text"
+                    }
+                }
+                # Add web_search to existing tool_calls if any, otherwise create new list
+                if tool_calls:
+                    tool_calls.append(auto_tool_call)
+                    logger.info(f"Added web_search tool call to existing {len(tool_calls)-1} tool call(s)")
+                else:
+                    tool_calls = [auto_tool_call]
+                logger.info(f"Auto-triggered web_search tool with query: {search_query}")
+                print(f"[DEBUG] Auto-triggered web_search: query='{search_query}', tool_calls={tool_calls}")
+                print(f"[DEBUG] Total tool calls after auto-trigger: {len(tool_calls)}")
+        
+        # Execute tool calls (works with or without MCP - has fallback for web_search)
+        if tool_calls:
+                logger.info(f"Executing {len(tool_calls)} tool call(s): {[tc.get('name') for tc in tool_calls]}")
+                print(f"[DEBUG] About to execute tool calls: {tool_calls}")
+                print(f"[DEBUG] MCP enabled: {self.is_mcp_enabled()}, MCP client: {self.mcp_client is not None}")
+                
                 # Execute tool calls
                 allow_write = self._can_modify_files(context)
-                tool_results = await self.mcp_client.execute_tool_calls(tool_calls, allow_write=allow_write)
+                try:
+                    if not self.is_mcp_enabled():
+                        logger.warning("MCP is not enabled or client is not available - attempting fallback for web_search")
+                        print(f"[DEBUG] MCP not enabled - attempting fallback for web_search")
+                        
+                        # Fallback: Handle web_search directly when MCP is not available
+                        tool_results = []
+                        for tool_call in tool_calls:
+                            tool_name = tool_call.get("name")
+                            if tool_name == "web_search":
+                                # Use direct web search fallback
+                                try:
+                                    query = tool_call.get("arguments", {}).get("query", "")
+                                    max_results = tool_call.get("arguments", {}).get("max_results", self.web_search_max_results)
+                                    
+                                    if query:
+                                        logger.info(f"Fallback: Performing web search for '{query}'")
+                                        search_results = await self.perform_web_search(query, max_results=max_results)
+                                        
+                                        if search_results:
+                                            # Format results similar to MCP tool output
+                                            from backend.services.web_search_service import WebSearchService
+                                            web_service = WebSearchService()
+                                            # Convert search_results format to web_search_service format
+                                            formatted_search_results = []
+                                            for r in search_results:
+                                                formatted_search_results.append({
+                                                    "title": r.get("title", ""),
+                                                    "href": r.get("url", ""),
+                                                    "url": r.get("url", ""),
+                                                    "body": r.get("snippet", ""),
+                                                    "description": r.get("snippet", "")
+                                                })
+                                            formatted_results = web_service.format_results(
+                                                formatted_search_results,
+                                                query,
+                                                include_metadata=True
+                                            )
+                                            tool_results.append({
+                                                "tool": "web_search",
+                                                "arguments": tool_call.get("arguments", {}),
+                                                "result": formatted_results,
+                                                "error": False
+                                            })
+                                            logger.info(f"Fallback web search successful: {len(search_results)} results")
+                                        else:
+                                            tool_results.append({
+                                                "tool": "web_search",
+                                                "arguments": tool_call.get("arguments", {}),
+                                                "result": "No search results found.",
+                                                "error": False
+                                            })
+                                    else:
+                                        tool_results.append({
+                                            "tool": "web_search",
+                                            "arguments": tool_call.get("arguments", {}),
+                                            "result": "Error: No search query provided",
+                                            "error": True
+                                        })
+                                except Exception as search_error:
+                                    logger.error(f"Fallback web search failed: {search_error}", exc_info=True)
+                                    tool_results.append({
+                                        "tool": "web_search",
+                                        "arguments": tool_call.get("arguments", {}),
+                                        "result": f"Error performing web search: {str(search_error)}",
+                                        "error": True
+                                    })
+                            else:
+                                # For non-web_search tools, return error when MCP is not available
+                                tool_results.append({
+                                    "tool": tool_name,
+                                    "arguments": tool_call.get("arguments", {}),
+                                    "result": f"Tool '{tool_name}' requires MCP which is not available",
+                                    "error": True
+                                })
+                    else:
+                        tool_results = await self.mcp_client.execute_tool_calls(tool_calls, allow_write=allow_write)
+                        logger.info(f"Tool execution completed: {len(tool_results) if tool_results else 0} result(s)")
+                        print(f"[DEBUG] Tool execution results: {len(tool_results) if tool_results else 0} result(s)")
+                        if tool_results:
+                            for idx, result in enumerate(tool_results):
+                                print(f"[DEBUG] Result {idx}: tool={result.get('tool')}, error={result.get('error')}, result_length={len(result.get('result', ''))}")
+                except Exception as tool_error:
+                    logger.error(f"Tool execution failed: {tool_error}", exc_info=True)
+                    print(f"[DEBUG] Tool execution error: {tool_error}")
+                    import traceback
+                    print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+                    tool_results = None
                 
                 # If tools were executed, get a follow-up response with results
                 if tool_results and not all(r.get("error", False) for r in tool_results):
-                    tool_results_text = self.mcp_client.format_tool_results_for_prompt(tool_results)
+                    # Check if any tool call was web_search and store results in context
+                    for idx, tool_call in enumerate(tool_calls):
+                        tool_name = tool_call.get("name")
+                        if tool_name == "web_search" and idx < len(tool_results):
+                            result = tool_results[idx]
+                            is_error = result.get("error", False)
+                            result_text = result.get("result", "")
+                            
+                            logger.info(f"Processing web_search result: error={is_error}, result_length={len(result_text) if result_text else 0}")
+                            print(f"[DEBUG] web_search result: error={is_error}, result_length={len(result_text) if result_text else 0}")
+                            
+                            if not is_error and result_text:
+                                context["web_search_results_mcp"] = result_text
+                                structured_results = self._parse_web_search_results_text(result_text)
+                                if structured_results:
+                                    context["web_search_results"] = structured_results
+                                context["_web_search_attempted"] = True  # Mark as attempted to prevent duplicates
+                                logger.info(f"Stored web_search results in context ({len(result_text)} chars)")
+                                print(f"[DEBUG] Stored web_search results: {len(result_text)} chars")
+                            elif is_error:
+                                error_msg = result_text or result.get("error", "Unknown error")
+                                logger.error(f"web_search tool returned error: {error_msg}")
+                                print(f"[DEBUG] web_search error: {error_msg}")
+                                context["web_search_error"] = error_msg
+                            else:
+                                logger.warning("web_search returned empty result")
+                                print(f"[DEBUG] web_search returned empty result")
+                    
+                    # Format tool results for prompt
+                    if self.mcp_client:
+                        tool_results_text = self.mcp_client.format_tool_results_for_prompt(tool_results)
+                    else:
+                        # Fallback formatting when MCP client is not available
+                        formatted = ["=" * 80]
+                        formatted.append("TOOL EXECUTION RESULTS")
+                        formatted.append("=" * 80)
+                        formatted.append("")
+                        for result in tool_results:
+                            tool_name = result.get("tool", "unknown")
+                            is_error = result.get("error", False)
+                            result_text = result.get("result", "")
+                            status = "ERROR" if is_error else "SUCCESS"
+                            formatted.append(f"[{status}] {tool_name}:")
+                            if is_error:
+                                formatted.append(f"Error: {result_text}")
+                            else:
+                                formatted.append(result_text)
+                            formatted.append("")
+                        formatted.append("=" * 80)
+                        formatted.append("")
+                        formatted.append("IMPORTANT: The tool execution results above contain the actual data from the tools.")
+                        formatted.append("You MUST use this information in your response. Do not say you will perform the action - it has already been done.")
+                        formatted.append("For web_search results, extract the relevant information and provide a direct answer to the user's question.")
+                        formatted.append("")
+                        tool_results_text = "\n".join(formatted)
+                    logger.info(f"Formatted tool results: {len(tool_results_text)} chars")
                     
                     # Build follow-up prompt with tool results
-                    follow_up_prompt = f"{prompt}\n\n{response}\n\n{tool_results_text}\n\nPlease use the tool execution results above to provide a complete answer."
+                    # Include explicit instructions to use the search results
+                    follow_up_prompt = f"{prompt}\n\nInitial AI response:\n{response}\n\n{tool_results_text}\n\n🚨 CRITICAL INSTRUCTIONS 🚨\n\nThe tool execution results above contain the ACTUAL web search results. The search has ALREADY been performed.\n\nYou MUST:\n1. Use the search results to provide a direct, complete answer to the user's question\n2. Do NOT say you will search, need to search, or should search - the search is DONE\n3. Do NOT include thinking about searching - just provide the answer using the results\n4. Extract relevant information from the search results and present it clearly\n5. If the search results contain the answer, use them directly\n\nDo NOT repeat phrases like:\n- 'I'll search for...'\n- 'Let me search...'\n- 'I need to search...'\n- 'I should use the web_search tool...'\n\nInstead, directly answer the question using the search results provided above."
                     
                     # Get follow-up response that incorporates tool results
+                    logger.info("Getting follow-up response with tool results...")
                     follow_up_response, follow_up_thinking = await self._call_model(follow_up_prompt)
                     response = follow_up_response  # Use the follow-up response
+                    logger.info(f"Follow-up response received: {len(response)} chars")
+                    print(f"[DEBUG] Follow-up response preview: {response[:200]}...")
+                    
+                    # Remove any tool calls from the follow-up response (shouldn't be any, but just in case)
+                    if self.mcp_client:
+                        response = self.mcp_client.remove_tool_calls_from_text(response)
                     if follow_up_thinking:
                         if accumulated_thinking:
                             accumulated_thinking = (accumulated_thinking + "\n" + follow_up_thinking).strip()
                         else:
                             accumulated_thinking = follow_up_thinking
+                elif tool_results:
+                    errors = [r.get("error", "Unknown") for r in tool_results if r.get("error")]
+                    logger.warning(f"Tool execution had errors: {errors}")
         
         # Check if AI response indicates uncertainty or lack of knowledge
-        # If so, try web search as fallback (only if web search mode is not off)
+        # If so, try web search as fallback (only if web search mode is not off and no search was done yet)
         # When web search mode is "off", rely only on model knowledge
+        # Skip if we already have search results or already attempted search
+        has_search_results = bool(context.get("web_search_results_mcp") or context.get("web_search_results"))
+        web_search_attempted = context.get("_web_search_attempted", False)
+        
         if (web_search_enabled and 
-            not context.get("web_search_results_mcp") and 
-            not context.get("web_search_results")):
-            if self._detect_ai_uncertainty(response, message):
-                try:
-                    # Extract search query from original message
-                    search_query = self._extract_search_query(message)
-                    
-                    # Try to perform web search using MCP tools first
-                    if self.is_mcp_enabled():
-                        tool_call = {
-                            "name": "web_search",
-                            "arguments": {
-                                "query": search_query,
-                                "max_results": self.web_search_max_results,
-                                "search_type": "text"
-                            }
+            not has_search_results and 
+            not web_search_attempted and
+            self._detect_ai_uncertainty(response, message)):
+            logger.info("AI response indicates uncertainty - attempting fallback web search")
+            try:
+                # Extract search query from original message
+                search_query = self._extract_search_query(message)
+                
+                # Try to perform web search using MCP tools first
+                if self.is_mcp_enabled():
+                    tool_call = {
+                        "name": "web_search",
+                        "arguments": {
+                            "query": search_query,
+                            "max_results": self.web_search_max_results,
+                            "search_type": "text"
                         }
+                    }
+                    
+                    tool_results = await self.mcp_client.execute_tool_calls(
+                        [tool_call],
+                        allow_write=True
+                    )
+                    
+                    if tool_results and not tool_results[0].get("error", False):
+                        result_text = tool_results[0].get("result", "")
+                        context["web_search_results_mcp"] = result_text
+                        structured_results = self._parse_web_search_results_text(result_text)
+                        if structured_results:
+                            context["web_search_results"] = structured_results
+                        context["web_search_fallback"] = True  # Mark as fallback search
+                        context["_web_search_attempted"] = True
+                        logger.info(f"Fallback web search successful: {len(result_text)} chars")
                         
-                        tool_results = await self.mcp_client.execute_tool_calls(
-                            [tool_call],
-                            allow_write=True
-                        )
+                        # Build follow-up prompt with web search results
+                        search_context = f"\n\nWeb search results for your query:\n{result_text}\n\n"
+                        follow_up_prompt = f"{prompt}\n\nInitial response:\n{response}\n\n{search_context}Please use the web search results above to provide a better answer. If the search results contain relevant information, use it to answer the question. If not, explain what you found."
                         
-                        if tool_results and not tool_results[0].get("error", False):
-                            result_text = tool_results[0].get("result", "")
-                            context["web_search_results_mcp"] = result_text
-                            structured_results = self._parse_web_search_results_text(result_text)
-                            if structured_results:
-                                context["web_search_results"] = structured_results
-                            context["web_search_fallback"] = True  # Mark as fallback search
-                            context["_web_search_attempted"] = True
-                            
-                            # Build follow-up prompt with web search results
-                            search_context = f"\n\nWeb search results for your query:\n{result_text}\n\n"
-                            follow_up_prompt = f"{prompt}\n\nInitial response:\n{response}\n\n{search_context}Please use the web search results above to provide a better answer. If the search results contain relevant information, use it to answer the question. If not, explain what you found."
-                            
-                            # Get follow-up response that incorporates web search results
-                            follow_up_response, follow_up_thinking = await self._call_model(follow_up_prompt)
-                            response = follow_up_response
-                            if follow_up_thinking:
-                                if accumulated_thinking:
-                                    accumulated_thinking = (accumulated_thinking + "\n" + follow_up_thinking).strip()
-                                else:
-                                    accumulated_thinking = follow_up_thinking
+                        # Get follow-up response that incorporates web search results
+                        follow_up_response, follow_up_thinking = await self._call_model(follow_up_prompt)
+                        response = follow_up_response
+                        if follow_up_thinking:
+                            if accumulated_thinking:
+                                accumulated_thinking = (accumulated_thinking + "\n" + follow_up_thinking).strip()
+                            else:
+                                accumulated_thinking = follow_up_thinking
                     else:
                         # Fallback: use direct web search
                         search_results = await self.perform_web_search(search_query)
@@ -2031,13 +2377,26 @@ class AIService:
                                     accumulated_thinking = (accumulated_thinking + "\n" + follow_up_thinking).strip()
                                 else:
                                     accumulated_thinking = follow_up_thinking
-                except Exception as error:
-                    # If web search fails, continue with original response
-                    print(f"Web search fallback failed: {error}")
-                    # Don't raise - just use the original response
+                else:
+                    # Fallback: use direct web search if MCP not available
+                    search_results = await self.perform_web_search(search_query)
+                    if search_results:
+                        context["web_search_results"] = search_results
+                        context["web_search_fallback"] = True
+                        context["_web_search_attempted"] = True
+            except Exception as error:
+                # If web search fails, continue with original response
+                logger.warning(f"Web search fallback failed: {error}")
+                # Don't raise - just use the original response
         
         # Parse metadata from response (pass context to block extraction in ASK mode)
         cleaned_response, metadata = self._parse_response_metadata(response, context)
+        
+        # Preserve initial ai_plan if follow-up response doesn't have one
+        # This ensures the AI plan is shown first in the frontend even after tool execution
+        if initial_ai_plan and not metadata.get("ai_plan"):
+            metadata["ai_plan"] = initial_ai_plan
+            logger.info("Preserved initial ai_plan in follow-up response")
         
         # Store original response length to detect if filtering was too aggressive
         original_length = len(cleaned_response.strip())
@@ -2125,25 +2484,31 @@ class AIService:
             metadata["file_operations"] = []
         
         # CRITICAL: Ensure we always have a response, even if minimal
-        # If response is still empty after all processing, use a fallback
+        # NEVER use thinking content as the main response - it should be separate
         if not cleaned_response.strip() or len(cleaned_response.strip()) < 5:
-            # If we have thinking content, extract useful parts from it
-            if accumulated_thinking and accumulated_thinking.strip():
-                # Try to extract the last meaningful sentence from thinking
-                thinking_sentences = [s.strip() for s in accumulated_thinking.split('.') if s.strip() and len(s.strip()) > 20]
-                if thinking_sentences:
-                    # Use the last sentence that's not just a status update
-                    for sentence in reversed(thinking_sentences):
-                        if not any(word in sentence.lower() for word in ['thinking', 'analyzing', 'considering', 'will', 'going to']):
-                            cleaned_response = sentence.strip()
-                            break
-                    # If still empty, use the last sentence anyway
-                    if not cleaned_response.strip() and thinking_sentences:
-                        cleaned_response = thinking_sentences[-1].strip()
+            # If filtering removed everything, use the original response with minimal cleaning
+            if response.strip() and len(response.strip()) > 10:
+                logger.warning("Filtering removed all content, using original response with minimal cleaning")
+                # Only remove obvious metadata blocks, keep everything else including thinking-like content
+                import re
+                minimal_cleaned = re.sub(r'```json\s*\{[^}]*"(?:ai_plan|file_operations)"[^}]*\}\s*```', '', response, flags=re.IGNORECASE | re.DOTALL)
+                minimal_cleaned = re.sub(r'\n{3,}', '\n\n', minimal_cleaned).strip()
+                if minimal_cleaned and len(minimal_cleaned) > 10:
+                    cleaned_response = minimal_cleaned
+                else:
+                    cleaned_response = response.strip()
             
-            # Final fallback: ensure we always return something
-            if not cleaned_response.strip():
-                cleaned_response = "I've processed your request. Please let me know if you need more information."
+            # Final fallback: ensure we always return something meaningful
+            if not cleaned_response.strip() or len(cleaned_response.strip()) < 5:
+                # Try to build answer from web search results if available
+                if structured_results:
+                    fallback_answer = self._build_answer_from_web_results(message, structured_results)
+                    if fallback_answer and len(fallback_answer.strip()) > 10:
+                        cleaned_response = fallback_answer
+                
+                # Last resort: generic message (NEVER use thinking content as response)
+                if not cleaned_response.strip() or len(cleaned_response.strip()) < 5:
+                    cleaned_response = "I've processed your request. Please let me know if you need more information."
         
         # CRITICAL: Ensure ASK mode NEVER has file operations or plans, even if the AI generated them
         if self._is_ask_context(context):
@@ -2350,8 +2715,36 @@ class AIService:
                     "The tool call MUST appear in your FIRST response. Do not describe - ACTUALLY DO IT.",
                     "",
                     "Use the appropriate MCP tools instead of just describing what should be done.",
-                    "For any question requiring current information, real-time data, or internet content, use the web_search tool.",
+                    "",
+                    "🚨🚨🚨 CRITICAL WEB SEARCH RULE 🚨🚨🚨",
+                    "",
+                    "⚠️ MANDATORY: When the user asks about current information, real-time data, people, events, prices, news, historical figures, or ANY internet content:",
+                    "",
+                    "❌ ABSOLUTELY FORBIDDEN (DO NOT DO THIS - YOU WILL BE AUTO-CORRECTED):",
+                    "- 'I'll search for information...'",
+                    "- 'Let me search the web...'",
+                    "- 'I'll look that up...'",
+                    "- 'I'll find information about...'",
+                    "- 'I need to search...'",
+                    "- 'I should use the web_search tool...'",
+                    "- ANY response that describes what you WILL do instead of actually doing it",
+                    "- ANY thinking about searching without actually including the tool call",
+                    "",
+                    "✅ REQUIRED ACTION (YOU MUST DO THIS IMMEDIATELY):",
+                    "- IMMEDIATELY include the web_search tool call in your response - DO NOT just describe it",
+                    "- Example: <tool_call name=\"web_search\" args='{\"query\": \"Jundee Mark G. Molina\", \"max_results\": 5}' />",
+                    "- The tool call MUST appear in your FIRST response. Do not describe - ACTUALLY DO IT.",
+                    "- If you think about searching, you MUST include the actual tool call, not just describe it",
+                    "- After including the tool call, the system will execute it and provide results",
+                    "",
+                    "🔴 CRITICAL: Questions starting with 'who', 'what', 'when', 'where', 'why', 'how' about people, places, events, or current data REQUIRE web_search.",
+                    "🔴 CRITICAL: Questions about prices, news, current events, or real-time information REQUIRE web_search.",
+                    "🔴 CRITICAL: Questions with names of people, places, or entities REQUIRE web_search.",
+                    "",
+                    "For ANY question requiring current information, real-time data, or internet content, you MUST use the web_search tool.",
                     "DO NOT write code with requests.get(), urllib, or any HTTP libraries to fetch internet data - use web_search tool instead.",
+                    "",
+                    "If you are unsure whether a query needs web search, ERR ON THE SIDE OF USING web_search.",
                     "",
                     "⚠️ WHEN NOT TO USE WEB SEARCH ⚠️",
                     "",
@@ -2450,11 +2843,14 @@ class AIService:
                 "- Always begin with information-gathering tasks (inspect files, read code, understand structure).",
                 "- 🚨 CRITICAL: When gathering information, YOU MUST USE the list_directory or get_file_tree MCP tools.",
                 "- 🚨 FORBIDDEN: Never respond with 'I'll scan...' or 'Let me examine...' - include the tool call in your response.",
+                "- 🚨 CRITICAL: When a task requires web search, you MUST include the actual <tool_call name=\"web_search\" ... /> in your response.",
+                "- 🚨 FORBIDDEN: Never mark a web search task as `completed` unless you have actually included the web_search tool call and received results.",
+                "- 🚨 FORBIDDEN: Never say 'I'll search...' or 'Let me search...' - include the actual tool call: <tool_call name=\"web_search\" args='{\"query\": \"...\", \"max_results\": 5}' />",
                 "- After planning, execute tasks proactively: gather information, produce file edits (via file_operations), or run commands.",
                 "- When creating or editing files, emit file_operations and continue to the next task.",
                 "- CRITICAL: If the user asks to create/modify files, you MUST include file_operations. Never just describe—actually do it.",
                 "- Keep edits surgical: update only what's needed, preserve the rest.",
-                "- Mark tasks as `completed` only when actually done. Mark active work as `in_progress`.",
+                "- Mark tasks as `completed` only when actually done AND the tool call has been executed. Mark active work as `in_progress`.",
                 "- Continue working until all tasks are `completed` (unless blocked).",
                 "- End with a verification task and reporting task that summarizes outcomes.",
                 "",
@@ -2480,13 +2876,16 @@ class AIService:
                 "- Maintain a TODO list (max 5 items) where every task has an id, title, and status (`pending`, `in_progress`, or `completed`). Update statuses as you make progress so the user can monitor it.",
                 "- Include this plan in the `ai_plan` metadata described below even if no file changes are required.",
                 "- After planning, proactively execute the tasks: gather the requested information, produce concrete file edits (via file_operations), or clearly state which files/commands you ran.",
+                "- 🚨 CRITICAL: When a task requires web search, you MUST include the actual <tool_call name=\"web_search\" ... /> in your response.",
+                "- 🚨 FORBIDDEN: Never mark a web search task as `completed` unless you have actually included the web_search tool call in your response.",
+                "- 🚨 FORBIDDEN: Never say 'I'll search...' or 'Let me search...' - include the actual tool call: <tool_call name=\"web_search\" args='{\"query\": \"...\", \"max_results\": 5}' />",
                 "- Treat agent mode as fully autonomous execution: do NOT ask the user follow-up questions unless the request is self-contradictory or unsafe. Instead, state reasonable assumptions and continue working.",
                 "- When the user responds with short inputs like `1`, `2`, `option A`, or repeats one of your earlier choices, interpret that as their selection instead of asking the same question again.",
                 "- When creating or editing files, emit the necessary file_operations and then immediately move on to the next task—do not stop after the first modification if other tasks remain.",
                 "- CRITICAL: If the user asks to create, make, write, or generate a file, you MUST include a create_file operation in file_operations. Never just describe the file—actually create it via file_operations.",
                 "- CRITICAL: If the user asks to modify, update, change, or fix code, you MUST include edit_file operations in file_operations. Never just show code blocks—include the actual file_operations.",
                 "- Keep edits surgical: update only the portions of each file that the user asked to change and preserve the rest of the file exactly as-is.",
-                "- Only mark a task as `completed` if you actually performed that step in the current response. Mark the task you are actively doing as `in_progress`; leave future work as `pending`.",
+                "- Only mark a task as `completed` if you actually performed that step in the current response AND included the necessary tool calls. Mark the task you are actively doing as `in_progress`; leave future work as `pending`.",
                 "- Do not leave tasks pending unless you hit a hard blocker; otherwise continue working until every task is marked `completed` within this response.",
                 "- Add a verification task (linting, reasoning, or test strategy) before reporting back, and end with a reporting task that summarizes outcomes and remaining risks.",
                 "- When the user references a specific file or when composer_mode is true, you MUST produce concrete file edits, not just a plan.",
@@ -2538,6 +2937,11 @@ class AIService:
                 "- Reference the provided context (files, history, or web results) to answer directly.",
                 "- Never include ai_plan or file_operations metadata; respond with natural language only.",
                 "- If fulfilling the request would require editing files, explain the limitation and recommend switching to Agent mode instead of fabricating edits.",
+                "",
+                "🚨 CRITICAL: When asked about current information, people, events, prices, or any internet content:",
+                "- DO NOT say 'I'll search...' or 'Let me search...' - ACTUALLY include the web_search tool call in your response.",
+                "- Example: <tool_call name=\"web_search\" args='{\"query\": \"[search query]\", \"max_results\": 5}' />",
+                "- The tool call MUST be in your response, not just described.",
                 ""
             ])
 
@@ -2619,21 +3023,33 @@ class AIService:
                 prompt_parts.append("- If you cannot find a price in the search results, say 'Price information not found in search results' - DO NOT make up a price.")
                 prompt_parts.append("- If you see prices like $92,641, $90,000+, or similar HIGH values in the search results, use THOSE, NOT $23,433.")
                 prompt_parts.append("")
-                prompt_parts.append("🚫 DO NOT GENERATE ANY OF THE FOLLOWING:")
-                prompt_parts.append("- Do NOT generate TODO lists, AI plans, step-by-step breakdowns, or status messages - just provide the answer.")
-                prompt_parts.append("- Do NOT include 'Verification', 'Verification Report', 'Task Report', 'Task Status Update', or 'Remaining Risks' sections.")
-                prompt_parts.append("- Do NOT say 'I verified' or 'I have verified' - just provide the answer directly.")
-                prompt_parts.append("- Do NOT list tasks like 'Verify the price information' or 'Get the latest price' - these are not answers.")
-                prompt_parts.append("- Do NOT say 'we will use', 'we will obtain', 'I can display', or 'I can show' - you already have the results, so provide the answer NOW.")
-                prompt_parts.append("- Do NOT include 'AI PLAN' sections, 'COMPLETED' status indicators, or any planning metadata in your response.")
-                prompt_parts.append("- Do NOT say 'please let me know if you'd like additional information' - just provide the complete answer.")
-                prompt_parts.append("- Do NOT say that no results were provided - they are shown above.")
-                prompt_parts.append("")
-                prompt_parts.append("✅ YOUR RESPONSE SHOULD BE:")
-                prompt_parts.append("- A direct answer to the user's question using the search results.")
-                prompt_parts.append("- For price queries: 'The current price of [asset] is $[EXACT_PRICE_FROM_RESULTS] USD'")
-                prompt_parts.append("- Brief and to the point - no verification steps, no task lists, no reports.")
-                prompt_parts.append("")
+                # Only restrict plans in ASK mode - allow plans in agent/plan modes
+                is_ask_mode_for_web = (not is_agent_mode) and is_ask_mode
+                if is_ask_mode_for_web:
+                    prompt_parts.append("🚫 DO NOT GENERATE ANY OF THE FOLLOWING (ASK MODE - READ ONLY):")
+                    prompt_parts.append("- Do NOT generate TODO lists, AI plans, step-by-step breakdowns, or status messages - just provide the answer.")
+                    prompt_parts.append("- Do NOT include 'Verification', 'Verification Report', 'Task Report', 'Task Status Update', or 'Remaining Risks' sections.")
+                    prompt_parts.append("- Do NOT say 'I verified' or 'I have verified' - just provide the answer directly.")
+                    prompt_parts.append("- Do NOT list tasks like 'Verify the price information' or 'Get the latest price' - these are not answers.")
+                    prompt_parts.append("- Do NOT say 'we will use', 'we will obtain', 'I can display', or 'I can show' - you already have the results, so provide the answer NOW.")
+                    prompt_parts.append("- Do NOT include 'AI PLAN' sections, 'COMPLETED' status indicators, or any planning metadata in your response.")
+                    prompt_parts.append("- Do NOT say 'please let me know if you'd like additional information' - just provide the complete answer.")
+                    prompt_parts.append("- Do NOT say that no results were provided - they are shown above.")
+                    prompt_parts.append("")
+                    prompt_parts.append("✅ YOUR RESPONSE SHOULD BE:")
+                    prompt_parts.append("- A direct answer to the user's question using the search results.")
+                    prompt_parts.append("- For price queries: 'The current price of [asset] is $[EXACT_PRICE_FROM_RESULTS] USD'")
+                    prompt_parts.append("- Brief and to the point - no verification steps, no task lists, no reports.")
+                    prompt_parts.append("")
+                else:
+                    # In agent/plan modes, web search results should be used as part of the planning process
+                    prompt_parts.append("✅ WHEN USING WEB SEARCH RESULTS IN AGENT/PLAN MODE:")
+                    prompt_parts.append("- Use the web search results as part of your information-gathering phase.")
+                    prompt_parts.append("- Include web search findings in your ai_plan tasks when relevant.")
+                    prompt_parts.append("- You can still generate ai_plan metadata to structure your work, even when using web search results.")
+                    prompt_parts.append("- Break down complex tasks that involve web research into clear steps in your plan.")
+                    prompt_parts.append("- Extract facts, prices, and data from the search results and incorporate them into your plan execution.")
+                    prompt_parts.append("")
             elif direct_results:
                 # Direct search results (fallback)
                 prompt_parts.append("")
@@ -2674,21 +3090,33 @@ class AIService:
                 prompt_parts.append("- If you cannot find a price in the search results, say 'Price information not found in search results' - DO NOT make up a price.")
                 prompt_parts.append("- If you see prices like $92,641, $90,000+, or similar HIGH values in the search results, use THOSE, NOT $23,433.")
                 prompt_parts.append("")
-                prompt_parts.append("🚫 DO NOT GENERATE ANY OF THE FOLLOWING:")
-                prompt_parts.append("- Do NOT generate TODO lists, AI plans, step-by-step breakdowns, or status messages - just provide the answer.")
-                prompt_parts.append("- Do NOT include 'Verification', 'Verification Report', 'Task Report', 'Task Status Update', or 'Remaining Risks' sections.")
-                prompt_parts.append("- Do NOT say 'I verified' or 'I have verified' - just provide the answer directly.")
-                prompt_parts.append("- Do NOT list tasks like 'Verify the price information' or 'Get the latest price' - these are not answers.")
-                prompt_parts.append("- Do NOT say 'we will use', 'we will obtain', 'I can display', or 'I can show' - you already have the results, so provide the answer NOW.")
-                prompt_parts.append("- Do NOT include 'AI PLAN' sections, 'COMPLETED' status indicators, or any planning metadata in your response.")
-                prompt_parts.append("- Do NOT say 'please let me know if you'd like additional information' - just provide the complete answer.")
-                prompt_parts.append("- Do NOT say that no results were provided - they are shown above.")
-                prompt_parts.append("")
-                prompt_parts.append("✅ YOUR RESPONSE SHOULD BE:")
-                prompt_parts.append("- A direct answer to the user's question using the search results.")
-                prompt_parts.append("- For price queries: 'The current price of [asset] is $[EXACT_PRICE_FROM_RESULTS] USD'")
-                prompt_parts.append("- Brief and to the point - no verification steps, no task lists, no reports.")
-                prompt_parts.append("")
+                # Only restrict plans in ASK mode - allow plans in agent/plan modes
+                is_ask_mode_for_web = (not is_agent_mode) and is_ask_mode
+                if is_ask_mode_for_web:
+                    prompt_parts.append("🚫 DO NOT GENERATE ANY OF THE FOLLOWING (ASK MODE - READ ONLY):")
+                    prompt_parts.append("- Do NOT generate TODO lists, AI plans, step-by-step breakdowns, or status messages - just provide the answer.")
+                    prompt_parts.append("- Do NOT include 'Verification', 'Verification Report', 'Task Report', 'Task Status Update', or 'Remaining Risks' sections.")
+                    prompt_parts.append("- Do NOT say 'I verified' or 'I have verified' - just provide the answer directly.")
+                    prompt_parts.append("- Do NOT list tasks like 'Verify the price information' or 'Get the latest price' - these are not answers.")
+                    prompt_parts.append("- Do NOT say 'we will use', 'we will obtain', 'I can display', or 'I can show' - you already have the results, so provide the answer NOW.")
+                    prompt_parts.append("- Do NOT include 'AI PLAN' sections, 'COMPLETED' status indicators, or any planning metadata in your response.")
+                    prompt_parts.append("- Do NOT say 'please let me know if you'd like additional information' - just provide the complete answer.")
+                    prompt_parts.append("- Do NOT say that no results were provided - they are shown above.")
+                    prompt_parts.append("")
+                    prompt_parts.append("✅ YOUR RESPONSE SHOULD BE:")
+                    prompt_parts.append("- A direct answer to the user's question using the search results.")
+                    prompt_parts.append("- For price queries: 'The current price of [asset] is $[EXACT_PRICE_FROM_RESULTS] USD'")
+                    prompt_parts.append("- Brief and to the point - no verification steps, no task lists, no reports.")
+                    prompt_parts.append("")
+                else:
+                    # In agent/plan modes, web search results should be used as part of the planning process
+                    prompt_parts.append("✅ WHEN USING WEB SEARCH RESULTS IN AGENT/PLAN MODE:")
+                    prompt_parts.append("- Use the web search results as part of your information-gathering phase.")
+                    prompt_parts.append("- Include web search findings in your ai_plan tasks when relevant.")
+                    prompt_parts.append("- You can still generate ai_plan metadata to structure your work, even when using web search results.")
+                    prompt_parts.append("- Break down complex tasks that involve web research into clear steps in your plan.")
+                    prompt_parts.append("- Extract facts, prices, and data from the search results and incorporate them into your plan execution.")
+                    prompt_parts.append("")
             elif context.get("web_search_error"):
                 error_msg = truncate_text(context['web_search_error'], 160)
                 prompt_parts.append(f"Note: A web search was attempted but encountered an error: {error_msg}")

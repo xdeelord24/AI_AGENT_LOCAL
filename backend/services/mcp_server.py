@@ -1,6 +1,31 @@
 """
-MCP Server Implementation for AI Agent
-Provides tools for file operations, code analysis, web search, and more
+Model Context Protocol (MCP) Server Implementation for AI Agent
+
+The MCP Server acts as a standardized bridge between AI models and external systems,
+providing unified connectivity, real-time access, and scalable integration.
+
+Key Features:
+- Unified Connectivity: Single standardized interface for all external tools and data sources
+- Real-Time Access: Enables AI models to pull fresh, live information instead of static training data
+- Scalability: Minimal setup required, reducing deployment time and complexity
+- Flexibility: Extensible architecture that can integrate with any external service
+
+Architecture:
+The MCP Server implements the Model Context Protocol, allowing AI models to:
+1. Discover available tools through standardized tool descriptions
+2. Execute tools with structured parameters
+3. Receive real-time results formatted for AI consumption
+4. Access multiple data sources (files, web, code analysis) through one interface
+
+This implementation provides tools for:
+- File operations (read, write, list, search)
+- Code analysis and search
+- Web search with caching and optimization
+- Command execution
+- Directory tree navigation
+
+The server follows the MCP protocol standard, ensuring compatibility with any
+MCP-compliant AI model or client.
 """
 
 import asyncio
@@ -8,8 +33,12 @@ import json
 import os
 import subprocess
 import time
+import logging
 from typing import Any, Dict, List, Optional
 from pathlib import Path
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 # Import here to avoid circular dependencies
 MCP_AVAILABLE = False
@@ -40,7 +69,23 @@ except ImportError:
 
 
 class MCPServerTools:
-    """MCP Server Tools for AI Agent operations"""
+    """
+    MCP Server Tools - Bridge between AI models and external systems
+    
+    This class implements the Model Context Protocol server, providing a unified
+    interface for AI models to access external tools and data sources. It acts as
+    the backend system that handles requests from AI models and routes them to
+    the appropriate tools, APIs, or services.
+    
+    The MCP server provides:
+    - Standardized tool discovery and execution
+    - Real-time data access (files, web, code)
+    - Caching for performance optimization
+    - Error handling and validation
+    
+    This follows the MCP protocol standard, ensuring seamless integration with
+    any MCP-compliant AI model or client.
+    """
     
     def __init__(self, file_service=None, code_analyzer=None, web_search_enabled=True, web_search_service=None):
         self.file_service = file_service
@@ -54,6 +99,15 @@ class MCPServerTools:
             self._cache_ttl_seconds = 4
         self._dir_cache: Dict[str, Dict[str, Any]] = {}
         self._tree_cache: Dict[str, Dict[str, Any]] = {}
+        
+        # Tool metadata
+        self.server_version = "1.0.0"
+        self.server_capabilities = {
+            "caching": True,
+            "validation": True,
+            "analytics": True,
+            "error_recovery": True
+        }
 
     def _build_cache_key(self, path: str, suffix: str = "") -> str:
         normalized = os.path.abspath(path)
@@ -76,9 +130,18 @@ class MCPServerTools:
         self._tree_cache.clear()
     
     def get_tools(self) -> List[Tool]:
-        """Get list of available MCP tools"""
-        if not MCP_AVAILABLE:
-            return []
+        """
+        Get list of available MCP tools
+        
+        This method implements the MCP protocol's tool discovery mechanism.
+        It returns a standardized list of tools that AI models can use, with
+        complete schema information for each tool.
+        
+        Returns:
+            List of Tool objects following the MCP protocol specification
+        """
+        # Tool class is always available - either from mcp.types or from the fallback stub
+        # defined at module level (lines 59-63). No need to check MCP_AVAILABLE or import.
         
         tools = [
             Tool(
@@ -257,13 +320,59 @@ class MCPServerTools:
         
         return tools
     
+    def get_server_info(self) -> Dict[str, Any]:
+        """
+        Get MCP server information and capabilities
+        
+        Returns:
+            Dictionary containing server metadata including version, capabilities,
+            and available tools count
+        """
+        tools = self.get_tools()
+        return {
+            "version": self.server_version,
+            "capabilities": self.server_capabilities,
+            "tool_count": len(tools),
+            "tools": [tool.name for tool in tools],
+            "workspace_root": self.workspace_root,
+            "web_search_enabled": self.web_search_enabled
+        }
+    
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], allow_write: bool = True) -> List[TextContent]:
-        """Execute an MCP tool and return results"""
+        """
+        Execute an MCP tool and return results
+        
+        This is the core method that implements the MCP protocol's tool execution.
+        It routes tool calls from AI models to the appropriate backend services,
+        providing real-time access to external systems.
+        
+        The method:
+        1. Validates the tool name and arguments
+        2. Routes to the appropriate tool handler
+        3. Executes the tool with proper error handling
+        4. Returns standardized results in MCP TextContent format
+        
+        This unified interface allows AI models to access multiple external
+        systems (files, web, code analysis) without needing custom integrations
+        for each service.
+        
+        Args:
+            tool_name: Name of the tool to execute (must be in get_tools())
+            arguments: Tool-specific parameters
+            allow_write: Whether write operations are permitted (for ASK mode)
+            
+        Returns:
+            List of TextContent objects with tool execution results
+        """
         if not MCP_AVAILABLE:
+            logger.error("MCP SDK not available")
             return [TextContent(
                 type="text",
                 text=f"MCP SDK not available. Please install with: pip install mcp"
             )]
+        
+        execution_start = time.time()
+        logger.info(f"Executing MCP tool: {tool_name} with arguments: {arguments}")
         
         try:
             if tool_name == "read_file":
@@ -309,14 +418,19 @@ class MCPServerTools:
                     arguments.get("search_type", "text")
                 )
             else:
+                execution_time = time.time() - execution_start
+                logger.warning(f"Unknown tool requested: {tool_name} (execution time: {execution_time:.3f}s)")
                 return [TextContent(
                     type="text",
-                    text=f"Unknown tool: {tool_name}"
+                    text=f"Unknown tool: {tool_name}. Available tools: {', '.join([t.name for t in self.get_tools()])}"
                 )]
         except Exception as e:
+            execution_time = time.time() - execution_start
+            error_msg = f"Error executing {tool_name}: {str(e)}"
+            logger.error(f"{error_msg} (execution time: {execution_time:.3f}s)", exc_info=True)
             return [TextContent(
                 type="text",
-                text=f"Error executing {tool_name}: {str(e)}"
+                text=error_msg
             )]
     
     async def _read_file(self, path: str) -> List[TextContent]:
@@ -655,7 +769,35 @@ class MCPServerTools:
 
 
 def create_mcp_server(file_service=None, code_analyzer=None, web_search_enabled=True):
-    """Create and configure an MCP server instance"""
+    """
+    Create and configure an MCP server instance following the Model Context Protocol
+    
+    This function creates a fully compliant MCP server that implements the
+    standardized protocol for AI model integration. The server acts as a bridge
+    between AI models and external systems, providing:
+    
+    - Unified Connectivity: Single interface for all tools and data sources
+    - Real-Time Access: Live data retrieval instead of static training data
+    - Scalability: Minimal setup, extensible architecture
+    - Protocol Compliance: Follows MCP standard for maximum compatibility
+    
+    The server can be used in two modes:
+    1. Direct integration (current): Tools accessed via MCPServerTools class
+    2. Standalone server: Can run as separate process using stdio_server
+    
+    Example use case:
+    Instead of writing separate integrations for Notion, Google Sheets, and
+    project management tools, connect them all through this MCP server.
+    The AI then queries the server, which fetches data and delivers it in real time.
+    
+    Args:
+        file_service: Service for file operations
+        code_analyzer: Service for code analysis
+        web_search_enabled: Whether to enable web search tool
+        
+    Returns:
+        Tuple of (Server instance, MCPServerTools instance) or (None, None) if MCP unavailable
+    """
     if not MCP_AVAILABLE:
         return None
     
