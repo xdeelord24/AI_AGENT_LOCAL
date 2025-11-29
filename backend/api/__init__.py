@@ -5,6 +5,7 @@ from .files import router as files_router
 from .code import router as code_router
 from .settings import router as settings_router
 from .terminal import router as terminal_router
+from .web_search import router as web_search_router
 
 router = APIRouter()
 
@@ -15,3 +16,4 @@ router.include_router(files_router, prefix="/files", tags=["files"])
 router.include_router(code_router, prefix="/code", tags=["code"])
 router.include_router(settings_router, prefix="/settings", tags=["settings"])
 router.include_router(terminal_router, prefix="/terminal", tags=["terminal"])
+router.include_router(web_search_router, prefix="/web-search", tags=["web-search"])

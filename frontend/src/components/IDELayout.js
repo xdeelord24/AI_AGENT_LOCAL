@@ -894,9 +894,21 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [chatTabs, setChatTabs] = useState([{ id: 1, title: 'New Chat', isActive: true }]);
   const [activeChatTab, setActiveChatTab] = useState(1);
   const chatModeOptions = [
-    { id: 'ask', label: 'Ask', description: 'Get a single, direct answer.' },
-    { id: 'plan', label: 'Plan', description: 'Have the AI outline steps before acting.' },
-    { id: 'agent', label: 'Agent', description: 'Let the AI act like a coding copilot.' }
+    { 
+      id: 'ask', 
+      label: 'Ask', 
+      description: 'Get a single, direct answer. Read-only mode—no file modifications.' 
+    },
+    { 
+      id: 'plan', 
+      label: 'Plan', 
+      description: 'Have the AI outline steps before acting. Shows plan first, then executes.' 
+    },
+    { 
+      id: 'agent', 
+      label: 'Agent', 
+      description: 'Let the AI act like a coding copilot. Fully autonomous execution.' 
+    }
   ];
   const webSearchOptions = [
     { id: 'off', label: 'Off', description: 'AI stays within the workspace context.' },
@@ -4766,26 +4778,57 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
 
 
   const renderAiPlan = (plan) => {
-    if (!plan) return null;
+    if (!plan) {
+      console.log('[AI Plan] renderAiPlan called with null/undefined plan');
+      return null;
+    }
+    
+    // Log plan structure for debugging
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[AI Plan] Rendering plan:', plan);
+    }
+    
     const summary = normalizeChatInput(
       plan.summary || plan.thoughts || plan.description || ''
     );
     const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
+    
+    // If plan has no summary and no tasks, don't render
+    if (!summary && tasks.length === 0) {
+      console.log('[AI Plan] Plan has no summary and no tasks, skipping render');
+      return null;
+    }
 
-    // Group tasks by status
-    const completedTasks = tasks.filter(t => (t.status || 'pending').toLowerCase() === 'completed' || (t.status || 'pending').toLowerCase() === 'done');
-    const inProgressTasks = tasks.filter(t => (t.status || 'pending').toLowerCase() === 'in_progress' || (t.status || 'pending').toLowerCase() === 'in-progress' || (t.status || 'pending').toLowerCase() === 'active');
-    const pendingTasks = tasks.filter(t => {
-      const status = (t.status || 'pending').toLowerCase();
-      return status === 'pending' || (!['completed', 'done', 'in_progress', 'in-progress', 'active'].includes(status));
+    // Group tasks by status - enhanced status detection
+    const completedTasks = tasks.filter(t => {
+      const status = (t.status || 'pending').toLowerCase().trim();
+      return status === 'completed' || status === 'done' || status === 'finished';
     });
+    const inProgressTasks = tasks.filter(t => {
+      const status = (t.status || 'pending').toLowerCase().trim();
+      return status === 'in_progress' || status === 'in-progress' || status === 'active' || status === 'working' || status === 'executing';
+    });
+    const pendingTasks = tasks.filter(t => {
+      const status = (t.status || 'pending').toLowerCase().trim();
+      return !['completed', 'done', 'finished', 'in_progress', 'in-progress', 'active', 'working', 'executing'].includes(status);
+    });
+    
+    // Calculate progress percentage
+    const totalTasks = tasks.length;
+    const completedCount = completedTasks.length;
+    const progressPercentage = totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 0;
 
     return (
-      <div className="mt-3 rounded-xl border border-primary-800/40 bg-dark-900/70 p-4 space-y-4">
+      <div className="rounded-xl border border-primary-800/40 bg-dark-900/70 p-4 space-y-4 shadow-lg">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-primary-200 font-semibold">
-            <Workflow className="w-5 h-5" />
+            <Workflow className="w-5 h-5 text-primary-400" />
             <span>AI Workflow Plan</span>
+            {totalTasks > 0 && (
+              <span className="text-xs text-primary-400 font-normal ml-2">
+                ({completedCount}/{totalTasks} completed)
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-3 text-xs text-dark-400">
             {tasks.length > 0 && (
@@ -4793,25 +4836,35 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 {completedTasks.length > 0 && (
                   <span className="flex items-center gap-1">
                     <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="text-emerald-400">{completedTasks.length}</span>
+                    <span className="text-emerald-400 font-medium">{completedTasks.length}</span>
                   </span>
                 )}
                 {inProgressTasks.length > 0 && (
                   <span className="flex items-center gap-1">
                     <Loader2 className="w-3.5 h-3.5 text-primary-400 animate-spin" />
-                    <span className="text-primary-400">{inProgressTasks.length}</span>
+                    <span className="text-primary-400 font-medium">{inProgressTasks.length}</span>
                   </span>
                 )}
                 {pendingTasks.length > 0 && (
                   <span className="flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5 text-dark-400" />
-                    <span>{pendingTasks.length}</span>
+                    <span className="font-medium">{pendingTasks.length}</span>
                   </span>
                 )}
               </>
             )}
           </div>
         </div>
+        
+        {/* Progress bar */}
+        {totalTasks > 0 && (
+          <div className="w-full bg-dark-800 rounded-full h-2 overflow-hidden">
+            <div 
+              className="h-full bg-gradient-to-r from-primary-500 to-primary-400 transition-all duration-500 ease-out"
+              style={{ width: `${progressPercentage}%` }}
+            />
+          </div>
+        )}
         
         {summary && (
           <div className="bg-primary-900/20 border border-primary-700/40 rounded-lg p-3">
@@ -5171,12 +5224,19 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   : msg
               ));
             } else if (chunk.type === 'plan') {
-              // Update plan during streaming so it can be displayed while loading
-              setChatMessages(prev => prev.map(msg => 
-                msg.id === assistantMessageId
-                  ? { ...msg, plan: chunk.ai_plan || null }
-                  : msg
-              ));
+              // Update plan during streaming so it can be displayed immediately as a progress tracker
+              const planData = chunk.ai_plan || chunk.plan || null;
+              if (planData) {
+                console.log('[AI Plan] Received plan chunk during streaming:', planData);
+                // Update both the message plan and thinking plan for immediate display
+                setChatMessages(prev => prev.map(msg => 
+                  msg.id === assistantMessageId
+                    ? { ...msg, plan: planData }
+                    : msg
+                ));
+                // Also update thinking plan for display during streaming (before content arrives)
+                setThinkingAiPlan(planData);
+              }
             } else if (chunk.type === 'continue') {
               // AI is continuing with remaining tasks - append continuation message
               currentRound = chunk.round || currentRound + 1;
@@ -5191,8 +5251,21 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               // Note: streamingResponse continues to accumulate across rounds
             } else if (chunk.type === 'done') {
               // Finalize the message
+              // Use chunk.response if provided (should match what was streamed), otherwise fall back to accumulated
+              // This ensures consistency - the final response should match what was shown during streaming
               const finalThinking = chunk.thinking || streamingThinking;
-              const finalResponse = chunk.response || streamingResponse;
+              // Prefer chunk.response if it's a non-empty string, otherwise use accumulated streamingResponse
+              // This handles cases where backend sends empty response but we have streamed content
+              const chunkResponse = chunk.response !== undefined && chunk.response !== null 
+                ? String(chunk.response).trim() 
+                : '';
+              const finalResponse = chunkResponse || streamingResponse || '';
+              
+              // Log warning if we have thinking but no response content (might indicate an issue)
+              if (finalThinking && !finalResponse && !chunkResponse && !streamingResponse) {
+                console.warn('[Chat] Received thinking but no response content. This might indicate a backend issue.');
+              }
+              
               const normalizedContent = normalizeChatInput(finalResponse);
               const conversationId = chunk.conversation_id || null;
               
@@ -5207,7 +5280,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         timestamp: chunk.timestamp || new Date().toISOString(),
                         messageId: chunk.message_id || null,
                         conversationId: conversationId,
-                        plan: chunk.ai_plan || null,
+                        plan: chunk.ai_plan || chunk.plan || msg.plan || null, // Preserve existing plan if new one is null
                         activityLog: chunk.activity_log || null,
                         web_references: chunk.web_references || null
                       }
@@ -5287,7 +5360,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           return;
         }
 
-        const assistantPlan = response.ai_plan || null;
+        const assistantPlan = response.ai_plan || response.plan || null;
+        if (assistantPlan) {
+          console.log('[AI Plan] Received plan in non-streaming response:', assistantPlan);
+        }
         await previewAiPlanBeforeAnswer(assistantPlan);
 
         const assistantContent = normalizeChatInput(response.response);
@@ -5305,7 +5381,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   content: assistantContent,
                   rawContent: assistantContent,
                   timestamp: response.timestamp,
-                  plan: assistantPlan,
+                  plan: assistantPlan || msg.plan || null, // Preserve existing plan if new one is null
                   activityLog: response.activity_log || null,
                   messageId: response.message_id || null,
                   conversationId: conversationId,
@@ -8012,9 +8088,11 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                           const messageKey = message.messageId || message.id;
                           const isExplicitlyExpanded = collapsedThinking.has(`expanded-${messageKey}`);
                           const isExplicitlyCollapsed = collapsedThinking.has(`collapsed-${messageKey}`);
+                          // Default to collapsed if there's main content, expanded if no main content
+                          // But respect explicit user preferences
                           const shouldBeCollapsed = hasContent 
                             ? (isExplicitlyCollapsed || (!isExplicitlyExpanded && !isExplicitlyCollapsed))
-                            : false;
+                            : false; // If no main content, always show thinking (not collapsed)
                           
                           const toggleThinking = () => {
                             setCollapsedThinking(prev => {
@@ -8038,6 +8116,18 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                   : 'bg-dark-700 text-dark-200'
                               }`}
                             >
+                              {/* Show AI Workflow Plan FIRST - before thinking and content - as a progress tracker */}
+                              {message.plan &&
+                                message.role === 'assistant' && (
+                                  <div className="mb-3">
+                                    {renderAiPlan(message.plan)}
+                                  </div>
+                                )}
+                              {!message.plan && message.role === 'assistant' && thinkingAiPlan && (
+                                <div className="mb-3">
+                                  {renderAiPlan(thinkingAiPlan)}
+                                </div>
+                              )}
                               {hasThinking && (
                                 <div className="mb-3 rounded-lg border border-primary-800/30 bg-primary-900/10 p-3">
                                   <div className="flex items-center justify-between gap-2 mb-2">
@@ -8068,15 +8158,16 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                       </button>
                                     )}
                                   </div>
-                                  {!shouldBeCollapsed && (
-                                    <div className="text-xs text-primary-200/80 leading-relaxed whitespace-pre-wrap">
-                                      {message.thinking}
-                                    </div>
-                                  )}
-                                  {shouldBeCollapsed && (
+                                  {shouldBeCollapsed ? (
                                     <div className="text-xs text-primary-300/60 italic">
                                       Thinking process collapsed. Click "Show" to expand.
                                     </div>
+                                  ) : (
+                                    message.thinking && (
+                                      <div className="text-xs text-primary-200/80 leading-relaxed whitespace-pre-wrap">
+                                        {message.thinking}
+                                      </div>
+                                    )
                                   )}
                                 </div>
                               )}
@@ -8095,12 +8186,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                   }}
                                 />
                               )}
-                              {message.plan &&
-                                message.role === 'assistant' && (
-                                  <div className="mt-3">
-                                    {renderAiPlan(message.plan)}
-                                  </div>
-                                )}
+                              {/* Plan is now shown at the top, before content - removed duplicate here */}
                               {message.activityLog &&
                                 Array.isArray(message.activityLog) &&
                                 message.activityLog.length > 0 &&
@@ -8279,7 +8365,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                               </span>
                             </div>
                             {streamingPlan && (
-                              <div className="border-t border-dark-600 pt-3">
+                              <div className="mt-3">
                                 {renderAiPlan(streamingPlan)}
                               </div>
                             )}

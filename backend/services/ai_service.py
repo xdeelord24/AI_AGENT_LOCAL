@@ -2353,6 +2353,30 @@ class AIService:
                     "For any question requiring current information, real-time data, or internet content, use the web_search tool.",
                     "DO NOT write code with requests.get(), urllib, or any HTTP libraries to fetch internet data - use web_search tool instead.",
                     "",
+                    "⚠️ WHEN NOT TO USE WEB SEARCH ⚠️",
+                    "",
+                    "DO NOT use web_search for queries about:",
+                    "- UI elements, icons, buttons, tooltips, or interface features",
+                    "- Questions about how the interface works (e.g., 'show more info', 'what does this icon do')",
+                    "- Questions about the application itself or its features",
+                    "- Questions that can be answered from the codebase or context",
+                    "- Questions about UI/UX features, tooltips, hover effects, or interface elements",
+                    "",
+                    "Examples of queries that should NOT trigger web search:",
+                    "- 'show more info' (about UI elements - this refers to tooltips/hover info)",
+                    "- 'what does this icon do' (about interface elements)",
+                    "- 'how does this feature work' (referring to the app interface)",
+                    "- 'explain this button' (about UI elements)",
+                    "- 'more information' (when referring to UI tooltips or help text)",
+                    "",
+                    "When users ask 'show more info' or 'more information' about UI elements:",
+                    "- They are asking about tooltips, hover information, or help text in the interface",
+                    "- They are NOT asking you to search the web for external information",
+                    "- Answer by explaining what the UI element does or how to use it",
+                    "- Do NOT perform a web search",
+                    "",
+                    "These are questions about the application interface, not external information that needs web search.",
+                    "",
                     "=" * 80,
                     "",
                 ])
@@ -2408,14 +2432,47 @@ class AIService:
             "",
         ])
 
-        if is_agent_mode:
+        is_plan_mode = self._is_plan_context(context) and not is_ask_mode
+        
+        if is_plan_mode:
             prompt_parts.extend([
-                "AGENT MODE REQUIREMENTS:",
+                "📋 PLAN MODE REQUIREMENTS:",
+                "",
+                "PLAN MODE: Show the plan FIRST, then execute it step-by-step.",
+                "",
+                "- Your FIRST response MUST include a clear `ai_plan` with a summary and task breakdown.",
+                "- Show the plan prominently before starting execution.",
+                "- Break large requests into 3–6 concrete subtasks with clear titles.",
+                "- Each task must have: id, title, and status (`pending`, `in_progress`, or `completed`).",
+                "- After showing the plan, begin executing tasks one by one.",
+                "- Update task statuses in real-time as you work: `pending` → `in_progress` → `completed`.",
+                "- The plan acts as a progress tracker—users can see what's done and what's remaining.",
+                "- Always begin with information-gathering tasks (inspect files, read code, understand structure).",
+                "- 🚨 CRITICAL: When gathering information, YOU MUST USE the list_directory or get_file_tree MCP tools.",
+                "- 🚨 FORBIDDEN: Never respond with 'I'll scan...' or 'Let me examine...' - include the tool call in your response.",
+                "- After planning, execute tasks proactively: gather information, produce file edits (via file_operations), or run commands.",
+                "- When creating or editing files, emit file_operations and continue to the next task.",
+                "- CRITICAL: If the user asks to create/modify files, you MUST include file_operations. Never just describe—actually do it.",
+                "- Keep edits surgical: update only what's needed, preserve the rest.",
+                "- Mark tasks as `completed` only when actually done. Mark active work as `in_progress`.",
+                "- Continue working until all tasks are `completed` (unless blocked).",
+                "- End with a verification task and reporting task that summarizes outcomes.",
+                "",
+                "PLAN MODE is more structured than Agent mode—always show the plan first, then execute.",
+                "",
+            ])
+        elif is_agent_mode and not is_plan_mode:
+            prompt_parts.extend([
+                "🤖 AGENT MODE REQUIREMENTS:",
+                "",
+                "AGENT MODE: Fully autonomous execution—act like a coding copilot.",
+                "",
                 "- Think step-by-step internally, but DO NOT include thinking/planning/reporting prose in your response text.",
                 "- Put your thinking process, planning steps, and task breakdowns in the `ai_plan` metadata only.",
                 "- Your response text should contain only the actual answer, code, explanations, or results—not your internal reasoning process.",
-                "- Break large requests into 3–6 concrete subtasks that flow through this lifecycle: gather information ➜ plan ➜ implement ➜ verify ➜ report.",
-                "- Always begin with at least one information-gathering task (inspect mentioned files, open files, file_tree_structure, or provided web_search_results when browsing is enabled) and actually perform it before you present the plan.",
+                "- You may skip showing the plan and proceed directly to execution if appropriate.",
+                "- Break large requests into 3–6 concrete subtasks that flow through: gather information ➜ plan ➜ implement ➜ verify ➜ report.",
+                "- Always begin with at least one information-gathering task and actually perform it before presenting the plan.",
                 "- 🚨 CRITICAL: When gathering information about directories or project structure, YOU MUST USE the list_directory or get_file_tree MCP tools.",
                 "- 🚨 FORBIDDEN: Never respond with 'I'll scan the directory...' or 'Let me examine...' - you MUST include the tool call in your response.",
                 "- If the user asks to scan, list, or examine a directory, your FIRST response MUST include: <tool_call name=\"list_directory\" args='{\"path\": \".\"}' /> or <tool_call name=\"get_file_tree\" args='{\"path\": \".\", \"max_depth\": 6}' />",
@@ -2849,7 +2906,26 @@ class AIService:
             # But still check if it's clearly needed (user can override)
             pass
         
-        normalized = message.lower()
+        normalized = message.lower().strip()
+        
+        # EXCLUSION PATTERNS: UI/Interface-related queries that should NOT trigger web search
+        ui_exclusion_patterns = [
+            r'\bshow more info\b',
+            r'\bmore info\b.*\b(icon|button|tooltip|hover|click|ui|interface|feature)\b',
+            r'\b(info|information)\b.*\b(icon|button|tooltip|hover|click|ui|interface|feature|element)\b',
+            r'\bhow.*\b(icon|button|tooltip|hover|click|ui|interface|feature|element)\b.*\b(work|works|function|functions)\b',
+            r'\bwhat.*\b(icon|button|tooltip|hover|click|ui|interface|feature|element)\b.*\b(do|does|mean|means)\b',
+            r'\b(icon|button|tooltip|hover|click|ui|interface|feature|element)\b.*\b(info|information|help|explain)\b',
+            r'\bshow.*\b(tooltip|hover|info|information)\b',
+            r'\b(help|explain|tell me about)\b.*\b(icon|button|tooltip|hover|ui|interface|feature|element)\b',
+            r'\b(ui|interface|ui element|ui feature|user interface)\b',
+            r'\b(how to use|how do i use|how does this work)\b.*\b(here|this|interface|ui|feature)\b',
+        ]
+        
+        # Check exclusions first - if it matches UI patterns, don't trigger web search
+        for pattern in ui_exclusion_patterns:
+            if re.search(pattern, normalized, re.IGNORECASE):
+                return False
         
         # Price/Value queries
         price_patterns = [
@@ -2873,19 +2949,21 @@ class AIService:
             r'\b(current|live|real-time|real time)\b.*\b(data|information|status)\b',
         ]
         
-        # "What is X" queries that might need current info
+        # "What is X" queries that might need current info (but not UI-related)
         what_is_patterns = [
             r'\bwhat is\b.*\b(bitcoin|btc|ethereum|eth|stock|company|ceo|president)\b',
             r'\bwho is\b.*\b(current|now|today)\b',
-            r'\bwho is\b.+',
+            # Removed overly broad pattern: r'\bwho is\b.+',
+            # Only match "who is" with specific entities that need current info
+            r'\bwho is\b.*\b(current|now|today|president|ceo|leader|minister)\b',
         ]
         
-        # General information queries that likely need internet
+        # General information queries that likely need internet (but not UI-related)
         general_info_patterns = [
             r'\bwhat is\b.*\b(api|service|tool|library|framework|package)\b',
-            r'\bhow to\b.*\b(install|use|configure|setup|set up)\b',
-            r'\b(latest|new|recent|current)\b.*\b(version|release|update)\b',
-            r'\b(documentation|docs|tutorial|guide|example)\b',
+            r'\bhow to\b.*\b(install|use|configure|setup|set up)\b.*\b(package|library|framework|tool|software)\b',
+            r'\b(latest|new|recent|current)\b.*\b(version|release|update)\b.*\b(of|for)\b',
+            r'\b(documentation|docs|tutorial|guide|example)\b.*\b(for|about|on)\b',
         ]
         
         all_patterns = price_patterns + news_patterns + realtime_patterns + what_is_patterns + general_info_patterns
@@ -2894,7 +2972,7 @@ class AIService:
             if re.search(pattern, normalized, re.IGNORECASE):
                 return True
         
-        # Check for explicit search requests
+        # Check for explicit search requests (but exclude UI-related ones)
         search_keywords = [
             "search for",
             "look up",
@@ -2908,8 +2986,11 @@ class AIService:
             "find online",
         ]
         
+        # Only trigger if it's an explicit search AND not about UI
         if any(keyword in normalized for keyword in search_keywords):
-            return True
+            # Double-check it's not UI-related
+            if not any(re.search(pattern, normalized, re.IGNORECASE) for pattern in ui_exclusion_patterns):
+                return True
         
         return False
     

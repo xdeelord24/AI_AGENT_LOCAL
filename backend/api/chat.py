@@ -421,47 +421,46 @@ async def send_message_stream(
                             yield f"data: {json.dumps({'type': 'error', 'content': chunk.get('content', 'Unknown error')})}\n\n"
                             return
                     
-                    # After streaming, process the full message flow to get file operations, plans, etc.
+                    # After streaming, parse metadata from the streamed response to get file operations, plans, etc.
+                    # This ensures we use the actual streamed content, not a regenerated response
                     try:
-                        full_response = await ai_service.process_message(
-                            current_message,
-                            context_payload,
-                            working_history
+                        # Parse metadata from the streamed response content
+                        cleaned_response, metadata = ai_service._parse_response_metadata(
+                            accumulated_response_round,
+                            context_payload
                         )
                         
+                        # Generate conversation and message IDs if not set
                         if not conversation_id:
-                            conversation_id = full_response.get("conversation_id") or str(uuid.uuid4())
+                            conversation_id = str(uuid.uuid4())
                         if not message_id:
-                            message_id = full_response.get("message_id") or str(uuid.uuid4())
+                            message_id = str(uuid.uuid4())
                         
-                        # Accumulate thinking and file operations
-                        if full_response.get("thinking"):
-                            if accumulated_thinking:
-                                accumulated_thinking = accumulated_thinking + "\n" + full_response.get("thinking")
-                            else:
-                                accumulated_thinking = full_response.get("thinking")
+                        # Extract file operations and plans from metadata
+                        file_ops = metadata.get("file_operations", []) if not is_ask_mode else []
+                        ai_plan = metadata.get("ai_plan") if not is_ask_mode else None
                         
                         if not is_ask_mode:
-                            if full_response.get("file_operations"):
-                                accumulated_file_ops.extend(full_response.get("file_operations"))
-                            if full_response.get("ai_plan"):
-                                final_ai_plan = full_response.get("ai_plan")
+                            if file_ops:
+                                accumulated_file_ops.extend(file_ops)
+                            if ai_plan:
+                                final_ai_plan = ai_plan
                                 # Send plan update during streaming so frontend can display it
                                 yield f"data: {json.dumps({
                                     'type': 'plan',
                                     'ai_plan': final_ai_plan
                                 })}\n\n"
-                            
-                            # Track web references
-                            if full_response.get("web_references"):
-                                final_web_references = full_response.get("web_references")
                         
-                        # Update working history
+                        # Use the streamed response (cleaned of metadata) for consistency
+                        # This ensures what was streamed matches what's in the final response
+                        final_round_response = cleaned_response if cleaned_response else accumulated_response_round
+                        
+                        # Update working history with the actual streamed content
                         working_history.append({"role": "user", "content": current_message})
-                        working_history.append({"role": "assistant", "content": full_response.get("content", "")})
+                        working_history.append({"role": "assistant", "content": final_round_response})
                         
-                        # Accumulate response from this round
-                        round_response = full_response.get('content', '')
+                        # Accumulate response from this round - use what was actually streamed (cleaned)
+                        round_response = final_round_response
                         if round_response:
                             accumulated_responses.append(round_response)
                         
@@ -475,18 +474,18 @@ async def send_message_stream(
                                 'response': combined_response,
                                 'message_id': message_id, 
                                 'conversation_id': conversation_id, 
-                                'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
-                                'file_operations': None if is_ask_mode else (accumulated_file_ops if accumulated_file_ops else None),
-                                'ai_plan': None if is_ask_mode else _finalize_ai_plan(final_ai_plan),
-                                'activity_log': full_response.get('activity_log'),
-                                'web_references': None if is_ask_mode else final_web_references
+                                'timestamp': datetime.now().isoformat(),
+                                'file_operations': None,
+                                'ai_plan': None,
+                                'activity_log': None,
+                                'web_references': None
                             })}\n\n"
                             break
                         
-                        ai_plan = full_response.get("ai_plan")
+                        # Check if plan has pending tasks
                         if not _plan_has_pending_tasks(ai_plan):
                             # All tasks completed, finalize plan and send final response
-                            finalized_plan = _finalize_ai_plan(final_ai_plan)
+                            finalized_plan = _finalize_ai_plan(final_ai_plan) if final_ai_plan else None
                             combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                             yield f"data: {json.dumps({
                                 'type': 'done', 
@@ -494,17 +493,17 @@ async def send_message_stream(
                                 'response': combined_response,
                                 'message_id': message_id, 
                                 'conversation_id': conversation_id, 
-                                'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
+                                'timestamp': datetime.now().isoformat(),
                                 'file_operations': accumulated_file_ops if accumulated_file_ops else None,
                                 'ai_plan': finalized_plan,
-                                'activity_log': full_response.get('activity_log'),
-                                'web_references': final_web_references
+                                'activity_log': None,
+                                'web_references': None
                             })}\n\n"
                             break
                         
                         if auto_continue_rounds >= MAX_PLAN_AUTOCONTINUE_ROUNDS:
                             # Max rounds reached, finalize plan and send final response with warning
-                            finalized_plan = _finalize_ai_plan(final_ai_plan)
+                            finalized_plan = _finalize_ai_plan(final_ai_plan) if final_ai_plan else None
                             combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                             yield f"data: {json.dumps({
                                 'type': 'done', 
@@ -512,33 +511,40 @@ async def send_message_stream(
                                 'response': combined_response + "\n\nAuto-continue stopped after maximum retries. Some tasks may still be pending.",
                                 'message_id': message_id, 
                                 'conversation_id': conversation_id, 
-                                'timestamp': full_response.get('timestamp') or datetime.now().isoformat(),
+                                'timestamp': datetime.now().isoformat(),
                                 'file_operations': accumulated_file_ops if accumulated_file_ops else None,
                                 'ai_plan': finalized_plan,
-                                'activity_log': full_response.get('activity_log'),
-                                'web_references': final_web_references
+                                'activity_log': None,
+                                'web_references': None
                             })}\n\n"
                             break
                         
                         # Continue with next round
                         auto_continue_rounds += 1
                         current_message = _build_auto_continue_prompt(ai_plan or {})
-                        # Update context from response
-                        if full_response.get("context_used"):
-                            context_payload = dict(full_response.get("context_used"))
+                        # Note: context_payload is maintained from previous rounds
                         
                         # Send a continuation marker
                         yield f"data: {json.dumps({'type': 'continue', 'round': auto_continue_rounds + 1, 'message': 'Continuing with remaining tasks...'})}\n\n"
                         
                     except Exception as process_error:
-                        logger.exception("Error processing full message flow")
+                        logger.exception("Error parsing metadata from streamed response")
+                        # On error, still use the streamed content to ensure consistency
+                        round_response = accumulated_response_round
+                        if round_response:
+                            accumulated_responses.append(round_response)
+                        combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else accumulated_response_round
                         yield f"data: {json.dumps({
                             'type': 'done', 
                             'thinking': accumulated_thinking or None, 
-                            'response': accumulated_response_round,
+                            'response': combined_response,
                             'message_id': message_id or str(uuid.uuid4()), 
                             'conversation_id': conversation_id or str(uuid.uuid4()), 
-                            'timestamp': datetime.now().isoformat()
+                            'timestamp': datetime.now().isoformat(),
+                            'file_operations': accumulated_file_ops if accumulated_file_ops else None,
+                            'ai_plan': _finalize_ai_plan(final_ai_plan) if final_ai_plan else None,
+                            'activity_log': None,
+                            'web_references': None
                         })}\n\n"
                         break
                 else:
