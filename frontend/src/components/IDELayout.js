@@ -2246,6 +2246,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
       // If we have a conversation_id, check if a session with that conversation_id already exists
       // This prevents creating duplicate sessions for the same conversation
+      // NOTE: A 404 response is expected and normal if the session hasn't been saved yet
+      // (e.g., during streaming before the first save). This is handled silently.
       if (conversationId) {
         try {
           const existingSession = await ApiService.getChatSessionByConversationId(conversationId);
@@ -2258,9 +2260,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             setPastChats(sessions || []);
             return; // Successfully updated, exit early
           }
-          // existingSession is null (404 suppressed), continue to create new session
+          // existingSession is null (404 suppressed - session doesn't exist yet), continue to create new session
         } catch (error) {
-          // Only log non-404 errors
+          // Only log non-404 errors (404s are expected when session doesn't exist yet)
           if (error.response?.status !== 404) {
             console.warn('Error checking for existing session by conversation_id:', error);
           }
@@ -4872,7 +4874,82 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           </div>
         )}
 
-        {inProgressTasks.length > 0 && (
+        {/* Unified Todo List - Show all tasks with checkboxes */}
+        {tasks.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-xs text-dark-300 font-medium">
+              <span>To-dos {tasks.length}</span>
+            </div>
+            <div className="space-y-1.5">
+              {tasks.map((task, idx) => {
+                const status = (task.status || 'pending').toLowerCase().trim();
+                const isCompleted = status === 'completed' || status === 'done' || status === 'finished';
+                const isInProgress = status === 'in_progress' || status === 'in-progress' || status === 'active' || status === 'working' || status === 'executing';
+                
+                const title = normalizeChatInput(
+                  task.title || task.summary || `Task ${idx + 1}`
+                );
+                const details = task.details != null ? normalizeChatInput(task.details) : '';
+                
+                return (
+                  <div
+                    key={task.id || `${task.title || 'task'}-${idx}`}
+                    className={`flex items-start gap-3 px-3 py-2 rounded-lg transition-all ${
+                      isCompleted 
+                        ? 'bg-emerald-900/20 border border-emerald-700/30' 
+                        : isInProgress
+                        ? 'bg-primary-900/20 border border-primary-700/30'
+                        : 'bg-dark-800/30 border border-dark-700/30'
+                    }`}
+                  >
+                    {/* Checkbox */}
+                    <div className="flex-shrink-0 mt-0.5">
+                      {isCompleted ? (
+                        <CheckCircle className="w-5 h-5 text-emerald-400" />
+                      ) : (
+                        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                          isInProgress 
+                            ? 'border-primary-400 bg-primary-900/30' 
+                            : 'border-dark-500 bg-dark-800'
+                        }`}>
+                          {isInProgress && (
+                            <Loader2 className="w-3 h-3 text-primary-400 animate-spin" />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {/* Task content */}
+                    <div className="flex-1 min-w-0">
+                      <div className={`text-sm ${
+                        isCompleted 
+                          ? 'text-emerald-200 line-through' 
+                          : isInProgress
+                          ? 'text-primary-200 font-medium'
+                          : 'text-dark-200'
+                      }`}>
+                        {title}
+                      </div>
+                      {details && (
+                        <div className={`text-xs mt-0.5 ${
+                          isCompleted 
+                            ? 'text-emerald-300/70' 
+                            : isInProgress
+                            ? 'text-primary-300/80'
+                            : 'text-dark-400'
+                        }`}>
+                          {details}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Legacy grouped view - kept for backwards compatibility but hidden */}
+        {false && inProgressTasks.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-primary-400 font-semibold">
               <Loader2 className="w-3 h-3 animate-spin" />
@@ -4907,7 +4984,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           </div>
         )}
 
-        {pendingTasks.length > 0 && (
+        {false && pendingTasks.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-dark-400 font-semibold">
               <Clock className="w-3 h-3" />
@@ -4942,7 +5019,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           </div>
         )}
 
-        {completedTasks.length > 0 && (
+        {false && completedTasks.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-emerald-400 font-semibold">
               <CheckCircle className="w-3 h-3" />
@@ -5362,7 +5439,14 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               } else if (chunk.plan) {
                 console.log('[AI Plan] ✅ Received plan in done chunk:', JSON.stringify(chunk.plan, null, 2));
               } else {
-                console.log('[AI Plan] ⚠️ No ai_plan or plan in done chunk');
+                // Only log warning in agent/plan mode where plans are more expected
+                // Plans are optional in other modes (ASK mode, simple questions, etc.)
+                const currentMode = (agentMode || 'agent').toLowerCase();
+                const isPlanExpectedMode = currentMode === 'agent' || currentMode === 'plan';
+                if (isPlanExpectedMode && process.env.NODE_ENV === 'development') {
+                  // Only show in development mode to avoid console noise
+                  console.debug('[AI Plan] No ai_plan or plan in done chunk (this is normal for simple requests)');
+                }
               }
               // Finalize the message
               // Use chunk.response if provided (should match what was streamed), otherwise fall back to accumulated
@@ -5754,14 +5838,17 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         const filePath = normalizeEditorPath(op.path);
 
         if (opType === 'create_file') {
-          const content = op.content || '';
+          // For new files, check if user has modified the preview content
+          const normalizedFilePath = normalizeEditorPath(filePath);
+          const existingFile = openFiles.find(f => normalizeEditorPath(f.path) === normalizedFilePath);
+          // Use preview content if available (with user's accepted/declined changes), otherwise use original
+          const content = existingFile?.content || op.content || '';
           
           // Create file
           await ApiService.writeFile(filePath, content);
           
           // Open the file if it doesn't exist in openFiles
-          const normalizedFilePath = normalizeEditorPath(filePath);
-          if (!openFiles.find(f => normalizeEditorPath(f.path) === normalizedFilePath)) {
+          if (!existingFile) {
             const fileInfo = {
               path: normalizedFilePath,
               name: normalizedFilePath.split('/').pop() || 'untitled',
@@ -5784,17 +5871,27 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               setEditorContent(content);
               setEditorLanguage(fileInfo.language);
             }
+          } else {
+            // Update existing file entry to mark as no longer a preview
+            setOpenFiles(prev => prev.map((f, idx) => 
+              normalizeEditorPath(f.path) === normalizedFilePath 
+                ? { ...f, modified: false, aiPreview: false } 
+                : f
+            ));
           }
           
           toast.success(`Created file: ${filePath}`);
         } else if (opType === 'edit_file') {
-          const content = op.content || '';
+          // For edited files, use the preview content (which includes user's accepted/declined line changes)
+          const normalizedFilePath = normalizeEditorPath(filePath);
+          const existingFile = openFiles.find(f => normalizeEditorPath(f.path) === normalizedFilePath);
+          // Use preview content if available (with user's accepted/declined changes), otherwise use original
+          const content = existingFile?.content || op.content || '';
           
           // Update file
           await ApiService.writeFile(filePath, content);
           
           // Update in openFiles if open
-          const normalizedFilePath = normalizeEditorPath(filePath);
           const fileIndex = openFiles.findIndex(f => normalizeEditorPath(f.path) === normalizedFilePath);
           if (fileIndex >= 0) {
             setOpenFiles(prev => prev.map((f, idx) => 
@@ -6074,39 +6171,25 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     
     const newContent = newLines.join('\n');
     
-    // Update the file content
+    // Update the file content (preview only - don't save to disk yet)
+    // Files will only be saved when user clicks "Keep All" button
     setOpenFiles((prev) => {
       const next = [...prev];
       if (next[fileIndex]) {
         next[fileIndex] = {
           ...next[fileIndex],
           content: newContent,
-          modified: false,
-          aiPreview: false,
+          modified: false, // Keep as false since this is still a preview
+          aiPreview: true, // Keep as preview until user accepts all changes
         };
       }
       return next;
     });
     
-    // Update editor if this file is active
+    // Update editor if this file is active (preview only)
     if (activeTab && normalizeEditorPath(activeTab) === targetPath) {
       setEditorContent(newContent);
     }
-
-    ApiService.writeFile(targetPath, newContent).catch((error) => {
-      console.error('Failed to auto-save accepted changes:', error);
-      toast.error('Failed to auto-save accepted changes');
-      setOpenFiles((prev) => {
-        const next = [...prev];
-        if (next[fileIndex]) {
-          next[fileIndex] = {
-            ...next[fileIndex],
-            modified: true,
-          };
-        }
-        return next;
-      });
-    });
   }, [pendingFileOperations, openFiles, activeTab]);
 
   const handleAcceptLines = useCallback((opIndex, lineNumbers, lineType = 'added') => {

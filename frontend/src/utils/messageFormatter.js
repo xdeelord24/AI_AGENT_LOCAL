@@ -416,6 +416,105 @@ export const formatMessageContent = (content, webReferences = null) => {
   // Clean up multiple consecutive newlines
   normalized = normalized.replace(/\n{3,}/g, '\n\n').trim();
   
+  // Detect and transform tool calls into user-friendly messages
+  // Pattern: <toolcall name="..." args='{...}' /> or <tool_call name="..." args='{...}' />
+  // Handle both single and double quotes for args attribute
+  const toolCallPatterns = [
+    /<tool_call\s+name=(["\'])([^"']+)\1\s+args=(["\'])(.*?)\3\s*\/?>/gi,
+    /<toolcall\s+name=(["\'])([^"']+)\1\s+args=(["\'])(.*?)\3\s*\/?>/gi
+  ];
+  const toolCallReplacements = [];
+  
+  for (const pattern of toolCallPatterns) {
+    let match;
+    while ((match = pattern.exec(normalized)) !== null) {
+      const fullMatch = match[0];
+      const toolName = match[2].trim();
+      const argsQuoteChar = match[3];
+      const argsStr = match[4].trim();
+      
+      // Check if we're inside a code block (simple check)
+      const beforeMatch = normalized.substring(0, match.index);
+      const codeBlockCount = (beforeMatch.match(/```/g) || []).length;
+      const isInCodeBlock = codeBlockCount % 2 !== 0;
+      
+      // Skip if inside a code block (let markdown render it as code)
+      if (isInCodeBlock) {
+        continue;
+      }
+      
+      try {
+        // Parse the JSON arguments
+        let args;
+        try {
+          args = JSON.parse(argsStr);
+        } catch (e) {
+          // Try fixing common JSON issues (single quotes, etc.)
+          let fixedArgsStr = argsStr;
+          if (argsQuoteChar === "'") {
+            // Args in single quotes, JSON should use double quotes
+            fixedArgsStr = argsStr.replace(/'/g, '"');
+          }
+          args = JSON.parse(fixedArgsStr);
+        }
+        
+        // Generate user-friendly message based on tool type
+        let friendlyMessage = '';
+        
+        const normalizedToolName = toolName.toLowerCase().replace(/_/g, '');
+        
+        if (normalizedToolName === 'writefile' || normalizedToolName === 'write_file') {
+          const path = args.path || args.file || '';
+          const filename = path.split('/').pop().split('\\').pop() || 'file';
+          friendlyMessage = `💾 Saving information to \`${filename}\`...`;
+        } else if (normalizedToolName === 'readfile' || normalizedToolName === 'read_file') {
+          const path = args.path || args.file || '';
+          const filename = path.split('/').pop().split('\\').pop() || 'file';
+          friendlyMessage = `📖 Reading \`${filename}\`...`;
+        } else if (normalizedToolName === 'deletefile' || normalizedToolName === 'delete_file') {
+          const path = args.path || args.file || '';
+          const filename = path.split('/').pop().split('\\').pop() || 'file';
+          friendlyMessage = `🗑️ Deleting \`${filename}\`...`;
+        } else if (normalizedToolName === 'websearch' || normalizedToolName === 'web_search') {
+          const query = args.query || '';
+          friendlyMessage = `🔍 Searching the web for "${query}"...`;
+        } else if (normalizedToolName === 'listdirectory' || normalizedToolName === 'list_directory') {
+          const path = args.path || '.';
+          friendlyMessage = `📁 Listing directory: \`${path}\`...`;
+        } else if (normalizedToolName === 'getfiletree' || normalizedToolName === 'get_file_tree') {
+          const path = args.path || '.';
+          friendlyMessage = `🌳 Getting file tree for \`${path}\`...`;
+        } else if (normalizedToolName === 'executecommand' || normalizedToolName === 'execute_command') {
+          friendlyMessage = `⚙️ Executing command...`;
+        } else {
+          // Generic fallback
+          friendlyMessage = `🔧 Running ${toolName}...`;
+        }
+        
+        toolCallReplacements.push({
+          index: match.index,
+          length: fullMatch.length,
+          replacement: friendlyMessage
+        });
+      } catch (e) {
+        // If JSON parsing fails, just remove the tool call silently
+        toolCallReplacements.push({
+          index: match.index,
+          length: fullMatch.length,
+          replacement: ''
+        });
+      }
+    }
+  }
+  
+  // Apply tool call replacements in reverse order to maintain correct indices
+  toolCallReplacements.sort((a, b) => b.index - a.index);
+  for (const replacement of toolCallReplacements) {
+    normalized = normalized.substring(0, replacement.index) + 
+                 replacement.replacement + 
+                 normalized.substring(replacement.index + replacement.length);
+  }
+  
   // Convert reference citations like [1], [2] to markdown links BEFORE markdown parsing
   // This ensures they're properly converted to clickable links
   if (webReferences && Array.isArray(webReferences) && webReferences.length > 0) {

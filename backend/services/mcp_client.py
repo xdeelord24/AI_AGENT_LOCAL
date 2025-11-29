@@ -93,6 +93,11 @@ class MCPClient:
         tool_descriptions.append("You can use these tools by including tool calls in your response.")
         tool_descriptions.append("Format: <tool_call name=\"tool_name\" args=\"{...}\" />")
         tool_descriptions.append("")
+        tool_descriptions.append("⚠️ IMPORTANT: `file_operations` is NOT a tool - it is metadata format for your response JSON.")
+        tool_descriptions.append("- Use the tools below (write_file, read_file, etc.) for actual file operations.")
+        tool_descriptions.append("- Include `file_operations` array in your JSON metadata response to tell the IDE what files to create/edit/delete.")
+        tool_descriptions.append("- NEVER call `file_operations` as a tool - it does not exist as a tool.")
+        tool_descriptions.append("")
         
         # Add server info if available
         if hasattr(self.mcp_tools, 'get_server_info'):

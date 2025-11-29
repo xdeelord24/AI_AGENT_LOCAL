@@ -24,6 +24,7 @@ class ApiService {
     
     // Configure axios to not throw errors for 404s when suppress404 is true
     // This prevents axios from logging the error to console
+    // Note: Browser network tab may still show 404s, but axios won't throw/log errors
     const axiosRequestConfig = {
       ...axiosConfig,
       validateStatus: suppress404 === true 
@@ -50,16 +51,19 @@ class ApiService {
         throw error;
       }
       
-      // Suppress console errors for expected 404s (e.g., when checking for non-existent sessions)
+      // Suppress console errors and network errors for expected 404s
+      // (e.g., when checking for non-existent sessions during streaming)
+      if (error.response?.status === 404 && suppress404 === true) {
+        // For suppressed 404s, return null silently - this is expected behavior
+        // The session might not exist yet if we're checking during streaming
+        return null;
+      }
+      
       // Only log unexpected errors
       if (error.response?.status !== 404 || suppress404 !== true) {
         console.error(`API ${method} ${url} failed:`, error);
-      } else {
-        // For suppressed 404s, return null instead of throwing
-        if (suppress404 === true) {
-          return null;
-        }
       }
+      
       throw error;
     }
   }
@@ -276,6 +280,9 @@ class ApiService {
   }
 
   static async getChatSessionByConversationId(conversationId) {
+    // Note: This may return 404 if the session doesn't exist yet (expected during streaming).
+    // The suppress404 option prevents axios from throwing/logging errors, but the browser
+    // console may still show the 404 in the network tab (this is normal browser behavior).
     return this.get(`/api/chat/sessions/by-conversation/${conversationId}`, { suppress404: true });
   }
 

@@ -6,11 +6,14 @@ Handles file system operations
 import os
 import aiofiles
 import asyncio
+import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import mimetypes
 import shutil
+
+logger = logging.getLogger(__name__)
 
 
 class FileInfo:
@@ -264,14 +267,21 @@ class FileService:
             raise Exception(f"Error searching files: {str(e)}")
 
     async def _format_file(self, path: str) -> None:
-        """Format files using language-specific formatters when available."""
+        """Format files using language-specific formatters when available.
+        
+        This is a best-effort operation - if formatting fails, the file write
+        will still succeed. Errors are logged but don't prevent file operations.
+        """
         extension = os.path.splitext(path)[1].lower()
         formatter_cmd = None
+        formatter_name = None
 
         if extension == '.go':
             formatter_cmd = ['gofmt', '-w', path]
+            formatter_name = 'gofmt'
         elif extension == '.py':
             formatter_cmd = ['black', path]
+            formatter_name = 'black'
 
         if not formatter_cmd:
             return
@@ -282,13 +292,21 @@ class FileService:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            _, stderr = await process.communicate()
+            stdout, stderr = await process.communicate()
             if process.returncode != 0:
-                print(f"⚠️ Formatter {' '.join(formatter_cmd)} failed: {stderr.decode().strip()}")
+                stderr_text = stderr.decode('utf-8', errors='ignore').strip()
+                # Only log if there's actual error output (not just exit code)
+                if stderr_text:
+                    # Log at debug level - formatting failures are not critical
+                    logger.debug(f"Formatter {formatter_name} failed for {path}: {stderr_text}")
         except FileNotFoundError:
-            print(f"⚠️ Formatter not found for command: {' '.join(formatter_cmd)}")
+            # Formatter not installed - this is expected and not an error
+            # Silently skip formatting if formatter is not available
+            # No need to log - formatters are optional tools
+            pass
         except Exception as e:
-            print(f"⚠️ Failed to format {path}: {str(e)}")
+            # Log unexpected errors at debug level but don't fail the file write
+            logger.debug(f"Failed to format {path}: {str(e)}")
     
     async def get_file_info(self, path: str) -> Dict[str, Any]:
         """Get detailed information about a file or directory"""
