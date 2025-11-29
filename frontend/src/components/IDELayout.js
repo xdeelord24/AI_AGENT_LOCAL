@@ -2378,9 +2378,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         return;
       }
 
-      const targetPath = options.overridePath
+      // Resolve target path relative to current workspace
+      let targetPath = options.overridePath
         ? options.overridePath.replace(/\\/g, '/')
         : file.path;
+      
+      // Ensure path is resolved relative to workspace root
+      targetPath = resolveWorkspacePath(targetPath);
 
       await ApiService.writeFile(targetPath, file.content);
       setOpenFiles(prev => prev.map(f => {
@@ -3315,16 +3319,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     if (!inputPath) return null;
     const trimmed = inputPath.trim();
     if (!trimmed) return null;
-    if (trimmed === '.' || trimmed === './') {
-      return currentPath || '.';
-    }
-    if (/^[a-zA-Z]:/.test(trimmed) || trimmed.startsWith('/')) {
-      return trimmed.replace(/\\/g, '/');
-    }
-    if (!currentPath || currentPath === '.' || currentPath === './') {
-      return trimmed.replace(/\\/g, '/');
-    }
-    return `${currentPath}/${trimmed}`.replace(/\\/g, '/');
+    // Use resolveWorkspacePath to ensure paths are resolved relative to workspace root
+    return resolveWorkspacePath(trimmed);
   };
 
   const getParentDirectory = useCallback((path) => {
@@ -4781,13 +4777,15 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
 
   const renderAiPlan = (plan) => {
     if (!plan) {
-      console.log('[AI Plan] renderAiPlan called with null/undefined plan');
       return null;
     }
     
-    // Log plan structure for debugging
+    // Log plan structure for debugging (only in development, and only once per plan)
     if (process.env.NODE_ENV === 'development') {
-      console.log('[AI Plan] Rendering plan:', plan);
+      // Only log if plan has meaningful content
+      if (plan.summary || (plan.tasks && plan.tasks.length > 0)) {
+        console.log('[AI Plan] Rendering plan:', { summary: plan.summary, taskCount: plan.tasks?.length || 0 });
+      }
     }
     
     const summary = normalizeChatInput(
@@ -5357,6 +5355,14 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               if (chunk.web_references && chunk.web_references.length > 0) {
                 console.log('[DEBUG] Web references:', chunk.web_references);
               }
+              // Debug AI plan
+              if (chunk.ai_plan) {
+                console.log('[AI Plan] ✅ Received ai_plan in done chunk:', JSON.stringify(chunk.ai_plan, null, 2));
+              } else if (chunk.plan) {
+                console.log('[AI Plan] ✅ Received plan in done chunk:', JSON.stringify(chunk.plan, null, 2));
+              } else {
+                console.log('[AI Plan] ⚠️ No ai_plan or plan in done chunk');
+              }
               // Finalize the message
               // Use chunk.response if provided (should match what was streamed), otherwise fall back to accumulated
               // This ensures consistency - the final response should match what was shown during streaming
@@ -5387,7 +5393,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         timestamp: chunk.timestamp || new Date().toISOString(),
                         messageId: chunk.message_id || null,
                         conversationId: conversationId,
-                        plan: chunk.ai_plan || chunk.plan || msg.plan || null, // Preserve existing plan if new one is null
+                        plan: (() => {
+                          const newPlan = chunk.ai_plan || chunk.plan || null;
+                          if (newPlan) {
+                            console.log('[AI Plan] ✅ Setting plan on message:', { summary: newPlan.summary, taskCount: newPlan.tasks?.length || 0 });
+                          }
+                          return newPlan || msg.plan || null;
+                        })(), // Preserve existing plan if new one is null
                         activityLog: chunk.activity_log || null,
                         web_references: chunk.web_references || null
                       }
@@ -8259,6 +8271,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                               }`}
                             >
                               {/* Show AI Workflow Plan FIRST - before thinking and content - as a progress tracker */}
+                              {/* AI Plan Display - Always show when available, regardless of mode */}
                               {message.plan &&
                                 message.role === 'assistant' && (
                                   <div className="mb-3">
