@@ -8088,8 +8088,33 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                           const feedbackButtonBase =
                             'flex items-center gap-1 px-2 py-1 rounded-md border text-xs transition-colors';
                           
+                          // Helper function to check if HTML has actual text content
+                          const hasActualContent = (html) => {
+                            if (!html || typeof html !== 'string') return false;
+                            // Remove HTML tags and check for actual text
+                            const textOnly = html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&[a-z]+;/gi, '');
+                            const trimmed = textOnly.trim();
+                            // Also check if it's not just empty HTML tags like <p></p>
+                            if (trimmed.length === 0) return false;
+                            // Additional check: create a temporary element to extract text content if available
+                            if (typeof document !== 'undefined' && document.createElement) {
+                              try {
+                                const tempDiv = document.createElement('div');
+                                tempDiv.innerHTML = html;
+                                const textContent = tempDiv.textContent || tempDiv.innerText || '';
+                                return textContent.trim().length > 0;
+                              } catch (e) {
+                                // Fallback to regex-based check
+                                return trimmed.length > 0;
+                              }
+                            }
+                            return trimmed.length > 0;
+                          };
+                          
                           const hasThinking = message.thinking && message.role === 'assistant';
-                          const hasContent = normalizedContent && normalizedContent.trim().length > 0;
+                          // Check both normalized content and formatted HTML to ensure we have actual content
+                          const hasContent = (normalizedContent && normalizedContent.trim().length > 0) && 
+                                            hasActualContent(formattedHtml);
                           const messageKey = message.messageId || message.id;
                           const isExplicitlyExpanded = collapsedThinking.has(`expanded-${messageKey}`);
                           const isExplicitlyCollapsed = collapsedThinking.has(`collapsed-${messageKey}`);
