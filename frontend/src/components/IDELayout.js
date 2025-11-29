@@ -5500,8 +5500,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               });
               
               // Handle file operations if present
+              // CRITICAL: Always process file_operations from done chunk, even if they come late
               const isAskMode = (modePayload || '').toLowerCase() === 'ask';
               if (!isAskMode && chunk.file_operations && chunk.file_operations.length > 0) {
+                console.log(`[File Operations] Processing ${chunk.file_operations.length} file operations from done chunk`);
                 const normalizedOperations = coalesceFileOperationsForEditor(
                   chunk.file_operations.map((op) => ({
                     ...op,
@@ -5522,6 +5524,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   setAcceptedLines(new Map());
                   setDeclinedLines(new Map());
                   toast.success('Review the AI file changes before deciding to keep them.');
+                  console.log(`[File Operations] Successfully set ${operationsWithPreviews.length} file operations for review`);
                 } catch (error) {
                   console.error('Failed to build AI file operation previews:', error);
                   setPendingFileOperations({
@@ -5538,6 +5541,9 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 }
               } else if (isAskMode && chunk.file_operations && chunk.file_operations.length > 0) {
                 console.warn('ASK mode: Ignoring file operations that were incorrectly sent by backend', chunk.file_operations);
+              } else if (!isAskMode && chunk.file_operations === null) {
+                // Log when file_operations are explicitly null (might indicate they were lost)
+                console.debug('[File Operations] Done chunk has no file_operations (this is normal if AI didn\'t propose changes)');
               }
             } else if (chunk.type === 'error') {
               throw new Error(chunk.content || 'Streaming error');

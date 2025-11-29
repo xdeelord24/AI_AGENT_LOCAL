@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 import uuid
@@ -721,6 +722,58 @@ async def send_message_stream(
                                             if extracted_refs:
                                                 logger.info(f"[DEBUG] Extracted {len(extracted_refs)} web references from web_search tool result")
                                 
+                                # CRITICAL: Convert successful write_file tool executions to file_operations
+                                # This ensures files written via MCP tools are shown for review in the frontend
+                                # Note: Files are already written at this point, but we still show them for review
+                                if not is_ask_mode:
+                                    for tool_result in (tool_results or []):
+                                        if tool_result.get("tool") == "write_file" and not tool_result.get("error", False):
+                                            arguments = tool_result.get("arguments", {})
+                                            path = arguments.get("path") or arguments.get("file_path")
+                                            content = arguments.get("content") or arguments.get("text") or ""
+                                            
+                                            if path:
+                                                # Normalize path - handle relative paths
+                                                workspace_path = context_payload.get("workspace_path", ".")
+                                                if not os.path.isabs(path):
+                                                    # Path is relative, make it relative to workspace
+                                                    # Keep it relative for frontend (frontend will handle normalization)
+                                                    normalized_path = path
+                                                else:
+                                                    # Path is absolute, try to make it relative to workspace if possible
+                                                    try:
+                                                        workspace_abs = os.path.abspath(workspace_path)
+                                                        if path.startswith(workspace_abs):
+                                                            normalized_path = os.path.relpath(path, workspace_abs)
+                                                        else:
+                                                            normalized_path = path
+                                                    except:
+                                                        normalized_path = path
+                                                
+                                                # Determine if file was created or edited (check before write, but file is already written)
+                                                # We'll use a heuristic: if content is non-empty and path doesn't exist in our list, assume create
+                                                # Otherwise assume edit
+                                                existing_paths = {op.get("path") for op in accumulated_file_ops}
+                                                is_new_file = normalized_path not in existing_paths
+                                                
+                                                # Create a file_operation entry for review
+                                                file_op = {
+                                                    "type": "create_file" if is_new_file else "edit_file",
+                                                    "path": normalized_path,
+                                                    "content": content
+                                                }
+                                                
+                                                if is_new_file:
+                                                    accumulated_file_ops.append(file_op)
+                                                    logger.info(f"[DEBUG] Converted write_file tool execution to file_operation: {normalized_path} ({len(content)} chars, type: create_file)")
+                                                else:
+                                                    # Update existing file operation with new content
+                                                    for i, op in enumerate(accumulated_file_ops):
+                                                        if op.get("path") == normalized_path:
+                                                            accumulated_file_ops[i] = file_op
+                                                            logger.info(f"[DEBUG] Updated existing file_operation from write_file tool: {normalized_path} ({len(content)} chars)")
+                                                            break
+                                
                                 # Always generate a follow-up response if we have tool results (even if some failed)
                                 # This ensures the process doesn't stop
                                 if has_any_results:
@@ -933,6 +986,8 @@ async def send_message_stream(
                             logger.info(f"Sending 'done' message in ask_mode: response length={len(combined_response) if combined_response else 0} chars, plan={finalized_plan is not None}, thinking length={len(accumulated_thinking) if accumulated_thinking else 0}")
                             # Always include thinking if it exists (even if empty string, convert to None only if truly empty)
                             thinking_to_send = accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None
+                            # CRITICAL: In ask_mode, file_operations should be None, but in other modes, send accumulated_file_ops
+                            final_file_ops = None if is_ask_mode else (accumulated_file_ops if accumulated_file_ops else None)
                             yield f"data: {json.dumps({
                                 'type': 'done', 
                                 'thinking': thinking_to_send, 
@@ -940,7 +995,7 @@ async def send_message_stream(
                                 'message_id': message_id, 
                                 'conversation_id': conversation_id, 
                                 'timestamp': datetime.now().isoformat(),
-                                'file_operations': None,
+                                'file_operations': final_file_ops,
                                 'ai_plan': finalized_plan,
                                 'activity_log': None,
                                 'web_references': accumulated_web_references if accumulated_web_references else None
@@ -963,6 +1018,8 @@ async def send_message_stream(
                                 combined_response = ai_service.mcp_client.remove_tool_calls_from_text(combined_response)
                             logger.info(f"[DEBUG] Breaking in ask_mode (no pending tasks, no tool execution) - response length={len(combined_response) if combined_response else 0} chars")
                             thinking_to_send = accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None
+                            # CRITICAL: In ask_mode, file_operations should be None, but in other modes, send accumulated_file_ops
+                            final_file_ops = None if is_ask_mode else (accumulated_file_ops if accumulated_file_ops else None)
                             yield f"data: {json.dumps({
                                 'type': 'done', 
                                 'thinking': thinking_to_send, 
@@ -970,7 +1027,7 @@ async def send_message_stream(
                                 'message_id': message_id, 
                                 'conversation_id': conversation_id, 
                                 'timestamp': datetime.now().isoformat(),
-                                'file_operations': None,
+                                'file_operations': final_file_ops,
                                 'ai_plan': finalized_plan,
                                 'activity_log': None,
                                 'web_references': accumulated_web_references if accumulated_web_references else None
@@ -983,6 +1040,10 @@ async def send_message_stream(
                             finalized_plan = _finalize_ai_plan(final_ai_plan) if final_ai_plan else None
                             combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                             logger.info(f"[DEBUG] Sending done message - response length: {len(combined_response) if combined_response else 0}, web_refs: {len(accumulated_web_references)}")
+                            # CRITICAL: Always send accumulated file_operations (unless in ask_mode)
+                            final_file_ops = None if is_ask_mode else (accumulated_file_ops if accumulated_file_ops else None)
+                            if final_file_ops:
+                                logger.info(f"[DEBUG] Sending {len(final_file_ops)} file operations in done chunk")
                             yield f"data: {json.dumps({
                                 'type': 'done', 
                                 'thinking': accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None, 
@@ -990,7 +1051,7 @@ async def send_message_stream(
                                 'message_id': message_id, 
                                 'conversation_id': conversation_id, 
                                 'timestamp': datetime.now().isoformat(),
-                                'file_operations': accumulated_file_ops if accumulated_file_ops else None,
+                                'file_operations': final_file_ops,
                                 'ai_plan': finalized_plan,
                                 'activity_log': None,
                                 'web_references': accumulated_web_references if accumulated_web_references else None
