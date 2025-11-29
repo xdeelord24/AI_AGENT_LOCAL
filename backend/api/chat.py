@@ -192,31 +192,35 @@ def _extract_web_references_from_text(result_text: str) -> List[Dict[str, Any]]:
         # Split into lines for better parsing
         lines = result_text.split('\n')
         current_title = None
+        current_index = None
         
         for line in lines:
             line = line.strip()
             if not line:
                 current_title = None
+                current_index = None
                 continue
             
-            # Look for numbered items (1. Title, 2. Title, etc.)
-            title_match = re.match(r'^\d+\.\s*(.+)$', line)
+            # Look for numbered items (1. Title, 2. Title, etc.) - this matches the format from _format_result
+            title_match = re.match(r'^(\d+)\.\s*(.+)$', line)
             if title_match:
-                current_title = title_match.group(1).strip()
+                current_index = int(title_match.group(1))
+                current_title = title_match.group(2).strip()
                 continue
             
-            # Look for "Source:" or "URL:" labels
+            # Look for "Source:" or "URL:" or "Link:" labels
             if line.lower().startswith(('source:', 'url:', 'link:')):
                 url_match = re.search(url_pattern, line)
                 if url_match:
                     url = url_match.group(0).rstrip('.,;')
                     if url not in [ref.get("url") for ref in web_references]:
                         web_references.append({
-                            "index": len(web_references) + 1,
+                            "index": current_index or len(web_references) + 1,
                             "url": url,
                             "title": current_title or url
                         })
                 current_title = None
+                current_index = None
                 continue
             
             # Look for URLs in the line
@@ -235,7 +239,7 @@ def _extract_web_references_from_text(result_text: str) -> List[Dict[str, Any]]:
                             title = url
                     
                     web_references.append({
-                        "index": len(web_references) + 1,
+                        "index": current_index or len(web_references) + 1,
                         "url": url,
                         "title": title
                     })
@@ -243,6 +247,7 @@ def _extract_web_references_from_text(result_text: str) -> List[Dict[str, Any]]:
             # Reset current_title after processing a line with URL
             if url_matches:
                 current_title = None
+                current_index = None
         
         # Limit to 10 references
         return web_references[:10]
@@ -600,6 +605,17 @@ async def send_message_stream(
                         file_ops = metadata.get("file_operations", []) if not is_ask_mode else []
                         ai_plan = metadata.get("ai_plan")  # Extract plan regardless of mode
                         
+                        # Debug logging for plan extraction
+                        logger.info(f"[DEBUG] Plan extraction - metadata keys: {list(metadata.keys())}, has_ai_plan: {bool(ai_plan)}")
+                        if ai_plan:
+                            logger.info(f"[DEBUG] Plan extracted - summary: {ai_plan.get('summary', 'N/A')}, tasks: {len(ai_plan.get('tasks', []))}")
+                        else:
+                            logger.info(f"[DEBUG] No plan extracted from metadata. Response length: {len(accumulated_response_round)}")
+                            # Log a sample of the response to see if it contains plan-like content
+                            if 'plan' in accumulated_response_round.lower() or 'task' in accumulated_response_round.lower():
+                                sample = accumulated_response_round[:500].replace('\n', '\\n')
+                                logger.info(f"[DEBUG] Response sample (first 500 chars): {sample}")
+                        
                         if not is_ask_mode:
                             if file_ops:
                                 accumulated_file_ops.extend(file_ops)
@@ -607,6 +623,7 @@ async def send_message_stream(
                         # Always update final_ai_plan if a plan is found (even in ask_mode)
                         if ai_plan:
                             final_ai_plan = ai_plan
+                            logger.info(f"[DEBUG] Setting final_ai_plan from initial response")
                             # Send plan update during streaming so frontend can display it
                             yield f"data: {json.dumps({
                                 'type': 'plan',
@@ -910,6 +927,9 @@ async def send_message_stream(
                             # Finalize and include AI plan if it exists (even in ask_mode, plans can be generated)
                             finalized_plan = _finalize_ai_plan(final_ai_plan) if final_ai_plan else None
                             logger.info(f"[DEBUG] Breaking in ask_mode (no tool execution) - response length={len(combined_response) if combined_response else 0} chars")
+                            logger.info(f"[DEBUG] Plan status - final_ai_plan: {bool(final_ai_plan)}, finalized_plan: {bool(finalized_plan)}")
+                            if final_ai_plan:
+                                logger.info(f"[DEBUG] Final AI plan details - summary: {final_ai_plan.get('summary', 'N/A')}, tasks: {len(final_ai_plan.get('tasks', []))}")
                             logger.info(f"Sending 'done' message in ask_mode: response length={len(combined_response) if combined_response else 0} chars, plan={finalized_plan is not None}, thinking length={len(accumulated_thinking) if accumulated_thinking else 0}")
                             # Always include thinking if it exists (even if empty string, convert to None only if truly empty)
                             thinking_to_send = accumulated_thinking.strip() if accumulated_thinking and accumulated_thinking.strip() else None

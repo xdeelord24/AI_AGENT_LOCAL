@@ -154,16 +154,40 @@ class MCPClient:
         """Parse tool calls from AI model response"""
         tool_calls = []
         
-        # Pattern 1: XML-style tool calls
+        # Normalize common tool name mistakes
+        def normalize_tool_name(name: str) -> str:
+            """Normalize tool names to correct format"""
+            name = name.strip().lower()
+            # Common mistakes - map to correct names
+            name_mapping = {
+                "writefile": "write_file",
+                "readfile": "read_file",
+                "deletefile": "delete_file",
+                "listdirectory": "list_directory",
+                "getfiletree": "get_file_tree",
+                "grepcode": "grep_code",
+                "executecommand": "execute_command",
+                "websearch": "web_search",
+            }
+            normalized = name_mapping.get(name, name)
+            # If not in mapping, try to add underscores between camelCase
+            if normalized == name and not '_' in name:
+                # Try to detect camelCase and convert: writeFile -> write_file
+                import re
+                normalized = re.sub(r'([a-z])([A-Z])', r'\1_\2', name).lower()
+            return normalized
+        
+        # Pattern 1: XML-style tool calls (correct format)
         # <tool_call name="tool_name" args="{...}" />
         # Handle both single and double quotes for args attribute, with proper JSON parsing
         # Extract args by finding the opening quote, then matching until the matching closing quote
         # accounting for the fact that JSON inside may contain the opposite quote type
         
-        # Find all <tool_call> tags
+        # Find all <tool_call> tags (correct format)
         tag_pattern = r'<tool_call\s+name=(["\'])([^"\']+)\1\s+args=(["\'])(.*?)\3\s*/>'
-        for match in re.finditer(tag_pattern, response, re.DOTALL):
+        for match in re.finditer(tag_pattern, response, re.DOTALL | re.IGNORECASE):
             tool_name = match.group(2)
+            tool_name = normalize_tool_name(tool_name)  # Normalize tool name
             args_quote_char = match.group(3)  # The quote character used for args (' or ")
             args_content = match.group(4)  # The JSON content inside the quotes
             
@@ -207,6 +231,46 @@ class MCPClient:
                 "raw": match.group(0)
             })
         
+        # Pattern 1b: Handle common mistakes - <toolcall> (no underscore) and missing closing />
+        # Also handle <toolcall> without underscore
+        tag_pattern_alt = r'<toolcall\s+name=(["\'])([^"\']+)\1\s+args=(["\'])(.*?)\3\s*/?>'
+        for match in re.finditer(tag_pattern_alt, response, re.DOTALL | re.IGNORECASE):
+            tool_name = match.group(2)
+            tool_name = normalize_tool_name(tool_name)  # Normalize tool name
+            args_quote_char = match.group(3)
+            args_content = match.group(4)
+            
+            # Parse the JSON args (same logic as above)
+            try:
+                args = json.loads(args_content)
+            except json.JSONDecodeError:
+                if args_quote_char == "'":
+                    try:
+                        args = json.loads(args_content)
+                    except json.JSONDecodeError:
+                        args_str = args_content.replace("'", '"')
+                        try:
+                            args = json.loads(args_str)
+                        except json.JSONDecodeError:
+                            continue
+                else:
+                    try:
+                        args = json.loads(args_content)
+                    except json.JSONDecodeError:
+                        try:
+                            args_str = args_content.replace('\\"', '__TEMP_ESC_DQUOTE__')
+                            args_str = args_str.replace('"', "'").replace('__TEMP_ESC_DQUOTE__', '"')
+                            args_str = args_str.replace("'", '"')
+                            args = json.loads(args_str)
+                        except json.JSONDecodeError:
+                            continue
+            
+            tool_calls.append({
+                "name": tool_name,
+                "arguments": args,
+                "raw": match.group(0)
+            })
+        
         # Pattern 2: JSON tool call blocks
         # ```json
         # {"tool": "tool_name", "arguments": {...}}
@@ -217,6 +281,7 @@ class MCPClient:
                 data = json.loads(match.group(1))
                 if "tool" in data or "tool_name" in data:
                     tool_name = data.get("tool") or data.get("tool_name")
+                    tool_name = normalize_tool_name(str(tool_name))  # Normalize tool name
                     args = data.get("arguments") or data.get("args") or {}
                     tool_calls.append({
                         "name": tool_name,
@@ -231,6 +296,7 @@ class MCPClient:
         function_pattern = r'function_call\(["\']([^"\']+)["\'],\s*({[^}]*})\)'
         for match in re.finditer(function_pattern, response):
             tool_name = match.group(1)
+            tool_name = normalize_tool_name(tool_name)  # Normalize tool name
             try:
                 args = json.loads(match.group(2))
             except json.JSONDecodeError:
@@ -242,7 +308,17 @@ class MCPClient:
                 "raw": match.group(0)
             })
         
-        return tool_calls
+        # Remove duplicates (same tool name and arguments) - keep first occurrence
+        seen = set()
+        unique_tool_calls = []
+        for tc in tool_calls:
+            # Create a key from tool name and sorted arguments
+            key = (tc["name"], json.dumps(tc["arguments"], sort_keys=True))
+            if key not in seen:
+                seen.add(key)
+                unique_tool_calls.append(tc)
+        
+        return unique_tool_calls
     
     async def execute_tool_calls(
         self,

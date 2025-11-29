@@ -554,10 +554,9 @@ export const formatMessageContent = (content, webReferences = null) => {
           const normalizeUrl = (u) => u.replace(/\/$/, '').toLowerCase();
           if (normalizeUrl(ref.url) === normalizeUrl(decodedUrl) || normalizeUrl(ref.url) === normalizeUrl(url)) {
             const safeUrl = escapeHtml(ref.url);
-            const safeTitle = escapeHtml(ref.title);
-            // Check if this was originally a full-width bracket by checking the original text
-            // We'll use regular brackets for now, and the fallback handler will catch full-width ones
-            return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="reference-link" title="${safeTitle}">[${index}]</a>`;
+            const safeTitle = escapeHtml(ref.title || ref.url);
+            // Show the URL in the title/tooltip so users can see where the link goes
+            return `<a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="reference-link" title="${safeTitle} - ${safeUrl}">[${index}]</a>`;
           }
         }
         return match;
@@ -738,6 +737,10 @@ export const formatMessageContent = (content, webReferences = null) => {
     const safe = escapeHtml(normalized);
     return `<p>${safe.replace(/\n{2,}/g, '</p><p>').replace(/\n/g, '<br />')}</p>`;
   }
+
+  // Note: We don't add a references section at the bottom anymore
+  // References are shown inline as clickable [1], [2], etc. links in the text
+  // The webReferences parameter is still used to convert citation numbers to clickable links above
 
   return formattedContent;
 };

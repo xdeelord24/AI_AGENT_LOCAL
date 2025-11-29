@@ -559,9 +559,13 @@ class AIService:
         def is_plan_object(obj: Any) -> bool:
             if not isinstance(obj, dict):
                 return False
-            summary = obj.get("summary")
+            summary = obj.get("summary") or obj.get("description") or obj.get("thoughts")
             tasks = obj.get("tasks")
-            return isinstance(summary, str) and isinstance(tasks, list)
+            # Accept plans with either summary OR tasks (or both)
+            # This makes plan detection more lenient
+            has_summary = isinstance(summary, str) and summary.strip()
+            has_tasks = isinstance(tasks, list) and len(tasks) > 0
+            return has_summary or has_tasks
 
         def strip_code_fences(text: str) -> str:
             if not isinstance(text, str):
@@ -735,17 +739,23 @@ class AIService:
         if whole:
             if extract_from_json(whole):
                 # The whole response was metadata; no user-visible text remains.
+                logger.debug(f"[DEBUG] Extracted metadata from whole response - has_plan: {bool(metadata.get('ai_plan'))}, has_file_ops: {bool(metadata.get('file_operations'))}")
                 return "", metadata
 
         # Markdown ```json blocks (be flexible about the fence language and contents)
         # We capture the smallest possible fenced block so we don't accidentally
         # consume surrounding narrative text.
         json_block_pattern = r'```(?:json|JSON)?\s*([\s\S]*?)```'
+        json_blocks_found = 0
         for match in re.finditer(json_block_pattern, response, re.DOTALL):
+            json_blocks_found += 1
             block = match.group(0)
             json_str = match.group(1).strip()
             if extract_from_json(json_str):
+                logger.debug(f"[DEBUG] Extracted metadata from JSON block #{json_blocks_found} - has_plan: {bool(metadata.get('ai_plan'))}, has_file_ops: {bool(metadata.get('file_operations'))}")
                 cleaned_response = cleaned_response.replace(block, "").strip()
+        if json_blocks_found > 0:
+            logger.debug(f"[DEBUG] Found {json_blocks_found} JSON code block(s) in response")
 
         # Inline fallback for responses that embed JSON without fences.
         # Try to find and extract JSON objects more robustly, handling nested structures.
@@ -828,6 +838,15 @@ class AIService:
             cleaned_response
         )
         cleaned_response = re.sub(r'\n{3,}', '\n\n', cleaned_response).strip()
+
+        # Final summary of extracted metadata
+        has_plan = bool(metadata.get("ai_plan"))
+        has_file_ops = bool(metadata.get("file_operations"))
+        if has_plan or has_file_ops:
+            logger.info(f"[DEBUG] Metadata extraction complete - has_plan: {has_plan}, has_file_ops: {has_file_ops}")
+            if has_plan:
+                plan = metadata.get("ai_plan")
+                logger.info(f"[DEBUG] Plan details - summary: {plan.get('summary', 'N/A')[:100]}, tasks: {len(plan.get('tasks', []))}")
 
         return cleaned_response, metadata
 
@@ -2684,9 +2703,25 @@ class AIService:
                     "When you need internet information (prices, news, current data, etc.), you MUST use the web_search tool, NOT write Python code with requests/urllib/etc.",
                     "",
                     "You can use these tools by including tool calls in your response.",
-                    "Example tool call format:",
-                    '<tool_call name="read_file" args=\'{"path": "example.py"}\' />',
-                    '<tool_call name="web_search" args=\'{"query": "current bitcoin price", "max_results": 5}\' />',
+                    "",
+                    "🚨 CRITICAL: Tool call format MUST be exactly:",
+                    '<tool_call name="tool_name" args=\'{"param": "value"}\' />',
+                    "",
+                    "CORRECT Examples:",
+                    '- <tool_call name="read_file" args=\'{"path": "example.py"}\' />',
+                    '- <tool_call name="write_file" args=\'{"path": "file.txt", "content": "text"}\' />',
+                    '- <tool_call name="web_search" args=\'{"query": "current bitcoin price", "max_results": 5}\' />',
+                    '- <tool_call name="list_directory" args=\'{"path": "."}\' />',
+                    "",
+                    "❌ WRONG Formats (DO NOT USE):",
+                    '- <toolcall name="writefile" ...> (missing underscore, wrong tag name)',
+                    '- [TOOLCALL "tool": "getfiletree"] (completely wrong format)',
+                    '- writefile("path", "content") (function call format not supported)',
+                    "",
+                    "⚠️ IMPORTANT:",
+                    "- Tool names use underscores: write_file, read_file, list_directory, get_file_tree, grep_code, execute_command, web_search",
+                    "- Always close with /> (self-closing tag)",
+                    "- Use single quotes for args attribute, double quotes inside JSON",
                     "",
                     "When you need to perform operations like:",
                     "- Reading files: use read_file tool",
@@ -2885,6 +2920,7 @@ class AIService:
                 "- When the user responds with short inputs like `1`, `2`, `option A`, or repeats one of your earlier choices, interpret that as their selection instead of asking the same question again.",
                 "- When creating or editing files, emit the necessary file_operations and then immediately move on to the next task—do not stop after the first modification if other tasks remain.",
                 "- CRITICAL: If the user asks to create, make, write, or generate a file, you MUST include a create_file operation in file_operations. Never just describe the file—actually create it via file_operations.",
+                "- CRITICAL: If the user asks to save, store, or save information/data/notes/content, you MUST create a file with that information using a create_file operation. Choose an appropriate filename based on the content (e.g., notes.txt, information.md, summary.txt).",
                 "- CRITICAL: If the user asks to modify, update, change, or fix code, you MUST include edit_file operations in file_operations. Never just show code blocks—include the actual file_operations.",
                 "- Keep edits surgical: update only the portions of each file that the user asked to change and preserve the rest of the file exactly as-is.",
                 "- Only mark a task as `completed` if you actually performed that step in the current response AND included the necessary tool calls. Mark the task you are actively doing as `in_progress`; leave future work as `pending`.",
@@ -2909,16 +2945,41 @@ class AIService:
                 ""
             ])
 
-        if not is_ask_mode:
+        # Always show metadata format instructions, but emphasize different rules for ASK mode
+        if is_ask_mode:
+            # In ASK mode, show metadata format but emphasize that only ai_plan is allowed
+            prompt_parts.extend([
+                "Metadata format (you MAY include ai_plan to show your thinking, but NEVER include file_operations):",
+                "```json",
+                "{",
+                '  "ai_plan": {',
+                '    "summary": "One-sentence summary of your approach",',
+                '    "tasks": [',
+                '      {',
+                '        "id": "task-1",',
+                '        "title": "Describe the step",',
+                '        "status": "pending"',
+                '      }',
+                '    ]',
+                '  }',
+                '  // NOTE: file_operations are FORBIDDEN in ASK mode',
+                "}",
+                "```",
+                "",
+            ])
+        else:
             prompt_parts.extend(self.METADATA_FORMAT_LINES)
             prompt_parts.extend([
                 "Always provide practical, working code examples. Be concise but thorough.",
                 "",
                 "ABSOLUTE RULES:",
                 "- 🚨 CRITICAL: If the user asks to create, make, write, or generate ANY file, you MUST include a create_file operation in file_operations. Never just show code in a code block—actually create the file via file_operations.",
+                "- 🚨 CRITICAL: If the user asks to save, store, or save information/data/notes/content to a file, you MUST create a file with that information using a create_file operation in file_operations.",
+                "- 🚨 CRITICAL: When saving information, choose an appropriate filename (e.g., notes.txt, information.md, data.json, summary.txt) based on the content type and user's request.",
                 "- 🚨 CRITICAL: If the user asks to modify, update, change, or fix ANY code, you MUST include edit_file operations in file_operations. Never just show code—include the actual file_operations.",
                 "- 🚨 CRITICAL: If the user asks to delete, remove, or delete ANY file(s), you MUST include delete_file operations in file_operations. NEVER use edit_file with empty content to delete files—ALWAYS use delete_file type. The delete_file operation only requires the 'path' field, not 'content'.",
                 "- Example: If user says 'delete test.py', use: {\"type\": \"delete_file\", \"path\": \"test.py\"} - NOT edit_file with empty content.",
+                "- Example: If user says 'save this information' or 'save these notes', create a file like: {\"type\": \"create_file\", \"path\": \"notes.txt\", \"content\": \"[the information to save]\"}",
                 "- If the user mentions files via @filename or provides a path, open those files (content is in CONTEXT) and edit them via file_operations.",
                 "- Do NOT reply with generic statements like 'we need to inspect the file' or 'we need to access the file'—assume the IDE has already provided the relevant file contents in CONTEXT and operate directly on that content.",
                 "- On follow-up requests like \"change it\" or \"update that code\", assume the target file is the current active_file or default_target_file from context and still produce concrete file_operations.",
@@ -2929,21 +2990,6 @@ class AIService:
                 '- When web_search_mode is not "off", you HAVE internet access through the web_search tool. Statements like "I cannot browse the internet" or "I cannot access external information" are FALSE. You DO have access to web_search_results and can use the web_search tool anytime; never claim that you lack browsing or external access.',
                 "- 🚫 NEVER write code to access the internet (requests.get(), urllib, httpx, etc.). If internet information is needed, use the web_search MCP tool instead.",
                 "- When asked for current prices, news, or any internet data, use <tool_call name=\"web_search\" ... /> - do NOT generate scraping code.",
-                ""
-            ])
-        else:
-            prompt_parts.extend([
-                "Always provide practical, working explanations. Be concise but thorough.",
-                "",
-                "ABSOLUTE RULES FOR ASK MODE:",
-                "- Reference the provided context (files, history, or web results) to answer directly.",
-                "- Never include ai_plan or file_operations metadata; respond with natural language only.",
-                "- If fulfilling the request would require editing files, explain the limitation and recommend switching to Agent mode instead of fabricating edits.",
-                "",
-                "🚨 CRITICAL: When asked about current information, people, events, prices, or any internet content:",
-                "- DO NOT say 'I'll search...' or 'Let me search...' - ACTUALLY include the web_search tool call in your response.",
-                "- Example: <tool_call name=\"web_search\" args='{\"query\": \"[search query]\", \"max_results\": 5}' />",
-                "- The tool call MUST be in your response, not just described.",
                 ""
             ])
 
