@@ -216,80 +216,6 @@ const QUICK_TERMINAL_COMMANDS = ['ls', 'dir', 'pwd'];
 const PLAN_PREVIEW_DELAY_MS = 350;
 const MAX_FILE_SUGGESTIONS = 10;
 
-const definePhaseMeta = (label, summary, options = {}) => ({
-  label,
-  description: summary,
-  detail: options.detail ?? null,
-  tone: options.tone ?? 'primary'
-});
-
-const THINKING_PHASE_META = {
-  thinking: definePhaseMeta(
-    'Understanding the ask',
-    'Re-reading your prompt, extracting goals, constraints, and prior context.',
-    { detail: 'Clarifies deliverables, constraints, and prior attempts before acting.' }
-  ),
-  analysis: definePhaseMeta(
-    'Analyzing context',
-    'Reviewing conversation history, loaded files, and agent settings.',
-    { tone: 'info', detail: 'Maps prior conversation, repo topology, and selected buffers.' }
-  ),
-  grepping: definePhaseMeta(
-    'Searching workspace',
-    'Scanning relevant directories and files for code, references, or examples.',
-    { tone: 'info', detail: 'Pattern-matches code, tests, and configs that relate to the task.' }
-  ),
-  context: definePhaseMeta(
-    'Collecting structure',
-    'Snapshots workspace layout, open buffers, dependencies, and active files.',
-    { tone: 'muted', detail: 'Builds a quick mental model of file tree, deps, and tooling.' }
-  ),
-  web_lookup: definePhaseMeta(
-    'Reviewing the web',
-    'Running quick web lookups for APIs, docs, or current references.',
-    { tone: 'info', detail: 'Surfaces docs or release notes that influence implementation.' }
-  ),
-  subtasks: definePhaseMeta(
-    'Planning work',
-    'Breaking the request into concrete TODOs and acceptance checks.',
-    { detail: 'Creates checklist of atomic TODOs plus validation gates.' }
-  ),
-  planning: definePhaseMeta(
-    'Sequencing plan',
-    'Ordering tasks for safe execution, noting prerequisites and blockers.',
-    { detail: 'Prioritizes steps, notes dependencies, and highlights risky areas.' }
-  ),
-  drafting: definePhaseMeta(
-    'Drafting changes',
-    'Writing code edits, explanations, and response scaffolding.',
-    { tone: 'accent', detail: 'Applies edits, composes diffs, and drafts narrative answers.' }
-  ),
-  progress: definePhaseMeta(
-    'Tracking progress',
-    'Checking TODO completion and updating plan status.',
-    { tone: 'muted', detail: 'Updates plan state, highlights done/blocked work, and next actions.' }
-  ),
-  verification: definePhaseMeta(
-    'Verifying work',
-    'Reviewing changes, self-testing, and running lightweight sanity checks.',
-    { tone: 'success', detail: 'Runs tests or reasoning checks before finalizing.' }
-  ),
-  reporting: definePhaseMeta(
-    'Summarizing results',
-    'Packaging findings, next steps, and any follow-up recommendations.',
-    { tone: 'success', detail: 'Drafts summary, test notes, and follow-up suggestions.' }
-  ),
-  responding: definePhaseMeta(
-    'Finalizing reply',
-    'Polishing natural-language response and stitching in artifacts.',
-    { tone: 'accent', detail: 'Stitches together explanation, code snippets, and instructions.' }
-  ),
-  error: definePhaseMeta(
-    'Issue detected',
-    'An unexpected problem interrupted the workflow; surfacing the details.',
-    { tone: 'danger', detail: 'Captures stack traces or blockers so you can react quickly.' }
-  )
-};
 
 const PHASE_ICON_MAP = {
   thinking: Brain,
@@ -321,22 +247,18 @@ const derivePhaseFromKey = (key = '') => {
   if (normalized.startsWith('grep')) {
     return 'grepping';
   }
-  if (THINKING_PHASE_META[normalized]) {
-    return normalized;
-  }
-  return 'thinking';
+  return normalized || 'thinking';
 };
 
 const buildPhaseStep = (status = {}, activatedAt = Date.now()) => {
   const phase = derivePhaseFromKey(status.key);
-  const meta = THINKING_PHASE_META[phase] || {};
   return {
     ...status,
     phase,
-    label: status.label || meta.label || 'Working…',
-    description: meta.description || null,
-    detail: meta.detail || null,
-    tone: meta.tone || 'primary',
+    label: status.label || 'Working…',
+    description: status.description || null,
+    detail: status.detail || null,
+    tone: status.tone || 'primary',
     status: 'active',
     activatedAt,
     completedAt: null,
@@ -398,17 +320,17 @@ const getDurationFromStep = (step = {}) => {
   return null;
 };
 
-const buildStepDetailEntries = (step = {}, meta = {}) => {
+const buildStepDetailEntries = (step = {}) => {
   const entries = [];
+  // Use only step's own data
   const summary =
     step.summary ||
-    (step.description && step.description !== step.label ? step.description : null) ||
-    (meta.description && meta.description !== step.label ? meta.description : null);
+    (step.description && step.description !== step.label ? step.description : null);
   if (summary) {
     entries.push({ label: 'Summary', value: summary });
   }
 
-  const focus = step.detail || meta.detail;
+  const focus = step.detail;
   if (focus && focus !== summary) {
     entries.push({ label: 'Focus', value: focus });
   }
@@ -4842,153 +4764,6 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
   );
 };
 
-const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
-  if (!Array.isArray(steps) || steps.length === 0) {
-    return null;
-  }
-
-  const activeStep = steps.find((step) => step.status === 'active');
-  const completedSteps = steps.filter((step) => step.status === 'done');
-  const pendingSteps = steps.filter((step) => !step.status || step.status === 'pending');
-
-  return (
-    <div className="rounded-xl border border-primary-800/40 bg-dark-900/70 p-4 space-y-4">
-      <div className="flex items-center justify-between text-xs text-dark-400 uppercase tracking-wide">
-        <div className="flex items-center gap-2 text-primary-200">
-          <Activity className="w-4 h-4" />
-          <span>Detailed Processes</span>
-        </div>
-        <span>{Math.max(1, Math.round(Math.max(elapsedMs, 1000) / 1000))}s</span>
-      </div>
-      
-      {activeStep && (
-        <div className="space-y-2">
-          <div className="text-[10px] uppercase tracking-wide text-primary-400 font-semibold mb-1">Current Step</div>
-          <ol className="space-y-2">
-            {[activeStep].map((step) => {
-              const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
-              const now = Date.now();
-              const duration = step.activatedAt ? formatDuration(Math.max(0, now - step.activatedAt)) : null;
-              const toneClass = toneClasses[step.tone] || toneClasses.primary;
-              const meta = THINKING_PHASE_META[step.phase] || {};
-              const detailEntries = buildStepDetailEntries(step, meta);
-
-              return (
-                <li
-                  key={step.key}
-                  className="rounded-lg border border-primary-600/60 bg-primary-900/20 px-3 py-2.5 text-sm transition-all"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-1">
-                      <div
-                        className={`w-7 h-7 rounded-md border flex items-center justify-center ${toneClass} animate-pulse`}
-                      >
-                        <Icon className="w-4 h-4" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className={`font-medium ${'text-primary-100'}`}>{step.label}</div>
-                        {(step.description || meta.description) && (
-                          <p className="text-xs text-dark-300 mt-0.5">
-                            {step.description || meta.description}
-                          </p>
-                        )}
-                      <StepDetailGrid entries={detailEntries} variant="primary" />
-                      </div>
-                    </div>
-                    <span className="text-[11px] text-primary-400 font-mono uppercase whitespace-nowrap">
-                      {duration ? `${duration} ago` : 'now'}
-                    </span>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-      )}
-
-      {completedSteps.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-[10px] uppercase tracking-wide text-dark-500 font-semibold mb-1">
-            Completed ({completedSteps.length})
-          </div>
-          <ol className="space-y-1.5 max-h-64 overflow-y-auto">
-            {completedSteps.slice(-10).reverse().map((step) => {
-              const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
-              const duration = step.durationMs ? formatDuration(step.durationMs) : null;
-              const toneClass = toneClasses[step.tone] || toneClasses.muted;
-              const meta = THINKING_PHASE_META[step.phase] || {};
-              const detailEntries = buildStepDetailEntries(step, meta);
-
-              return (
-                <li
-                  key={step.key}
-                  className="rounded-lg border border-dark-700 bg-dark-800/40 px-2.5 py-2 text-sm transition-all"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <div
-                        className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass}`}
-                      >
-                        <Icon className="w-3.5 h-3.5" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-dark-200 truncate">{step.label}</div>
-                        {(step.description || meta.description) && (
-                          <p className="text-xs text-dark-400 mt-0.5 truncate">
-                            {step.description || meta.description}
-                          </p>
-                        )}
-                        <StepDetailGrid entries={detailEntries} />
-                      </div>
-                    </div>
-                    <span className="text-[10px] text-dark-500 font-mono uppercase whitespace-nowrap">
-                      {duration || '—'}
-                    </span>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-      )}
-
-      {pendingSteps.length > 0 && (
-        <div className="space-y-2">
-          <div className="text-[10px] uppercase tracking-wide text-dark-500 font-semibold mb-1">
-            Pending ({pendingSteps.length})
-          </div>
-          <ol className="space-y-1.5">
-            {pendingSteps.map((step) => {
-              const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
-              const toneClass = toneClasses.muted;
-              const meta = THINKING_PHASE_META[step.phase] || {};
-              const detailEntries = buildStepDetailEntries(step, meta);
-
-              return (
-                <li
-                  key={step.key}
-                  className="rounded-lg border border-dark-700 bg-dark-800/20 px-2.5 py-2 text-sm opacity-60"
-                >
-                  <div className="flex items-center gap-2">
-                    <div
-                      className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass}`}
-                    >
-                      <Icon className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <span className="text-sm text-dark-400">{step.label}</span>
-                      <StepDetailGrid entries={detailEntries} />
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-      )}
-    </div>
-  );
-};
 
   const renderAiPlan = (plan) => {
     if (!plan) return null;
@@ -4997,42 +4772,161 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
     );
     const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
 
+    // Group tasks by status
+    const completedTasks = tasks.filter(t => (t.status || 'pending').toLowerCase() === 'completed' || (t.status || 'pending').toLowerCase() === 'done');
+    const inProgressTasks = tasks.filter(t => (t.status || 'pending').toLowerCase() === 'in_progress' || (t.status || 'pending').toLowerCase() === 'in-progress' || (t.status || 'pending').toLowerCase() === 'active');
+    const pendingTasks = tasks.filter(t => {
+      const status = (t.status || 'pending').toLowerCase();
+      return status === 'pending' || (!['completed', 'done', 'in_progress', 'in-progress', 'active'].includes(status));
+    });
+
     return (
-      <div className="mt-2 bg-dark-800/80 border border-dark-600 rounded-lg p-3 space-y-2">
-        <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-dark-400">
-          <Workflow className="w-3.5 h-3.5" />
-          <span>AI plan</span>
-        </div>
-        {summary && <p className="text-sm text-dark-100">{summary}</p>}
-        {tasks.length > 0 && (
-          <div className="space-y-1">
-            {tasks.slice(0, 6).map((task, idx) => {
-              const statusKey = String(task.status || 'pending').toLowerCase();
-              const badgeClass = planStatusStyles[statusKey] || planStatusStyles.pending;
-              const title = normalizeChatInput(
-                task.title || task.summary || `Task ${idx + 1}`
-              );
-              const details =
-                task.details != null ? normalizeChatInput(task.details) : '';
-              return (
-                <div
-                  key={task.id || `${task.title || 'task'}-${idx}`}
-                  className="flex items-center gap-2 px-2.5 py-2 rounded-lg bg-dark-900/60 text-sm text-dark-100"
-                >
-                  <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border ${badgeClass}`}>
-                    {statusKey.replace('_', ' ')}
+      <div className="mt-3 rounded-xl border border-primary-800/40 bg-dark-900/70 p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm text-primary-200 font-semibold">
+            <Workflow className="w-5 h-5" />
+            <span>AI Workflow Plan</span>
+          </div>
+          <div className="flex items-center gap-3 text-xs text-dark-400">
+            {tasks.length > 0 && (
+              <>
+                {completedTasks.length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">{completedTasks.length}</span>
                   </span>
-                  <div className="flex-1">
-                    <div className="font-medium">{title}</div>
-                    {details && (
-                      <div className="text-xs text-dark-300">
-                        {details}
+                )}
+                {inProgressTasks.length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <Loader2 className="w-3.5 h-3.5 text-primary-400 animate-spin" />
+                    <span className="text-primary-400">{inProgressTasks.length}</span>
+                  </span>
+                )}
+                {pendingTasks.length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-dark-400" />
+                    <span>{pendingTasks.length}</span>
+                  </span>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+        
+        {summary && (
+          <div className="bg-primary-900/20 border border-primary-700/40 rounded-lg p-3">
+            <p className="text-sm text-primary-100 leading-relaxed">{summary}</p>
+          </div>
+        )}
+
+        {inProgressTasks.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-primary-400 font-semibold">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              <span>In Progress ({inProgressTasks.length})</span>
+            </div>
+            <div className="space-y-2">
+              {inProgressTasks.map((task, idx) => {
+                const title = normalizeChatInput(
+                  task.title || task.summary || `Task ${idx + 1}`
+                );
+                const details = task.details != null ? normalizeChatInput(task.details) : '';
+                return (
+                  <div
+                    key={task.id || `${task.title || 'task'}-${idx}`}
+                    className="rounded-lg border-2 border-primary-500/60 bg-primary-900/30 px-3 py-2.5 text-sm transition-all shadow-md shadow-primary-500/10"
+                  >
+                    <div className="flex items-start gap-2">
+                      <Loader2 className="w-4 h-4 text-primary-400 animate-spin mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-primary-100">{title}</div>
+                        {details && (
+                          <div className="text-xs text-dark-300 mt-1 leading-relaxed">
+                            {details}
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {pendingTasks.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-dark-400 font-semibold">
+              <Clock className="w-3 h-3" />
+              <span>Pending ({pendingTasks.length})</span>
+            </div>
+            <div className="space-y-1.5">
+              {pendingTasks.map((task, idx) => {
+                const title = normalizeChatInput(
+                  task.title || task.summary || `Task ${idx + 1}`
+                );
+                const details = task.details != null ? normalizeChatInput(task.details) : '';
+                return (
+                  <div
+                    key={task.id || `${task.title || 'task'}-${idx}`}
+                    className="rounded-lg border border-dark-700/50 bg-dark-800/30 px-2.5 py-2 text-sm opacity-80 hover:opacity-100 transition-opacity"
+                  >
+                    <div className="flex items-start gap-2">
+                      <div className="w-4 h-4 rounded border border-dark-600 mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-dark-300">{title}</div>
+                        {details && (
+                          <div className="text-xs text-dark-400 mt-0.5">
+                            {details}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {completedTasks.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-emerald-400 font-semibold">
+              <CheckCircle className="w-3 h-3" />
+              <span>Completed ({completedTasks.length})</span>
+            </div>
+            <div className="space-y-1.5 max-h-64 overflow-y-auto">
+              {completedTasks.map((task, idx) => {
+                const title = normalizeChatInput(
+                  task.title || task.summary || `Task ${idx + 1}`
+                );
+                const details = task.details != null ? normalizeChatInput(task.details) : '';
+                return (
+                  <div
+                    key={task.id || `${task.title || 'task'}-${idx}`}
+                    className="rounded-lg border border-emerald-700/40 bg-emerald-900/10 px-2.5 py-2 text-sm transition-all hover:bg-emerald-900/20"
+                  >
+                    <div className="flex items-start gap-2">
+                      <CheckCircle className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-emerald-200 font-medium">{title}</div>
+                        {details && (
+                          <div className="text-xs text-dark-400 mt-0.5">
+                            {details}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {tasks.length === 0 && !summary && (
+          <div className="text-sm text-dark-400 italic text-center py-2">
+            No plan details available
           </div>
         )}
       </div>
@@ -8221,7 +8115,6 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                                         {message.activityLog.map((log, logIdx) => {
                                           const stepPhase = log.phase || 'unknown';
                                           const Icon = PHASE_ICON_MAP[stepPhase] || Sparkles;
-                                          const meta = THINKING_PHASE_META[stepPhase] || {};
                                           const toneClass = toneClasses[log.tone] || toneClasses.primary;
                                           const durationValue = getDurationFromStep(log);
                                           const durationLabel =
@@ -8230,35 +8123,63 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                                               : log.status === 'done'
                                                 ? '—'
                                                 : 'in flight';
-                                          const primaryLabel = log.label || meta.label || stepPhase;
-                                          const secondaryLabel =
-                                            log.description && log.description !== log.label
-                                              ? log.description
-                                              : meta.description;
-                                          const detailEntries = buildStepDetailEntries(log, meta);
+                                          // Use only step's own data
+                                          const primaryLabel = log.label || stepPhase;
+                                          const secondaryLabel = log.description && log.description !== log.label
+                                            ? log.description
+                                            : null;
+                                          const detailEntries = buildStepDetailEntries(log);
                                           const filteredEntries = secondaryLabel
                                             ? detailEntries.filter((entry) => entry.label !== 'Summary')
                                             : detailEntries;
                                           const statusLabel = (log.status || 'active').toString().replace(/_/g, ' ');
+                                          const isCompleted = log.status === 'done' || log.status === 'completed';
+                                          const isPending = !log.status || log.status === 'pending';
+                                          const isActive = log.status === 'active' || (!isCompleted && !isPending);
                                           
+                                          // Determine styling based on status
+                                          const statusBorderClass = isCompleted
+                                            ? 'border-emerald-700/40 bg-emerald-900/10'
+                                            : isActive
+                                              ? 'border-primary-600/40 bg-primary-900/20'
+                                              : 'border-dark-700/50 bg-dark-800/30';
+                                          const statusTextClass = isCompleted
+                                            ? 'text-emerald-200'
+                                            : isActive
+                                              ? 'text-primary-200'
+                                              : 'text-dark-300';
+                                          const statusBadgeClass = isCompleted
+                                            ? 'border-emerald-600/40 bg-emerald-600/10 text-emerald-300'
+                                            : isActive
+                                              ? 'border-primary-500/40 bg-primary-500/10 text-primary-300'
+                                              : 'border-dark-600 text-dark-400';
+
                                           return (
                                             <li
                                               key={logIdx}
-                                              className="rounded-lg border border-dark-700 bg-dark-800/40 px-3 py-2.5 text-sm"
+                                              className={`rounded-lg border px-3 py-2.5 text-sm transition-all ${statusBorderClass} ${isActive ? 'shadow-md shadow-primary-500/5' : ''}`}
                                             >
                                               <div className="flex items-center justify-between gap-2">
                                                 <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                  <div
-                                                    className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass}`}
-                                                  >
-                                                    <Icon className="w-3.5 h-3.5" />
+                                                  <div className="relative">
+                                                    <div
+                                                      className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass} ${isCompleted ? 'opacity-80' : ''}`}
+                                                    >
+                                                      <Icon className="w-3.5 h-3.5" />
+                                                    </div>
+                                                    {isCompleted && (
+                                                      <CheckCircle className="w-3 h-3 text-emerald-400 absolute -top-1 -right-1 bg-dark-900 rounded-full" />
+                                                    )}
+                                                    {isActive && (
+                                                      <Loader2 className="w-3 h-3 text-primary-400 absolute -top-1 -right-1 bg-dark-900 rounded-full animate-spin" />
+                                                    )}
                                                   </div>
                                                   <div className="flex-1 min-w-0">
                                                     <div className="flex items-center gap-2 flex-wrap">
-                                                      <div className="text-sm text-dark-200 font-medium">
+                                                      <div className={`text-sm font-medium ${statusTextClass}`}>
                                                         {primaryLabel}
                                                       </div>
-                                                      <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border border-dark-600 text-dark-400">
+                                                      <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border ${statusBadgeClass}`}>
                                                         {`Step ${logIdx + 1} • ${statusLabel}`}
                                                       </span>
                                                     </div>
@@ -8269,11 +8190,13 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                                                     )}
                                                   </div>
                                                 </div>
-                                                <div className="text-[10px] text-dark-500 font-mono uppercase whitespace-nowrap">
+                                                <div className={`text-[10px] font-mono uppercase whitespace-nowrap ${isCompleted ? 'text-emerald-400' : isActive ? 'text-primary-400' : 'text-dark-500'}`}>
                                                   {durationLabel}
                                                 </div>
                                               </div>
-                                              <StepDetailGrid entries={filteredEntries} />
+                                              {filteredEntries.length > 0 && (
+                                                <StepDetailGrid entries={filteredEntries} />
+                                              )}
                                             </li>
                                           );
                                         })}
@@ -8358,11 +8281,6 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
                             {streamingPlan && (
                               <div className="border-t border-dark-600 pt-3">
                                 {renderAiPlan(streamingPlan)}
-                              </div>
-                            )}
-                            {agentStatuses.length > 0 && (
-                              <div className={streamingPlan ? 'border-t border-dark-600 pt-3' : ''}>
-                                <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
                               </div>
                             )}
                           </div>
