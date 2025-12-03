@@ -765,10 +765,29 @@ async def get_available_themes():
                 installation = ext.get("installation", {})
                 ext_themes = installation.get("themes", [])
                 for theme in ext_themes:
-                    # Avoid duplicates
-                    if not any(t.get("id") == theme.get("id") for t in themes):
-                        themes.append(theme)
+                    # Use theme filename as ID for lookup
+                    theme_id = theme.get("id", "")
+                    extension_id = ext.get("id", "")
+                    theme_filename = f"{extension_id}_{theme_id}.json"
+                    
+                    # Avoid duplicates by checking if theme already exists
+                    if not any(t.get("id") == theme_filename or 
+                              (t.get("theme_id") == theme_id and t.get("extension_id") == extension_id) 
+                              for t in themes):
+                        # Ensure theme has all required fields
+                        theme_data = {
+                            "id": theme_filename,
+                            "theme_id": theme_id,
+                            "label": theme.get("label", theme.get("name", theme_id)),
+                            "path": theme.get("path", ""),
+                            "colors": theme.get("colors", {}),
+                            "tokenColors": theme.get("tokenColors", []),
+                            "extension_id": extension_id,
+                            "extension_name": ext.get("name", extension_id)
+                        }
+                        themes.append(theme_data)
         
+        logger.info(f"Found {len(themes)} themes total")
         return {"themes": themes, "count": len(themes)}
     except Exception as e:
         logger.error(f"Error getting themes: {e}", exc_info=True)

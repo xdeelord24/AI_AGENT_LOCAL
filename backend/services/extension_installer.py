@@ -151,7 +151,8 @@ class ExtensionInstaller:
                             theme_data = json.load(f)
                         
                         extracted_themes.append({
-                            "id": theme_id,
+                            "id": f"{extension_id}_{theme_id}",  # Full ID for lookup
+                            "theme_id": theme_id,  # Original theme ID
                             "label": theme_label,
                             "path": str(theme_storage_path),
                             "ui_theme": ui_theme,
@@ -182,29 +183,129 @@ class ExtensionInstaller:
                 with open(theme_file, 'r', encoding='utf-8') as f:
                     theme_data = json.load(f)
                 
-                # Extract theme ID from filename
-                theme_id = theme_file.stem
-                extension_id = "_".join(theme_id.split("_")[:-1]) if "_" in theme_id else theme_id
+                # Extract theme ID and extension ID from filename
+                # Format: {extension_id}_{theme_id}.json
+                filename = theme_file.stem
+                parts = filename.rsplit("_", 1)
+                
+                if len(parts) == 2:
+                    extension_id, theme_id = parts
+                else:
+                    # Fallback: use filename as both
+                    extension_id = filename
+                    theme_id = filename
+                
+                # Try to get label from theme data or use theme_id
+                label = theme_data.get("name", theme_id)
                 
                 themes.append({
-                    "id": theme_id,
+                    "id": filename,  # Use full filename as ID for lookup
+                    "theme_id": theme_id,  # Original theme ID
+                    "label": label,
                     "path": str(theme_file),
                     "colors": theme_data.get("colors", {}),
                     "tokenColors": theme_data.get("tokenColors", []),
-                    "extension_id": extension_id
+                    "extension_id": extension_id,
+                    "extension_name": extension_id.replace(".", " ").title()  # Fallback name
                 })
             except Exception as e:
                 logger.warning(f"Error reading theme file {theme_file}: {e}")
         
+        # Also check installed extensions for theme metadata
+        try:
+            from .vscode_extension_service import VSCodeExtensionService
+            installed_extensions_dir = self.extensions_dir
+            
+            for ext_dir in installed_extensions_dir.iterdir():
+                if not ext_dir.is_dir():
+                    continue
+                
+                # Check if this extension has themes
+                extracted_dir = ext_dir / "extracted"
+                if not extracted_dir.exists():
+                    continue
+                
+                package_json = extracted_dir / "package.json"
+                if not package_json.exists():
+                    # Try subdirectories
+                    for subdir in extracted_dir.iterdir():
+                        if subdir.is_dir():
+                            potential_package = subdir / "package.json"
+                            if potential_package.exists():
+                                package_json = potential_package
+                                break
+                
+                if package_json.exists():
+                    try:
+                        with open(package_json, 'r', encoding='utf-8') as f:
+                            package_data = json.load(f)
+                        
+                        contributes = package_data.get("contributes", {})
+                        theme_defs = contributes.get("themes", [])
+                        
+                        for theme_def in theme_defs:
+                            theme_id = theme_def.get("id", "")
+                            theme_label = theme_def.get("label", package_data.get("displayName", ext_dir.name))
+                            theme_path = theme_def.get("path", "")
+                            
+                            # Check if theme file exists in themes directory
+                            theme_filename = f"{ext_dir.name}_{theme_id}.json"
+                            theme_file = self.themes_dir / theme_filename
+                            
+                            if theme_file.exists():
+                                # Already added from themes directory scan
+                                continue
+                            
+                            # Try to find and add theme
+                            if theme_path:
+                                full_theme_path = extracted_dir / theme_path.lstrip("/")
+                                if not full_theme_path.exists():
+                                    full_theme_path = extracted_dir / theme_path
+                                
+                                if full_theme_path.exists():
+                                    # Copy to themes directory if not already there
+                                    if not theme_file.exists():
+                                        shutil.copy2(full_theme_path, theme_file)
+                                    
+                                    # Read theme data
+                                    with open(full_theme_path, 'r', encoding='utf-8') as f:
+                                        theme_data = json.load(f)
+                                    
+                                    themes.append({
+                                        "id": theme_filename,
+                                        "theme_id": theme_id,
+                                        "label": theme_label,
+                                        "path": str(theme_file),
+                                        "colors": theme_data.get("colors", {}),
+                                        "tokenColors": theme_data.get("tokenColors", []),
+                                        "extension_id": ext_dir.name,
+                                        "extension_name": package_data.get("displayName", ext_dir.name)
+                                    })
+                    except Exception as e:
+                        logger.warning(f"Error processing extension {ext_dir.name}: {e}")
+        except Exception as e:
+            logger.warning(f"Error scanning extensions for themes: {e}")
+        
         return themes
     
     def get_theme_data(self, theme_id: str) -> Optional[Dict[str, Any]]:
-        """Get theme data by theme ID"""
+        """Get theme data by theme ID (can be full ID like 'publisher.name_themeid' or just theme_id)"""
+        # Try exact match first
         theme_file = self.themes_dir / f"{theme_id}.json"
+        if not theme_file.exists():
+            # Try to find by partial match (if theme_id is just the theme part)
+            matching_files = list(self.themes_dir.glob(f"*_{theme_id}.json"))
+            if matching_files:
+                theme_file = matching_files[0]
+        
         if theme_file.exists():
             try:
                 with open(theme_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    theme_data = json.load(f)
+                    # Add metadata
+                    theme_data["id"] = theme_file.stem
+                    theme_data["path"] = str(theme_file)
+                    return theme_data
             except Exception as e:
                 logger.error(f"Error reading theme {theme_id}: {e}")
         return None
