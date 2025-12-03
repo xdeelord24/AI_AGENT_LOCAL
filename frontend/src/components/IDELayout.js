@@ -216,6 +216,68 @@ const QUICK_TERMINAL_COMMANDS = ['ls', 'dir', 'pwd'];
 const PLAN_PREVIEW_DELAY_MS = 350;
 const MAX_FILE_SUGGESTIONS = 10;
 
+const THINKING_PHASE_META = {
+  thinking: {
+    label: 'Understanding the request',
+    description: 'Scoping your prompt and recalling prior context.',
+    tone: 'primary'
+  },
+  analysis: {
+    label: 'Analyzing context',
+    description: 'Reviewing recent history and loaded files.',
+    tone: 'info'
+  },
+  grepping: {
+    label: 'Searching the workspace',
+    description: 'Finding relevant references and examples.',
+    tone: 'info'
+  },
+  collecting: {
+    label: 'Collecting structure',
+    description: 'Mapping folders, open files, and dependencies.',
+    tone: 'muted'
+  },
+  subtasks: {
+    label: 'Planning tasks',
+    description: 'Breaking the request into actionable TODOs.',
+    tone: 'primary'
+  },
+  sequencing: {
+    label: 'Sequencing plan',
+    description: 'Ordering tasks for safe execution.',
+    tone: 'primary'
+  },
+  drafting: {
+    label: 'Drafting changes',
+    description: 'Drafting code edits and explanations.',
+    tone: 'accent'
+  },
+  monitoring: {
+    label: 'Tracking progress',
+    description: 'Ensuring plan stays on course.',
+    tone: 'muted'
+  },
+  verifying: {
+    label: 'Verifying work',
+    description: 'Running quick checks before responding.',
+    tone: 'success'
+  },
+  reporting: {
+    label: 'Reporting results',
+    description: 'Summarizing findings and next steps.',
+    tone: 'success'
+  },
+  responding: {
+    label: 'Packaging answer',
+    description: 'Finalizing wording for delivery.',
+    tone: 'accent'
+  },
+  error: {
+    label: 'Issue detected',
+    description: 'Ran into an unexpected problem.',
+    tone: 'danger'
+  }
+};
 
 const PHASE_ICON_MAP = {
   thinking: Brain,
@@ -223,12 +285,17 @@ const PHASE_ICON_MAP = {
   grepping: FileSearch,
   context: Milestone,
   web_lookup: Globe,
+  collecting: Milestone,
   subtasks: ListChecks,
   planning: Milestone,
+  sequencing: Milestone,
   drafting: PenTool,
   progress: Activity,
+  monitoring: Activity,
   verification: ShieldCheck,
+  verifying: ShieldCheck,
   reporting: Megaphone,
+  responding: Sparkles,
   error: AlertTriangle
 };
 
@@ -275,6 +342,80 @@ const formatDuration = (ms = 0) => {
   }
   const seconds = Math.max(1, Math.round(ms / 1000));
   return `${seconds}s`;
+};
+
+const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
+  if (!Array.isArray(steps) || steps.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-2xl border border-primary-800/40 bg-gradient-to-br from-primary-500/15 via-dark-900/60 to-dark-900/80 p-4 space-y-4 shadow-inner shadow-black/20">
+      <div className="flex items-center justify-between text-sm text-dark-200">
+        <div className="flex items-center gap-2 text-primary-200">
+          <Sparkles className="w-4 h-4" />
+          <span>Live thinking pipeline</span>
+        </div>
+        <span className="text-xs text-dark-400 uppercase tracking-wide">
+          {Math.max(1, Math.round(elapsedMs / 1000))}s elapsed
+        </span>
+      </div>
+      <ol className="space-y-4 relative">
+        {steps.map((step, idx) => {
+          const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
+          const status =
+            step.status ||
+            (step.completedAt
+              ? 'done'
+              : idx === steps.length - 1
+              ? 'active'
+              : 'done');
+          const toneClass = toneClasses[step.tone] || toneClasses.primary;
+          const durationMs =
+            step.durationMs ??
+            (step.completedAt && step.activatedAt
+              ? step.completedAt - step.activatedAt
+              : null);
+          const statusLabel =
+            status === 'done'
+              ? `Done in ${formatDuration(durationMs)}`
+              : status === 'active'
+              ? 'In progress'
+              : 'Pending';
+
+          return (
+            <li key={step.key || `${step.phase}-${idx}`} className="flex gap-3">
+              <div className="flex flex-col items-center">
+                <div
+                  className={`w-9 h-9 rounded-full border-2 flex items-center justify-center ${toneClass} ${
+                    status === 'active' ? 'ring-2 ring-primary-500/40 animate-pulse' : ''
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                </div>
+                {idx < steps.length - 1 && (
+                  <span className="flex-1 w-px bg-dark-700 mt-1" />
+                )}
+              </div>
+              <div className="flex-1 space-y-1">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="text-sm text-dark-100 font-medium leading-snug">
+                    {step.label || THINKING_PHASE_META[step.phase]?.label || 'Working…'}
+                  </div>
+                  <div className="text-xs text-dark-500 whitespace-nowrap">{statusLabel}</div>
+                </div>
+                {(step.description || THINKING_PHASE_META[step.phase]?.description) && (
+                  <p className="text-xs text-dark-400">
+                    {step.description || THINKING_PHASE_META[step.phase]?.description}
+                  </p>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
 };
 
 const normalizeDetailValue = (value) => {
@@ -5245,17 +5386,16 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         context.new_script_prompt = finalMessage;
       }
 
-      if (shouldEnableComposerMode) {
-        ApiService.previewAgentStatuses(finalMessage, context)
-          .then((preview) => {
-            if (preview?.agent_statuses?.length) {
-              scheduleAgentStatuses(preview.agent_statuses);
-            }
-          })
-          .catch((error) => {
-            console.warn('Failed to load agent status preview', error);
-          });
-      }
+      // Always preview agent statuses to show thinking process, even in Ask mode
+      ApiService.previewAgentStatuses(finalMessage, context)
+        .then((preview) => {
+          if (preview?.agent_statuses?.length) {
+            scheduleAgentStatuses(preview.agent_statuses);
+          }
+        })
+        .catch((error) => {
+          console.warn('Failed to load agent status preview', error);
+        });
 
       // Use streaming for real-time thinking display
       let streamingThinking = "";
@@ -8748,21 +8888,28 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                     {isLoadingChat && (() => {
                       const lastAssistantMessage = [...chatMessages].reverse().find(msg => msg.role === 'assistant');
                       const streamingPlan = lastAssistantMessage?.plan || thinkingAiPlan;
+                      const hasThinkingSteps = Array.isArray(agentStatuses) && agentStatuses.length > 0;
                       
                       return (
                         <div className="flex space-x-2">
                           <Bot className="w-5 h-5 text-primary-500 mt-1" />
-                          <div className="bg-dark-700 px-3 py-3 rounded-lg space-y-3">
-                            <div className="flex items-center gap-2 text-sm text-dark-300">
-                              <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
-                              <span>
-                                AI is thinking… {Math.max(1, Math.round(Math.max(thinkingElapsed, 1000) / 1000))}s elapsed
-                              </span>
-                            </div>
-                            {streamingPlan && (
-                              <div className="mt-3">
-                                {renderAiPlan(streamingPlan)}
-                              </div>
+                          <div className="bg-dark-700 px-3 py-3 rounded-lg space-y-3 flex-1">
+                            {hasThinkingSteps ? (
+                              <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
+                            ) : (
+                              <>
+                                <div className="flex items-center gap-2 text-sm text-dark-300">
+                                  <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
+                                  <span>
+                                    AI is thinking… {Math.max(1, Math.round(Math.max(thinkingElapsed, 1000) / 1000))}s elapsed
+                                  </span>
+                                </div>
+                                {streamingPlan && (
+                                  <div className="mt-3">
+                                    {renderAiPlan(streamingPlan)}
+                                  </div>
+                                )}
+                              </>
                             )}
                           </div>
                         </div>
