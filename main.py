@@ -74,10 +74,12 @@ async def lifespan(app: FastAPI):
     try:
         from backend.services.memory_service import MemoryService
         memory_service = MemoryService()
+        app.state.memory_service = memory_service  # Store in app.state for API access
         print("✅ Memory service initialized")
     except Exception as e:
         print(f"⚠️  Warning: Memory service not available: {e}")
         memory_service = None
+        app.state.memory_service = None
     
     # Initialize MCP tools if available
     if MCP_AVAILABLE and MCPServerTools:

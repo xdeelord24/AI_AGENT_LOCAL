@@ -698,10 +698,12 @@ async def send_message_stream(
                                             logger.error(f"[DEBUG] Tool {tool_name} error details: {error_msg}")
                                     
                                     # Send tool execution status to frontend
+                                    executed_tool_names = [r.get("tool") for r in (tool_results or []) if r.get("tool")]
                                     tool_exec_status = {
                                         "tool_calls_executed": len(tool_calls),
                                         "tool_results_count": len(tool_results) if tool_results else 0,
                                         "has_errors": any(r.get("error", False) for r in (tool_results or [])),
+                                        "executed_tools": executed_tool_names,  # List of tool names that were executed
                                         "error_details": [
                                             {
                                                 "tool": r.get("tool"),

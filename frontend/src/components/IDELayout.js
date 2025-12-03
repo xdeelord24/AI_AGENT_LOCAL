@@ -6624,6 +6624,20 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 } else {
                   console.log('[DEBUG] ✅ Tool execution successful');
                 }
+                // Check if save_memory tool was executed and refresh memories
+                if (chunk.tool_execution_status.executed_tools && 
+                    Array.isArray(chunk.tool_execution_status.executed_tools)) {
+                  const hasSaveMemory = chunk.tool_execution_status.executed_tools.some(
+                    tool => tool === 'save_memory' || (typeof tool === 'object' && (tool.name === 'save_memory' || tool.tool === 'save_memory'))
+                  );
+                  if (hasSaveMemory) {
+                    console.log('[Memory] save_memory tool executed, refreshing memories...');
+                    // Refresh memories after a short delay to ensure backend has saved
+                    setTimeout(() => {
+                      loadMemorySettings();
+                    }, 500);
+                  }
+                }
               }
             } else if (chunk.type === 'done') {
               const doneDebug = {
@@ -11346,7 +11360,12 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                           Manage
                         </button>
                       </div>
-                      {memories.length === 0 ? (
+                      {isMemoryLoading ? (
+                        <div className="flex items-center text-xs text-dark-400">
+                          <Loader2 className="w-3 h-3 animate-spin mr-2" />
+                          Loading memories...
+                        </div>
+                      ) : memories.length === 0 ? (
                         <p className="text-xs text-dark-400">No saved memories yet.</p>
                       ) : (
                         <div className="space-y-2 max-h-48 overflow-y-auto">
