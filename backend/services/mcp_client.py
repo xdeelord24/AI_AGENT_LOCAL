@@ -98,6 +98,12 @@ class MCPClient:
         tool_descriptions.append("- Include `file_operations` array in your JSON metadata response to tell the IDE what files to create/edit/delete.")
         tool_descriptions.append("- NEVER call `file_operations` as a tool - it does not exist as a tool.")
         tool_descriptions.append("")
+        tool_descriptions.append("📄 DOCUMENT FILES (Office/Research Mode):")
+        tool_descriptions.append("- Tools like create_document, create_slide, create_presentation create BINARY files (.docx, .pptx).")
+        tool_descriptions.append("- These files are NOT text files and should NOT be created via file_operations.")
+        tool_descriptions.append("- These tools handle the binary file creation directly - just call the tool, don't create file_operations.")
+        tool_descriptions.append("- Binary document files will NOT be opened in the code editor (they're not editable as text).")
+        tool_descriptions.append("")
         
         # Add server info if available
         if hasattr(self.mcp_tools, 'get_server_info'):

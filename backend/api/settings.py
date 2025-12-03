@@ -14,6 +14,10 @@ class SettingsRequest(BaseModel):
     hf_model: Optional[str] = None
     hf_base_url: Optional[str] = None
     hf_api_key: Optional[str] = None
+    # OpenRouter settings
+    openrouter_model: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
+    openrouter_base_url: Optional[str] = None
 
 
 class SettingsResponse(BaseModel):
@@ -26,6 +30,10 @@ class SettingsResponse(BaseModel):
     hf_model: Optional[str]
     hf_base_url: Optional[str]
     hf_api_key_set: bool
+    # OpenRouter settings
+    openrouter_model: Optional[str]
+    openrouter_base_url: Optional[str]
+    openrouter_api_key_set: bool
 
 
 async def get_ai_service(request: Request):
@@ -50,7 +58,10 @@ async def get_settings(ai_service = Depends(get_ai_service)):
             "provider": getattr(ai_service, "provider", "ollama"),
             "hf_model": getattr(ai_service, "hf_model", None),
             "hf_base_url": hf_base_url,
-            "hf_api_key_set": bool(getattr(ai_service, "hf_api_key", "") or "")
+            "hf_api_key_set": bool(getattr(ai_service, "hf_api_key", "") or ""),
+            "openrouter_model": getattr(ai_service, "openrouter_model", None),
+            "openrouter_base_url": getattr(ai_service, "openrouter_base_url", None),
+            "openrouter_api_key_set": bool(getattr(ai_service, "openrouter_api_key", "") or ""),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting settings: {str(e)}")
@@ -98,14 +109,16 @@ async def update_settings(
         # Update provider if provided
         if settings.provider is not None:
             provider = settings.provider.lower()
-            if provider not in ("ollama", "huggingface"):
+            if provider not in ("ollama", "huggingface", "openrouter"):
                 raise HTTPException(
                     status_code=400,
-                    detail="Provider must be either 'ollama' or 'huggingface'"
+                    detail="Provider must be one of 'ollama', 'huggingface', or 'openrouter'"
                 )
             ai_service.provider = provider
             if provider == "huggingface":
                 ai_service.current_model = ai_service.hf_model or ai_service.current_model
+            elif provider == "openrouter":
+                ai_service.current_model = ai_service.openrouter_model or ai_service.current_model
             else:
                 ai_service.current_model = ai_service.default_model
             print(f"✅ Updated provider to: {provider}")
@@ -132,6 +145,23 @@ async def update_settings(
             hf_settings_changed = True
             print("✅ Updated Hugging Face API key")
 
+        # Update OpenRouter model/base URL/API key if provided
+        if settings.openrouter_model is not None:
+            ai_service.openrouter_model = settings.openrouter_model
+            if getattr(ai_service, "provider", "ollama") == "openrouter":
+                ai_service.current_model = settings.openrouter_model
+            print(f"✅ Updated OpenRouter model to: {settings.openrouter_model}")
+
+        if settings.openrouter_base_url is not None:
+            base = (settings.openrouter_base_url or "").strip()
+            if base:
+                ai_service.openrouter_base_url = base.rstrip("/")
+            print(f"✅ Updated OpenRouter base URL to: {ai_service.openrouter_base_url}")
+
+        if settings.openrouter_api_key is not None:
+            ai_service.openrouter_api_key = settings.openrouter_api_key
+            print("✅ Updated OpenRouter API key")
+
         if hf_settings_changed:
             ai_service.reset_hf_client()
         
@@ -157,7 +187,10 @@ async def update_settings(
             "provider": getattr(ai_service, "provider", "ollama"),
             "hf_model": getattr(ai_service, "hf_model", None),
             "hf_base_url": hf_base_url,
-            "hf_api_key_set": bool(getattr(ai_service, "hf_api_key", "") or "")
+            "hf_api_key_set": bool(getattr(ai_service, "hf_api_key", "") or ""),
+            "openrouter_model": getattr(ai_service, "openrouter_model", None),
+            "openrouter_base_url": getattr(ai_service, "openrouter_base_url", None),
+            "openrouter_api_key_set": bool(getattr(ai_service, "openrouter_api_key", "") or ""),
         }
     except HTTPException:
         raise

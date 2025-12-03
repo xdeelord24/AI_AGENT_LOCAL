@@ -26,6 +26,10 @@ const Settings = () => {
     hfModel: 'meta-llama/Llama-3.1-8B-Instruct',
     hfBaseUrl: '',
     hfApiKeySet: false,
+    // OpenRouter
+    openrouterModel: 'openrouter/auto',
+    openrouterBaseUrl: 'https://openrouter.ai/api/v1',
+    openrouterApiKeySet: false,
     autoSave: true,
     theme: 'dark',
     fontSize: 14,
@@ -37,6 +41,8 @@ const Settings = () => {
   
   const [hfApiKeyInput, setHfApiKeyInput] = useState('');
   const [hfApiKeyDirty, setHfApiKeyDirty] = useState(false);
+  const [openrouterApiKeyInput, setOpenrouterApiKeyInput] = useState('');
+  const [openrouterApiKeyDirty, setOpenrouterApiKeyDirty] = useState(false);
   const normalizeHfBaseUrlValue = (value) => {
     if (!value) {
       return '';
@@ -81,10 +87,15 @@ const Settings = () => {
           hfModel: backendSettings.hf_model || prev.hfModel,
           hfBaseUrl: normalizedHfBaseUrl ?? prev.hfBaseUrl,
           hfApiKeySet: backendSettings.hf_api_key_set ?? prev.hfApiKeySet,
+          openrouterModel: backendSettings.openrouter_model || prev.openrouterModel,
+          openrouterBaseUrl: backendSettings.openrouter_base_url || prev.openrouterBaseUrl,
+          openrouterApiKeySet: backendSettings.openrouter_api_key_set ?? prev.openrouterApiKeySet,
         })
       }));
       setHfApiKeyInput('');
       setHfApiKeyDirty(false);
+      setOpenrouterApiKeyInput('');
+      setOpenrouterApiKeyDirty(false);
     } catch (error) {
       console.error('Error loading settings:', error);
     }
@@ -107,7 +118,10 @@ const Settings = () => {
         providerConnected: typeof ollamaResponse.provider_connected === 'boolean'
           ? ollamaResponse.provider_connected
           : !!ollamaResponse.ollama_connected,
-        providerLabel: (ollamaResponse.provider === 'huggingface') ? 'Hugging Face' : 'Ollama'
+        providerLabel:
+          ollamaResponse.provider === 'huggingface'
+            ? 'Hugging Face'
+            : (ollamaResponse.provider === 'openrouter' ? 'OpenRouter' : 'Ollama')
       }));
     } catch (error) {
       console.error('Error checking connections:', error);
@@ -130,7 +144,10 @@ const Settings = () => {
         setConnectionStatus(prev => ({
           ...prev,
           providerConnected: true,
-          providerLabel: settings.provider === 'huggingface' ? 'Hugging Face' : 'Ollama'
+          providerLabel:
+            settings.provider === 'huggingface'
+              ? 'Hugging Face'
+              : (settings.provider === 'openrouter' ? 'OpenRouter' : 'Ollama')
         }));
         // Reload models if connection successful
         if (response.available_models) {
@@ -144,7 +161,10 @@ const Settings = () => {
         setConnectionStatus(prev => ({
           ...prev,
           providerConnected: false,
-          providerLabel: settings.provider === 'huggingface' ? 'Hugging Face' : 'Ollama'
+          providerLabel:
+            settings.provider === 'huggingface'
+              ? 'Hugging Face'
+              : (settings.provider === 'openrouter' ? 'OpenRouter' : 'Ollama')
         }));
       }
     } catch (error) {
@@ -153,7 +173,10 @@ const Settings = () => {
       setConnectionStatus(prev => ({
         ...prev,
         providerConnected: false,
-        providerLabel: settings.provider === 'huggingface' ? 'Hugging Face' : 'Ollama'
+        providerLabel:
+          settings.provider === 'huggingface'
+            ? 'Hugging Face'
+            : (settings.provider === 'openrouter' ? 'OpenRouter' : 'Ollama')
       }));
     } finally {
       setIsTestingConnection(false);
@@ -174,9 +197,16 @@ const Settings = () => {
         payload.hf_model = settings.hfModel;
         payload.hf_base_url = normalizeHfBaseUrlValue(settings.hfBaseUrl);
       }
+      if (settings.provider === 'openrouter') {
+        payload.openrouter_model = settings.openrouterModel;
+        payload.openrouter_base_url = settings.openrouterBaseUrl;
+      }
 
       if (hfApiKeyDirty) {
         payload.hf_api_key = hfApiKeyInput;
+      }
+      if (openrouterApiKeyDirty) {
+        payload.openrouter_api_key = openrouterApiKeyInput;
       }
 
       await ApiService.updateSettings(payload);
@@ -188,6 +218,14 @@ const Settings = () => {
         }));
         setHfApiKeyDirty(false);
         setHfApiKeyInput('');
+      }
+      if (openrouterApiKeyDirty) {
+        setSettings(prev => ({
+          ...prev,
+          openrouterApiKeySet: !!openrouterApiKeyInput
+        }));
+        setOpenrouterApiKeyDirty(false);
+        setOpenrouterApiKeyInput('');
       }
 
       if (!silent) {
@@ -233,8 +271,17 @@ const Settings = () => {
       if (key === 'hfModel' && prev.provider === 'huggingface') {
         next.currentModel = value;
       }
+      if (key === 'openrouterModel' && prev.provider === 'openrouter') {
+        next.currentModel = value;
+      }
       if (key === 'provider') {
-        next.currentModel = value === 'huggingface' ? next.hfModel : prev.currentModel;
+        if (value === 'huggingface') {
+          next.currentModel = next.hfModel;
+        } else if (value === 'openrouter') {
+          next.currentModel = next.openrouterModel;
+        } else {
+          next.currentModel = prev.currentModel;
+        }
       }
       localStorage.setItem('offline-ai-settings', JSON.stringify(next));
       return next;
@@ -242,7 +289,10 @@ const Settings = () => {
     if (key === 'provider') {
       setConnectionStatus(prev => ({
         ...prev,
-        providerLabel: value === 'huggingface' ? 'Hugging Face' : 'Ollama'
+        providerLabel:
+          value === 'huggingface'
+            ? 'Hugging Face'
+            : (value === 'openrouter' ? 'OpenRouter' : 'Ollama')
       }));
     }
   };
@@ -258,6 +308,9 @@ const Settings = () => {
       hfModel: 'meta-llama/Llama-3.1-8B-Instruct',
       hfBaseUrl: 'https://api-inference.huggingface.co',
       hfApiKeySet: false,
+      openrouterModel: 'openrouter/auto',
+      openrouterBaseUrl: 'https://openrouter.ai/api/v1',
+      openrouterApiKeySet: false,
       autoSave: true,
       theme: 'dark',
       fontSize: 14,
@@ -396,9 +449,10 @@ const Settings = () => {
                 >
                   <option value="ollama">Ollama (local)</option>
                   <option value="huggingface">Hugging Face Inference API</option>
+                  <option value="openrouter">OpenRouter (hosted)</option>
                 </select>
                 <p className="text-xs text-dark-400 mt-1">
-                  Choose between your local Ollama runtime or Hugging Face Inference API.
+                  Choose between your local Ollama runtime, Hugging Face Inference API, or OpenRouter.
                 </p>
               </div>
 
@@ -445,7 +499,7 @@ const Settings = () => {
                     <p className="text-xs text-dark-400 mt-1 ml-7">If enabled, uses the proxy URL. Otherwise, uses the direct URL.</p>
                   </div>
                 </>
-              ) : (
+              ) : settings.provider === 'huggingface' ? (
                 <>
                   <div>
                     <label className="block text-sm font-medium text-dark-300 mb-2">
@@ -497,6 +551,61 @@ const Settings = () => {
                       {settings.hfApiKeySet
                         ? 'An API key is stored securely on the backend. Leave blank to keep it.'
                         : 'No API key stored yet. Add one to enable Hugging Face access.'}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-dark-300 mb-2">
+                      OpenRouter API Base URL
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.openrouterBaseUrl}
+                      onChange={(e) => handleSettingChange('openrouterBaseUrl', e.target.value)}
+                      placeholder="https://openrouter.ai/api/v1"
+                      className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                    <p className="text-xs text-dark-400 mt-1">
+                      Usually leave as the default OpenRouter endpoint.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-dark-300 mb-2">
+                      OpenRouter Model ID
+                    </label>
+                    <input
+                      type="text"
+                      value={settings.openrouterModel}
+                      onChange={(e) => handleSettingChange('openrouterModel', e.target.value)}
+                      placeholder="openrouter/auto or specific model id"
+                      className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                    <p className="text-xs text-dark-400 mt-1">
+                      Any chat-completion compatible model available in your OpenRouter account.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-dark-300 mb-2">
+                      OpenRouter API Key
+                    </label>
+                    <input
+                      type="password"
+                      value={openrouterApiKeyInput}
+                      onChange={(e) => {
+                        setOpenrouterApiKeyInput(e.target.value);
+                        setOpenrouterApiKeyDirty(true);
+                      }}
+                      placeholder={settings.openrouterApiKeySet ? '••••••••••••••••' : 'sk-or-... (kept on backend only)'}
+                      className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    />
+                    <p className="text-xs text-dark-400 mt-1">
+                      {settings.openrouterApiKeySet
+                        ? 'An API key is stored securely on the backend. Leave blank to keep it.'
+                        : 'No API key stored yet. Add one to enable OpenRouter access.'}
                     </p>
                   </div>
                 </>
@@ -554,7 +663,7 @@ const Settings = () => {
                   <select
                     value={settings.currentModel}
                     onChange={(e) => selectModel(e.target.value)}
-                    disabled={settings.provider === 'huggingface'}
+                    disabled={settings.provider === 'huggingface' || settings.provider === 'openrouter'}
                     className="flex-1 px-3 py-2 bg-dark-700 border border-dark-600 rounded text-dark-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   >
                     {settings.availableModels.map((model) => (
@@ -566,6 +675,11 @@ const Settings = () => {
                   {settings.provider === 'huggingface' && (
                     <p className="text-xs text-dark-400 mt-2">
                       Set the Hugging Face model ID in the provider section above.
+                    </p>
+                  )}
+                  {settings.provider === 'openrouter' && (
+                    <p className="text-xs text-dark-400 mt-2">
+                      Set the OpenRouter model ID in the provider section above.
                     </p>
                   )}
                 </div>

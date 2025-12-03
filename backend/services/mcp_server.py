@@ -428,7 +428,7 @@ class MCPServerTools:
             ),
             Tool(
                 name="create_slide",
-                description="Create a single PowerPoint slide (.pptx) with title, content, and optional images. Can be used to create individual slides or add to presentations.",
+                description="Create a single PowerPoint slide (.pptx) with enhanced formatting and design. Supports bullet points (use '- ' or '* '), headings (use '# ' or '## '), bold text (use **text**), nested bullets, and proper text styling. Content is automatically formatted with professional styling, colors, and spacing.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -438,11 +438,11 @@ class MCPServerTools:
                         },
                         "title": {
                             "type": "string",
-                            "description": "Slide title"
+                            "description": "Slide title (will be styled with large, bold, blue text)"
                         },
                         "content": {
                             "type": "string",
-                            "description": "Slide content (text, bullet points, etc.)"
+                            "description": "Slide content with formatting: Use '- ' or '* ' for bullet points, '## ' for subheadings, '# ' for main headings, '**text**' for bold text. Content is automatically formatted with proper fonts, colors, and spacing."
                         },
                         "layout": {
                             "type": "string",
@@ -456,7 +456,7 @@ class MCPServerTools:
             ),
             Tool(
                 name="create_presentation",
-                description="Create a full PowerPoint presentation (.pptx) with multiple slides. Similar to Google Slides or Microsoft PowerPoint.",
+                description="Create a full PowerPoint presentation (.pptx) with multiple slides and enhanced formatting. Each slide supports bullet points (use '- ' or '* '), headings (use '# ' or '## '), bold text (use **text**), nested bullets, and professional styling. All slides are automatically formatted with proper fonts, colors, spacing, and visual hierarchy.",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -466,16 +466,16 @@ class MCPServerTools:
                         },
                         "title": {
                             "type": "string",
-                            "description": "Presentation title"
+                            "description": "Presentation title (shown on title slide with large, bold, centered text)"
                         },
                         "slides": {
                             "type": "array",
-                            "description": "Array of slide objects, each with 'title' and 'content' fields",
+                            "description": "Array of slide objects, each with 'title' and 'content' fields. Content supports formatting: Use '- ' or '* ' for bullet points, '## ' for subheadings, '# ' for main headings, '**text**' for bold text.",
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "title": {"type": "string"},
-                                    "content": {"type": "string"},
+                                    "title": {"type": "string", "description": "Slide title (styled with large, bold, blue text)"},
+                                    "content": {"type": "string", "description": "Slide content with formatting support (bullet points, headings, bold text)"},
                                     "layout": {
                                         "type": "string",
                                         "enum": ["title_only", "title_content", "blank", "title_slide"],
@@ -487,7 +487,7 @@ class MCPServerTools:
                         },
                         "author": {
                             "type": "string",
-                            "description": "Presentation author (optional)"
+                            "description": "Presentation author (optional, shown on title slide)"
                         }
                     },
                     "required": ["path", "title", "slides"]
@@ -1243,11 +1243,13 @@ class MCPServerTools:
             return [TextContent(type="text", text=f"ERROR: Failed to create document: {str(e)}")]
     
     async def _create_slide(self, path: str, title: str, content: str = "", layout: str = "title_content") -> List[TextContent]:
-        """Create a PowerPoint slide"""
+        """Create a PowerPoint slide with enhanced formatting and design"""
         try:
             try:
                 from pptx import Presentation
                 from pptx.util import Inches, Pt
+                from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+                from pptx.dml.color import RGBColor
             except ImportError:
                 return [TextContent(
                     type="text",
@@ -1286,45 +1288,170 @@ class MCPServerTools:
             slide_layout = prs.slide_layouts[layout_idx]
             slide = prs.slides.add_slide(slide_layout)
             
-            # Set title
+            # Set title with enhanced styling
             if slide.shapes.title:
-                slide.shapes.title.text = title
+                title_shape = slide.shapes.title
+                # Clear any default placeholder text first
+                if hasattr(title_shape, 'text_frame'):
+                    title_shape.text_frame.clear()
+                title_shape.text = title
+                # Style the title
+                if hasattr(title_shape, 'text_frame') and len(title_shape.text_frame.paragraphs) > 0:
+                    title_paragraph = title_shape.text_frame.paragraphs[0]
+                    title_paragraph.font.size = Pt(44)
+                    title_paragraph.font.bold = True
+                    title_paragraph.font.color.rgb = RGBColor(31, 56, 100)  # Dark blue
+                    title_paragraph.alignment = PP_ALIGN.LEFT
+            
+            # Helper function to add formatted content
+            def add_formatted_content(text_frame, content_text):
+                """Add content with proper formatting (bullet points, paragraphs, etc.)"""
+                text_frame.clear()
+                text_frame.word_wrap = True
+                text_frame.margin_bottom = Inches(0.1)
+                
+                lines = content_text.split('\n')
+                for i, line in enumerate(lines):
+                    line = line.strip()
+                    if not line:
+                        if i < len(lines) - 1:  # Don't add empty paragraph at the end
+                            p = text_frame.add_paragraph()
+                            p.space_after = Pt(6)
+                        continue
+                    
+                    # Check for bullet points
+                    if line.startswith('- ') or line.startswith('* ') or line.startswith('• '):
+                        bullet_text = line[2:].strip()
+                        p = text_frame.add_paragraph()
+                        p.text = bullet_text
+                        p.level = 0
+                        p.font.size = Pt(18)
+                        p.font.color.rgb = RGBColor(51, 51, 51)  # Dark gray
+                        p.space_after = Pt(8)
+                        # Make first word bold if it looks like a heading
+                        if ':' in bullet_text:
+                            parts = bullet_text.split(':', 1)
+                            if len(parts) == 2:
+                                run = p.runs[0]
+                                run.text = parts[0] + ':'
+                                run.font.bold = True
+                                run2 = p.add_run()
+                                run2.text = parts[1]
+                                run2.font.bold = False
+                    elif line.startswith('  - ') or line.startswith('  * ') or line.startswith('    - '):
+                        # Nested bullet
+                        bullet_text = line.lstrip(' -*•').strip()
+                        p = text_frame.add_paragraph()
+                        p.text = bullet_text
+                        p.level = 1
+                        p.font.size = Pt(16)
+                        p.font.color.rgb = RGBColor(68, 68, 68)
+                        p.space_after = Pt(6)
+                    elif line.startswith('## '):
+                        # Subheading
+                        heading_text = line[3:].strip()
+                        p = text_frame.add_paragraph()
+                        p.text = heading_text
+                        p.font.size = Pt(24)
+                        p.font.bold = True
+                        p.font.color.rgb = RGBColor(31, 56, 100)
+                        p.space_after = Pt(12)
+                        p.space_before = Pt(12)
+                    elif line.startswith('# '):
+                        # Main heading
+                        heading_text = line[2:].strip()
+                        p = text_frame.add_paragraph()
+                        p.text = heading_text
+                        p.font.size = Pt(28)
+                        p.font.bold = True
+                        p.font.color.rgb = RGBColor(31, 56, 100)
+                        p.space_after = Pt(16)
+                        p.space_before = Pt(16)
+                    else:
+                        # Regular paragraph
+                        p = text_frame.add_paragraph()
+                        p.text = line
+                        p.font.size = Pt(18)
+                        p.font.color.rgb = RGBColor(51, 51, 51)
+                        p.space_after = Pt(10)
+                        # Check for bold text (**text**)
+                        if '**' in line:
+                            parts = line.split('**')
+                            p.clear()
+                            for j, part in enumerate(parts):
+                                if j % 2 == 0:
+                                    run = p.add_run()
+                                    run.text = part
+                                    run.font.bold = False
+                                else:
+                                    run = p.add_run()
+                                    run.text = part
+                                    run.font.bold = True
+                                    run.font.size = Pt(18)
+                                    run.font.color.rgb = RGBColor(31, 56, 100)
+            
+            # Clear any default placeholder text first
+            for shape in slide.placeholders:
+                if hasattr(shape, 'text_frame') and shape != slide.shapes.title:
+                    try:
+                        # Clear any default placeholder text
+                        if shape.text_frame.text.strip():
+                            shape.text_frame.clear()
+                    except Exception:
+                        pass  # Ignore errors when clearing placeholders
             
             # Set content if available
-            if content and hasattr(slide_layout, 'placeholders'):
-                # Try to find content placeholder
+            if content:
+                content_placeholder = None
+                # Try to find content placeholder (usually idx 1 for content)
                 for shape in slide.placeholders:
-                    if shape.placeholder_format.idx == 1 and shape != slide.shapes.title:
-                        shape.text = content
-                        break
+                    try:
+                        if (hasattr(shape, 'placeholder_format') and 
+                            hasattr(shape.placeholder_format, 'idx') and
+                            shape.placeholder_format.idx == 1 and 
+                            shape != slide.shapes.title):
+                            content_placeholder = shape
+                            break
+                    except Exception:
+                        continue
+                
+                if content_placeholder and hasattr(content_placeholder, 'text_frame'):
+                    # Clear any existing text first
+                    content_placeholder.text_frame.clear()
+                    add_formatted_content(content_placeholder.text_frame, content)
                 else:
-                    # If no content placeholder, add text box
-                    left = Inches(0.5)
-                    top = Inches(2)
-                    width = Inches(9)
-                    height = Inches(4.5)
+                    # Add text box with better positioning
+                    left = Inches(0.7)
+                    top = Inches(2.2)
+                    width = Inches(8.6)
+                    height = Inches(4.3)
                     text_box = slide.shapes.add_textbox(left, top, width, height)
                     text_frame = text_box.text_frame
-                    text_frame.text = content
+                    text_frame.clear()  # Clear any default text
+                    add_formatted_content(text_frame, content)
             
             # Save presentation
             prs.save(path)
             self._invalidate_structure_caches()
             
+            # Return a clear status message that won't be interpreted as file content
+            # Use a clear prefix to indicate this is a tool result, not file content
             return [TextContent(
                 type="text",
-                text=f"Successfully created/updated slide: {path}\nTitle: {title}\nLayout: {layout}"
+                text=f"[TOOL RESULT - DO NOT SAVE AS FILE]\n\n✅ PowerPoint slide created successfully!\n\n📄 File saved to: {path}\n📋 Slide title: {title}\n🎨 Layout: {layout}\n✨ Enhanced formatting applied\n\n⚠️ IMPORTANT: This is a status message from the create_slide tool. The .pptx file has already been created. Do NOT create any text files or save this message as file content."
             )]
         except Exception as e:
             logger.error(f"Error creating slide: {e}", exc_info=True)
             return [TextContent(type="text", text=f"ERROR: Failed to create slide: {str(e)}")]
     
     async def _create_presentation(self, path: str, title: str, slides: List[Dict[str, Any]], author: Optional[str] = None) -> List[TextContent]:
-        """Create a full PowerPoint presentation"""
+        """Create a full PowerPoint presentation with enhanced formatting and design"""
         try:
             try:
                 from pptx import Presentation
                 from pptx.util import Inches, Pt
+                from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+                from pptx.dml.color import RGBColor
             except ImportError:
                 return [TextContent(
                     type="text",
@@ -1353,11 +1480,122 @@ class MCPServerTools:
             if author:
                 prs.core_properties.author = author or "AI Agent"
             
-            # Add title slide
+            # Helper function to add formatted content (same as in _create_slide)
+            def add_formatted_content(text_frame, content_text):
+                """Add content with proper formatting (bullet points, paragraphs, etc.)"""
+                text_frame.clear()
+                text_frame.word_wrap = True
+                text_frame.margin_bottom = Inches(0.1)
+                
+                lines = content_text.split('\n')
+                for i, line in enumerate(lines):
+                    line = line.strip()
+                    if not line:
+                        if i < len(lines) - 1:  # Don't add empty paragraph at the end
+                            p = text_frame.add_paragraph()
+                            p.space_after = Pt(6)
+                        continue
+                    
+                    # Check for bullet points
+                    if line.startswith('- ') or line.startswith('* ') or line.startswith('• '):
+                        bullet_text = line[2:].strip()
+                        p = text_frame.add_paragraph()
+                        p.text = bullet_text
+                        p.level = 0
+                        p.font.size = Pt(18)
+                        p.font.color.rgb = RGBColor(51, 51, 51)  # Dark gray
+                        p.space_after = Pt(8)
+                        # Make first word bold if it looks like a heading
+                        if ':' in bullet_text:
+                            parts = bullet_text.split(':', 1)
+                            if len(parts) == 2:
+                                run = p.runs[0]
+                                run.text = parts[0] + ':'
+                                run.font.bold = True
+                                run2 = p.add_run()
+                                run2.text = parts[1]
+                                run2.font.bold = False
+                    elif line.startswith('  - ') or line.startswith('  * ') or line.startswith('    - '):
+                        # Nested bullet
+                        bullet_text = line.lstrip(' -*•').strip()
+                        p = text_frame.add_paragraph()
+                        p.text = bullet_text
+                        p.level = 1
+                        p.font.size = Pt(16)
+                        p.font.color.rgb = RGBColor(68, 68, 68)
+                        p.space_after = Pt(6)
+                    elif line.startswith('## '):
+                        # Subheading
+                        heading_text = line[3:].strip()
+                        p = text_frame.add_paragraph()
+                        p.text = heading_text
+                        p.font.size = Pt(24)
+                        p.font.bold = True
+                        p.font.color.rgb = RGBColor(31, 56, 100)
+                        p.space_after = Pt(12)
+                        p.space_before = Pt(12)
+                    elif line.startswith('# '):
+                        # Main heading
+                        heading_text = line[2:].strip()
+                        p = text_frame.add_paragraph()
+                        p.text = heading_text
+                        p.font.size = Pt(28)
+                        p.font.bold = True
+                        p.font.color.rgb = RGBColor(31, 56, 100)
+                        p.space_after = Pt(16)
+                        p.space_before = Pt(16)
+                    else:
+                        # Regular paragraph
+                        p = text_frame.add_paragraph()
+                        p.text = line
+                        p.font.size = Pt(18)
+                        p.font.color.rgb = RGBColor(51, 51, 51)
+                        p.space_after = Pt(10)
+                        # Check for bold text (**text**)
+                        if '**' in line:
+                            parts = line.split('**')
+                            p.clear()
+                            for j, part in enumerate(parts):
+                                if j % 2 == 0:
+                                    run = p.add_run()
+                                    run.text = part
+                                    run.font.bold = False
+                                else:
+                                    run = p.add_run()
+                                    run.text = part
+                                    run.font.bold = True
+                                    run.font.size = Pt(18)
+                                    run.font.color.rgb = RGBColor(31, 56, 100)
+            
+            # Add title slide with enhanced styling
             title_slide_layout = prs.slide_layouts[0]
             title_slide = prs.slides.add_slide(title_slide_layout)
             if title_slide.shapes.title:
-                title_slide.shapes.title.text = title
+                title_shape = title_slide.shapes.title
+                # Clear any default placeholder text first
+                if hasattr(title_shape, 'text_frame'):
+                    title_shape.text_frame.clear()
+                title_shape.text = title
+                # Style the title
+                if hasattr(title_shape, 'text_frame') and len(title_shape.text_frame.paragraphs) > 0:
+                    title_paragraph = title_shape.text_frame.paragraphs[0]
+                    title_paragraph.font.size = Pt(54)
+                    title_paragraph.font.bold = True
+                    title_paragraph.font.color.rgb = RGBColor(31, 56, 100)
+                    title_paragraph.alignment = PP_ALIGN.CENTER
+            
+            # Add subtitle if author is provided
+            if author and len(title_slide.shapes) > 1:
+                subtitle_shape = title_slide.shapes[1]
+                if hasattr(subtitle_shape, 'text_frame'):
+                    # Clear any default placeholder text
+                    subtitle_shape.text_frame.clear()
+                    subtitle_shape.text = f"Created by {author}"
+                    if len(subtitle_shape.text_frame.paragraphs) > 0:
+                        subtitle_paragraph = subtitle_shape.text_frame.paragraphs[0]
+                        subtitle_paragraph.font.size = Pt(24)
+                        subtitle_paragraph.font.color.rgb = RGBColor(100, 100, 100)
+                        subtitle_paragraph.alignment = PP_ALIGN.CENTER
             
             # Add content slides
             layout_map = {
@@ -1376,33 +1614,70 @@ class MCPServerTools:
                 slide_layout = prs.slide_layouts[layout_idx]
                 slide = prs.slides.add_slide(slide_layout)
                 
-                # Set title
+                # Set title with enhanced styling
                 if slide.shapes.title:
-                    slide.shapes.title.text = slide_title
+                    title_shape = slide.shapes.title
+                    # Clear any default placeholder text first
+                    if hasattr(title_shape, 'text_frame'):
+                        title_shape.text_frame.clear()
+                    title_shape.text = slide_title
+                    # Style the title
+                    if hasattr(title_shape, 'text_frame') and len(title_shape.text_frame.paragraphs) > 0:
+                        title_paragraph = title_shape.text_frame.paragraphs[0]
+                        title_paragraph.font.size = Pt(44)
+                        title_paragraph.font.bold = True
+                        title_paragraph.font.color.rgb = RGBColor(31, 56, 100)
+                        title_paragraph.alignment = PP_ALIGN.LEFT
                 
-                # Set content
+                # Clear any default placeholder text first
+                for shape in slide.placeholders:
+                    if hasattr(shape, 'text_frame') and shape != slide.shapes.title:
+                        try:
+                            # Clear any default placeholder text
+                            if shape.text_frame.text.strip():
+                                shape.text_frame.clear()
+                        except Exception:
+                            pass  # Ignore errors when clearing placeholders
+                
+                # Set content with formatting
                 if slide_content:
+                    content_placeholder = None
+                    # Try to find content placeholder (usually idx 1 for content)
                     for shape in slide.placeholders:
-                        if shape.placeholder_format.idx == 1 and shape != slide.shapes.title:
-                            shape.text = slide_content
-                            break
+                        try:
+                            if (hasattr(shape, 'placeholder_format') and 
+                                hasattr(shape.placeholder_format, 'idx') and
+                                shape.placeholder_format.idx == 1 and 
+                                shape != slide.shapes.title):
+                                content_placeholder = shape
+                                break
+                        except Exception:
+                            continue
+                    
+                    if content_placeholder and hasattr(content_placeholder, 'text_frame'):
+                        # Clear any existing text first
+                        content_placeholder.text_frame.clear()
+                        add_formatted_content(content_placeholder.text_frame, slide_content)
                     else:
-                        # Add text box if no content placeholder
-                        left = Inches(0.5)
-                        top = Inches(2)
-                        width = Inches(9)
-                        height = Inches(4.5)
+                        # Add text box with better positioning
+                        left = Inches(0.7)
+                        top = Inches(2.2)
+                        width = Inches(8.6)
+                        height = Inches(4.3)
                         text_box = slide.shapes.add_textbox(left, top, width, height)
                         text_frame = text_box.text_frame
-                        text_frame.text = slide_content
+                        text_frame.clear()  # Clear any default text
+                        add_formatted_content(text_frame, slide_content)
             
             # Save presentation
             prs.save(path)
             self._invalidate_structure_caches()
             
+            # Return a clear status message that won't be interpreted as file content
+            # Use a clear prefix to indicate this is a tool result, not file content
             return [TextContent(
                 type="text",
-                text=f"Successfully created presentation: {path}\nTitle: {title}\nSlides: {len(slides) + 1} (including title slide)"
+                text=f"[TOOL RESULT - DO NOT SAVE AS FILE]\n\n✅ PowerPoint presentation created successfully!\n\n📄 File saved to: {path}\n📋 Presentation title: {title}\n📊 Total slides: {len(slides) + 1} (including title slide)\n✨ Enhanced formatting and design applied\n\n⚠️ IMPORTANT: This is a status message from the create_presentation tool. The .pptx file has already been created. Do NOT create any text files or save this message as file content."
             )]
         except Exception as e:
             logger.error(f"Error creating presentation: {e}", exc_info=True)

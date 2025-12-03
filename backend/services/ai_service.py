@@ -52,7 +52,7 @@ def truncate_text(text: Optional[str], limit: int = 220) -> str:
 
 
 class AIService:
-    """Service for interacting with AI models via Ollama or Hugging Face"""
+    """Service for interacting with AI models via Ollama, Hugging Face, or OpenRouter"""
     
     CONFIG_DIR_ENV_VAR = "AI_AGENT_CONFIG_DIR"
     DEFAULT_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".offline_ai_agent")
@@ -93,7 +93,7 @@ class AIService:
     def __init__(self):
         # Load from environment variables or use defaults
         self.provider = (os.getenv("LLM_PROVIDER", "ollama") or "ollama").lower()
-        if self.provider not in ("ollama", "huggingface"):
+        if self.provider not in ("ollama", "huggingface", "openrouter"):
             self.provider = "ollama"
         self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:5000")  # Proxy server
         self.ollama_direct = os.getenv("OLLAMA_DIRECT_URL", "http://localhost:11434")  # Direct connection
@@ -102,6 +102,12 @@ class AIService:
         self.hf_api_key = os.getenv("HF_API_KEY", "")
         self.hf_model = os.getenv("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
         self.hf_base_url = os.getenv("HF_BASE_URL", "").strip()
+        # OpenRouter (OpenAI-compatible) provider settings
+        # See https://openrouter.ai/docs for details
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "")
+        # Default to OpenRouter's "auto" router if not specified
+        self.openrouter_model = os.getenv("OPENROUTER_MODEL", "openrouter/auto")
+        self.openrouter_base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
         self.conversation_history = {}
         self.available_models = []
         self._config_dir = os.getenv(self.CONFIG_DIR_ENV_VAR) or self.DEFAULT_CONFIG_DIR
@@ -167,6 +173,8 @@ class AIService:
 
         if self.provider == "huggingface":
             self.current_model = self.hf_model
+        elif self.provider == "openrouter":
+            self.current_model = self.openrouter_model
     
     def set_mcp_tools(self, mcp_tools: Optional[MCPServerTools]):
         """
@@ -211,7 +219,7 @@ class AIService:
             self.ollama_url = data.get("ollama_url", self.ollama_url)
             self.ollama_direct = data.get("ollama_direct_url", self.ollama_direct)
             provider_value = (data.get("provider") or self.provider or "ollama").lower()
-            if provider_value not in ("ollama", "huggingface"):
+            if provider_value not in ("ollama", "huggingface", "openrouter"):
                 provider_value = "ollama"
             self.provider = provider_value
             if "use_proxy" in data:
@@ -228,6 +236,15 @@ class AIService:
                 self.hf_base_url = (data.get("hf_base_url") or "").strip()
             if "hf_api_key" in data:
                 self.hf_api_key = data.get("hf_api_key") or ""
+            # OpenRouter settings (all optional)
+            if data.get("openrouter_model"):
+                self.openrouter_model = data["openrouter_model"]
+            if "openrouter_api_key" in data:
+                self.openrouter_api_key = data.get("openrouter_api_key") or ""
+            if "openrouter_base_url" in data:
+                base = (data.get("openrouter_base_url") or "").strip()
+                if base:
+                    self.openrouter_base_url = base.rstrip("/")
         except Exception as error:
             print(f"⚠️  Failed to load saved settings: {error}")
     
@@ -243,6 +260,9 @@ class AIService:
             "hf_model": self.hf_model,
             "hf_base_url": self.hf_base_url,
             "hf_api_key": self.hf_api_key or "",
+            "openrouter_model": self.openrouter_model,
+            "openrouter_api_key": self.openrouter_api_key or "",
+            "openrouter_base_url": self.openrouter_base_url,
         }
         try:
             os.makedirs(self._config_dir, exist_ok=True)
@@ -365,12 +385,18 @@ class AIService:
             if InferenceClient is None:
                 return False
             return bool(self.hf_api_key and self.hf_model)
+        if self.provider == "openrouter":
+            # For OpenRouter we currently just validate configuration (key + model)
+            # The /test-connection endpoint will surface any runtime API errors.
+            return bool(self.openrouter_api_key and self.openrouter_model)
         return await self.check_ollama_connection(force=force)
     
     async def get_available_models(self) -> List[str]:
         """Get list of available models"""
         if self.provider == "huggingface":
             return [self.hf_model] if self.hf_model else []
+        if self.provider == "openrouter":
+            return [self.openrouter_model] if self.openrouter_model else []
         if not self.available_models:
             await self.check_ollama_connection(force=True)
         return self.available_models
@@ -383,6 +409,13 @@ class AIService:
             self.hf_model = model_name
             self.current_model = model_name
             self.reset_hf_client()
+            self.save_settings()
+            return True
+        if self.provider == "openrouter":
+            if not model_name:
+                return False
+            self.openrouter_model = model_name
+            self.current_model = model_name
             self.save_settings()
             return True
 
@@ -403,6 +436,18 @@ class AIService:
                 "provider_connected": provider_connected,
                 "ollama_connected": provider_connected,
                 "current_model": self.hf_model or self.current_model,
+                "available_models": available,
+                "conversation_count": len(self.conversation_history)
+            }
+        if self.provider == "openrouter":
+            provider_connected = await self.check_provider_connection()
+            available = [self.openrouter_model] if self.openrouter_model else []
+            return {
+                "provider": "openrouter",
+                "provider_connected": provider_connected,
+                # Keep key name for frontend compatibility; here it just mirrors provider_connected
+                "ollama_connected": provider_connected,
+                "current_model": self.openrouter_model or self.current_model,
                 "available_models": available,
                 "conversation_count": len(self.conversation_history)
             }
@@ -609,6 +654,15 @@ class AIService:
                 return "delete_file"
             return normalized if normalized in ("create_file", "edit_file", "delete_file") else None
 
+        def is_document_file(path: str) -> bool:
+            """Check if a file path is a binary document file that shouldn't be opened in code editor"""
+            if not path:
+                return False
+            path_lower = str(path).lower()
+            # Binary document file extensions that should not be opened in code editor
+            document_extensions = {'.pptx', '.docx', '.xlsx', '.pdf', '.odt', '.ods', '.odp', '.ppt', '.doc', '.xls'}
+            return any(path_lower.endswith(ext) for ext in document_extensions)
+        
         def normalize_file_operation(op: Any) -> Optional[Dict[str, Any]]:
             if not isinstance(op, dict):
                 return None
@@ -618,11 +672,23 @@ class AIService:
             path = op.get("path") or op.get("file") or op.get("target")
             if not op_type or not path:
                 return None
+            path_str = str(path).strip()
             normalized_op: Dict[str, Any] = {
                 "type": op_type,
-                "path": str(path).strip()
+                "path": path_str
             }
-            if "content" in op:
+            
+            # Mark document files to prevent opening in code editor
+            if is_document_file(path_str):
+                normalized_op["is_document"] = True
+                normalized_op["open_in_editor"] = False  # Don't open binary files in editor
+                # For document files, don't include content in file_operations
+                # They are created via tools, not text editing
+                if "content" in op:
+                    # Remove content for document files - they're binary
+                    pass
+            
+            if "content" in op and not normalized_op.get("is_document"):
                 normalized_op["content"] = strip_code_fences(str(op["content"]))
             if "beforeContent" in op:
                 normalized_op["beforeContent"] = strip_code_fences(str(op["beforeContent"]))
@@ -632,7 +698,7 @@ class AIService:
                 normalized_op["before"] = strip_code_fences(str(op["before"]))
             if "after" in op:
                 normalized_op["after"] = strip_code_fences(str(op["after"]))
-            for key in ("diff", "metadata", "encoding", "language", "overwrite"):
+            for key in ("diff", "metadata", "encoding", "language", "overwrite", "is_document", "open_in_editor"):
                 if key in op:
                     normalized_op[key] = op[key]
             return normalized_op
@@ -1711,6 +1777,11 @@ class AIService:
                 raise Exception("Hugging Face API key (HF_API_KEY) is not configured.")
             if not self.hf_model:
                 raise Exception("Hugging Face model name (HF_MODEL) is not configured.")
+        elif self.provider == "openrouter":
+            if not self.openrouter_api_key:
+                raise Exception("OpenRouter API key (OPENROUTER_API_KEY) is not configured.")
+            if not self.openrouter_model:
+                raise Exception("OpenRouter model name (OPENROUTER_MODEL) is not configured.")
         else:
             raise Exception(f"Unsupported LLM provider: {self.provider}")
         
@@ -3980,6 +4051,9 @@ class AIService:
         if self.provider == "huggingface":
             response = await self._call_huggingface(prompt)
             return response, None  # Hugging Face doesn't support thinking yet
+        if self.provider == "openrouter":
+            response = await self._call_openrouter(prompt)
+            return response, None  # OpenRouter doesn't support separate thinking channel yet
         return await self._call_ollama(prompt, images=images)
 
     async def _call_huggingface(self, prompt: str) -> str:
@@ -4033,6 +4107,57 @@ class AIService:
             return response_text or "No response generated"
         except Exception as error:
             raise Exception(f"Hugging Face API error: {error}") from error
+
+    async def _call_openrouter(self, prompt: str) -> str:
+        """
+        Call OpenRouter's OpenAI-compatible chat completions API.
+
+        This uses a simple non-streaming request to keep implementation small and robust.
+        """
+        if not self.openrouter_api_key:
+            raise Exception("OpenRouter API key is not configured.")
+        if not self.openrouter_model:
+            raise Exception("OpenRouter model is not configured.")
+
+        url = f"{self.openrouter_base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.openrouter_api_key}",
+            "Content-Type": "application/json",
+            # Optional but recommended headers for OpenRouter analytics
+            "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "") or "http://localhost",
+            "X-Title": os.getenv("OPENROUTER_APP_NAME", "") or "Offline AI Agent",
+        }
+        payload = {
+            "model": self.openrouter_model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+        }
+
+        timeout = aiohttp.ClientTimeout(total=self.request_timeout)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            try:
+                async with session.post(url, headers=headers, json=payload) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        raise Exception(f"OpenRouter API error (status {resp.status}): {text}")
+                    data = await resp.json()
+            except Exception as error:
+                raise Exception(f"OpenRouter API request failed: {error}") from error
+
+        try:
+            choices = data.get("choices") or []
+            if not choices:
+                return "No response generated"
+            message = choices[0].get("message") or {}
+            content = message.get("content") or ""
+            content_str = content.strip()
+            return content_str or "No response generated"
+        except Exception as error:
+            raise Exception(f"Invalid response from OpenRouter: {error}") from error
 
     def _extract_base64_from_data_url(self, data_url: str) -> Tuple[str, str]:
         """Extract base64 data and media type from data URL"""

@@ -345,29 +345,110 @@ const formatDuration = (ms = 0) => {
 };
 
 const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [previousActiveIndex, setPreviousActiveIndex] = useState(-1);
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const transitionTimeoutRef = useRef(null);
+
+  // Find the active step (current phase)
+  const activeStepIndex = !Array.isArray(steps) || steps.length === 0
+    ? -1
+    : steps.findIndex((step, idx) => {
+        const status =
+          step.status ||
+          (step.completedAt
+            ? 'done'
+            : idx === steps.length - 1
+            ? 'active'
+            : 'done');
+        return status === 'active';
+      });
+
+  // If no active step found, use the last step
+  const currentActiveIndex = activeStepIndex >= 0 ? activeStepIndex : (steps.length > 0 ? steps.length - 1 : -1);
+
+  // Track phase changes for animation
+  useEffect(() => {
+    if (currentActiveIndex === -1) return;
+    
+    if (currentActiveIndex !== previousActiveIndex) {
+      if (previousActiveIndex >= 0) {
+        // Phase changed - trigger transition animation
+        setIsTransitioning(true);
+        // Clear any existing timeout
+        if (transitionTimeoutRef.current) {
+          clearTimeout(transitionTimeoutRef.current);
+        }
+        // Reset transition state after animation completes
+        transitionTimeoutRef.current = setTimeout(() => {
+          setIsTransitioning(false);
+        }, 600);
+      }
+      setPreviousActiveIndex(currentActiveIndex);
+    }
+    return () => {
+      if (transitionTimeoutRef.current) {
+        clearTimeout(transitionTimeoutRef.current);
+      }
+    };
+  }, [currentActiveIndex, previousActiveIndex]);
+
   if (!Array.isArray(steps) || steps.length === 0) {
     return null;
   }
 
+  // Filter steps: show only active when collapsed, all when expanded
+  const visibleSteps = isExpanded 
+    ? steps 
+    : steps.filter((step, idx) => idx === currentActiveIndex);
+
+  const hasMultipleSteps = steps.length > 1;
+
   return (
-    <div className="rounded-2xl border border-primary-800/40 bg-gradient-to-br from-primary-500/15 via-dark-900/60 to-dark-900/80 p-4 space-y-4 shadow-inner shadow-black/20">
+    <div className="rounded-2xl border border-primary-800/40 bg-gradient-to-br from-primary-500/15 via-dark-900/60 to-dark-900/80 p-4 space-y-4 shadow-inner shadow-black/20 transition-all duration-300">
       <div className="flex items-center justify-between text-sm text-dark-200">
         <div className="flex items-center gap-2 text-primary-200">
-          <Sparkles className="w-4 h-4" />
+          <Sparkles className="w-4 h-4 animate-pulse" />
           <span>Live thinking pipeline</span>
         </div>
-        <span className="text-xs text-dark-400 uppercase tracking-wide">
-          {Math.max(1, Math.round(elapsedMs / 1000))}s elapsed
-        </span>
+        <div className="flex items-center gap-3">
+          {hasMultipleSteps && (
+            <button
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="text-xs text-primary-300 hover:text-primary-200 transition-all duration-200 flex items-center gap-1 px-2 py-1 rounded hover:bg-primary-500/10 hover:scale-105 active:scale-95"
+              title={isExpanded ? 'Collapse to current phase' : 'Show all phases'}
+            >
+              {isExpanded ? (
+                <>
+                  <ChevronUp className="w-3 h-3 transition-transform duration-200" />
+                  <span>Collapse</span>
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="w-3 h-3 transition-transform duration-200" />
+                  <span>Show all ({steps.length})</span>
+                </>
+              )}
+            </button>
+          )}
+          <span className="text-xs text-dark-400 uppercase tracking-wide">
+            {Math.max(1, Math.round(elapsedMs / 1000))}s elapsed
+          </span>
+        </div>
       </div>
-      <ol className="space-y-4 relative">
-        {steps.map((step, idx) => {
+      <ol className="space-y-4 relative overflow-hidden">
+        {visibleSteps.map((step, displayIdx) => {
+          // Find the original index in the full steps array
+          const originalIdx = isExpanded 
+            ? displayIdx 
+            : steps.findIndex(s => s === step);
+          
           const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
           const status =
             step.status ||
             (step.completedAt
               ? 'done'
-              : idx === steps.length - 1
+              : originalIdx === steps.length - 1
               ? 'active'
               : 'done');
           const toneClass = toneClasses[step.tone] || toneClasses.primary;
@@ -383,29 +464,102 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
               ? 'In progress'
               : 'Pending';
 
+          const isActive = status === 'active';
+          const isNewlyActive = isActive && originalIdx === currentActiveIndex && isTransitioning;
+          const animationDelay = isExpanded ? originalIdx * 50 : 0;
+
           return (
-            <li key={step.key || `${step.phase}-${idx}`} className="flex gap-3">
+            <li 
+              key={step.key || `${step.phase}-${originalIdx}`} 
+              className={`flex gap-3 transition-all duration-500 ease-out ${
+                isNewlyActive 
+                  ? 'animate-[slideInUp_0.6s_ease-out,glow_2s_ease-in-out_infinite]' 
+                  : isActive && !isExpanded && isTransitioning
+                  ? 'animate-[fadeInScale_0.5s_ease-out]'
+                  : isActive && !isExpanded
+                  ? 'opacity-100'
+                  : 'opacity-100'
+              }`}
+              style={{
+                animationDelay: `${animationDelay}ms`
+              }}
+            >
               <div className="flex flex-col items-center">
                 <div
-                  className={`w-9 h-9 rounded-full border-2 flex items-center justify-center ${toneClass} ${
-                    status === 'active' ? 'ring-2 ring-primary-500/40 animate-pulse' : ''
+                  className={`w-9 h-9 rounded-full border-2 flex items-center justify-center transition-all duration-500 ease-out relative ${
+                    toneClass
+                  } ${
+                    isActive 
+                      ? 'ring-4 ring-primary-500/60 shadow-lg shadow-primary-500/30 scale-110' 
+                      : 'ring-0 scale-100'
+                  } ${
+                    isNewlyActive ? 'animate-[pulseGlow_2s_ease-in-out_infinite]' : ''
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
+                  {/* Animated glow effect for active phase */}
+                  {isActive && (
+                    <div className="absolute inset-0 rounded-full bg-primary-500/20 animate-ping" style={{ animationDuration: '2s' }} />
+                  )}
+                  <Icon 
+                    className={`w-4 h-4 transition-all duration-300 ${
+                      isActive ? 'scale-110 animate-[iconPulse_1.5s_ease-in-out_infinite]' : 'scale-100'
+                    }`}
+                  />
                 </div>
-                {idx < steps.length - 1 && (
-                  <span className="flex-1 w-px bg-dark-700 mt-1" />
+                {isExpanded && originalIdx < steps.length - 1 && (
+                  <span 
+                    className={`flex-1 w-px mt-1 transition-all duration-700 ease-out relative overflow-hidden ${
+                      originalIdx < currentActiveIndex 
+                        ? 'bg-primary-500/60' 
+                        : 'bg-dark-700'
+                    }`}
+                    style={{
+                      background: originalIdx < currentActiveIndex 
+                        ? 'linear-gradient(to bottom, rgba(99, 102, 241, 0.7), rgba(99, 102, 241, 0.3), rgba(99, 102, 241, 0.1))'
+                        : undefined
+                    }}
+                  >
+                    {originalIdx < currentActiveIndex && (
+                      <span 
+                        className="absolute top-0 left-0 w-full h-full bg-primary-400/40 animate-[flowDown_2s_ease-in-out_infinite]"
+                        style={{
+                          background: 'linear-gradient(to bottom, transparent, rgba(99, 102, 241, 0.6), transparent)',
+                          animationDelay: `${originalIdx * 200}ms`
+                        }}
+                      />
+                    )}
+                  </span>
                 )}
               </div>
               <div className="flex-1 space-y-1">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="text-sm text-dark-100 font-medium leading-snug">
+                  <div 
+                    className={`text-sm font-medium leading-snug transition-all duration-300 ${
+                      isActive 
+                        ? 'text-primary-100 font-semibold' 
+                        : 'text-dark-100'
+                    }`}
+                  >
                     {step.label || THINKING_PHASE_META[step.phase]?.label || 'Working…'}
                   </div>
-                  <div className="text-xs text-dark-500 whitespace-nowrap">{statusLabel}</div>
+                  <div 
+                    className={`text-xs whitespace-nowrap transition-all duration-300 ${
+                      isActive 
+                        ? 'text-primary-300 font-medium' 
+                        : 'text-dark-500'
+                    }`}
+                  >
+                    {statusLabel}
+                  </div>
                 </div>
                 {(step.description || THINKING_PHASE_META[step.phase]?.description) && (
-                  <p className="text-xs text-dark-400">
+                  <p 
+                    className={`text-xs transition-all duration-300 ${
+                      isActive 
+                        ? 'text-dark-300' 
+                        : 'text-dark-400'
+                    }`}
+                  >
                     {step.description || THINKING_PHASE_META[step.phase]?.description}
                   </p>
                 )}
@@ -414,6 +568,71 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
           );
         })}
       </ol>
+      <style>{`
+        @keyframes slideInUp {
+          from {
+            opacity: 0;
+            transform: translateY(12px) scale(0.95);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+        @keyframes fadeInScale {
+          from {
+            opacity: 0;
+            transform: scale(0.98);
+          }
+          to {
+            opacity: 1;
+            transform: scale(1);
+          }
+        }
+        @keyframes glow {
+          0%, 100% {
+            box-shadow: 0 0 0 0 rgba(99, 102, 241, 0), 0 0 0 0 rgba(139, 92, 246, 0);
+          }
+          50% {
+            box-shadow: 0 0 25px 8px rgba(99, 102, 241, 0.4), 0 0 15px 4px rgba(139, 92, 246, 0.2);
+          }
+        }
+        @keyframes pulseGlow {
+          0%, 100% {
+            box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.5), 0 0 0 0 rgba(99, 102, 241, 0.3);
+          }
+          50% {
+            box-shadow: 0 0 0 10px rgba(99, 102, 241, 0), 0 0 0 5px rgba(99, 102, 241, 0.15);
+          }
+        }
+        @keyframes iconPulse {
+          0%, 100% {
+            transform: scale(1) rotate(0deg);
+          }
+          25% {
+            transform: scale(1.15) rotate(-2deg);
+          }
+          50% {
+            transform: scale(1.1) rotate(0deg);
+          }
+          75% {
+            transform: scale(1.15) rotate(2deg);
+          }
+        }
+        @keyframes flowDown {
+          0% {
+            transform: translateY(-100%);
+            opacity: 0;
+          }
+          50% {
+            opacity: 1;
+          }
+          100% {
+            transform: translateY(100%);
+            opacity: 0;
+          }
+        }
+      `}</style>
     </div>
   );
 };
@@ -1117,6 +1336,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [isTestingConnectivity, setIsTestingConnectivity] = useState(false);
   const [hfConnectivityApiKey, setHfConnectivityApiKey] = useState('');
   const [hfConnectivityApiKeyDirty, setHfConnectivityApiKeyDirty] = useState(false);
+  const [openrouterConnectivityApiKey, setOpenrouterConnectivityApiKey] = useState('');
+  const [openrouterConnectivityApiKeyDirty, setOpenrouterConnectivityApiKeyDirty] = useState(false);
   const [ollamaModels, setOllamaModels] = useState([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [showAutoDropdown, setShowAutoDropdown] = useState(false);
@@ -1403,13 +1624,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       next[field] = value;
 
       if (field === 'provider') {
-        next.currentModel =
-          value === 'huggingface'
-            ? next.hfModel || ''
-            : next.defaultModel || next.currentModel || 'codellama';
+        if (value === 'huggingface') {
+          next.currentModel = next.hfModel || '';
+        } else if (value === 'openrouter') {
+          next.currentModel = next.openrouterModel || '';
+        } else {
+          next.currentModel = next.defaultModel || next.currentModel || 'codellama';
+        }
       }
 
       if (field === 'hfModel' && next.provider === 'huggingface') {
+        next.currentModel = value;
+      }
+      if (field === 'openrouterModel' && next.provider === 'openrouter') {
         next.currentModel = value;
       }
 
@@ -1509,13 +1736,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
       if (connectivitySettings.provider === 'ollama') {
         payload.default_model = connectivitySettings.currentModel;
-      } else {
+      } else if (connectivitySettings.provider === 'huggingface') {
         payload.hf_model = connectivitySettings.hfModel;
         payload.hf_base_url = normalizeConnectivityBaseUrl(connectivitySettings.hfBaseUrl);
+      } else if (connectivitySettings.provider === 'openrouter') {
+        payload.openrouter_model = connectivitySettings.openrouterModel;
+        payload.openrouter_base_url = connectivitySettings.openrouterBaseUrl;
       }
 
       if (hfConnectivityApiKeyDirty) {
         payload.hf_api_key = hfConnectivityApiKey;
+      }
+      if (openrouterConnectivityApiKeyDirty) {
+        payload.openrouter_api_key = openrouterConnectivityApiKey;
       }
 
       await ApiService.updateSettings(payload);
@@ -1541,6 +1774,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         setHfConnectivityApiKey('');
         setHfConnectivityApiKeyDirty(false);
       }
+      if (openrouterConnectivityApiKeyDirty) {
+        setOpenrouterConnectivityApiKey('');
+        setOpenrouterConnectivityApiKeyDirty(false);
+      }
     } catch (error) {
       console.error('Failed to save connectivity settings:', error);
       toast.error(error.response?.data?.detail || 'Failed to save connectivity settings');
@@ -1553,7 +1790,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setIsTestingConnectivity(true);
     try {
       const provider = connectivitySettings?.provider || 'ollama';
-      const providerLabel = provider === 'huggingface' ? 'Hugging Face' : 'Ollama';
+      const providerLabel =
+        provider === 'huggingface'
+          ? 'Hugging Face'
+          : provider === 'openrouter'
+            ? 'OpenRouter'
+            : 'Ollama';
       const response = await ApiService.testOllamaConnection();
       const isConnected = !!response?.connected;
       const statusMessage =
@@ -1775,6 +2017,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       const defaultModel = response.default_model || 'codellama';
       const hfModel = response.hf_model || 'meta-llama/Llama-3.1-8B-Instruct';
       const normalizedHfBaseUrl = normalizeConnectivityBaseUrl(response.hf_base_url);
+      const openrouterModel = response.openrouter_model || 'openrouter/auto';
+      const openrouterBaseUrl = (response.openrouter_base_url || 'https://openrouter.ai/api/v1');
 
       // Try to restore saved model from localStorage
       let savedModel = null;
@@ -1784,9 +2028,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         console.warn('Failed to read saved model from localStorage:', error);
       }
 
-      const serverModel = provider === 'huggingface'
-        ? hfModel
-        : response.current_model || defaultModel;
+      const serverModel =
+        provider === 'huggingface'
+          ? hfModel
+          : provider === 'openrouter'
+            ? openrouterModel
+            : response.current_model || defaultModel;
 
       const effectiveModel = savedModel && provider === 'ollama' ? savedModel : serverModel;
 
@@ -1811,9 +2058,14 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         hfModel,
         hfBaseUrl: normalizedHfBaseUrl,
         hfApiKeySet: !!response.hf_api_key_set,
+        openrouterModel,
+        openrouterBaseUrl,
+        openrouterApiKeySet: !!response.openrouter_api_key_set,
       });
       setHfConnectivityApiKey('');
       setHfConnectivityApiKeyDirty(false);
+      setOpenrouterConnectivityApiKey('');
+      setOpenrouterConnectivityApiKeyDirty(false);
       // Refresh available models without blocking the settings UI
       loadAvailableModels();
     } catch (error) {
@@ -6257,12 +6509,23 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     editorContentWidgetsRef.current = [];
   }, []);
 
+  // Helper function to check if a file is a binary document that shouldn't be opened in editor
+  const isDocumentFile = (filePath) => {
+    if (!filePath) return false;
+    const pathLower = filePath.toLowerCase();
+    const documentExtensions = ['.pptx', '.docx', '.xlsx', '.pdf', '.odt', '.ods', '.odp', '.ppt', '.doc', '.xls'];
+    return documentExtensions.some(ext => pathLower.endsWith(ext));
+  };
+
   // Process file operations from AI response (writes to disk and updates open files)
   const processFileOperations = async (operations) => {
     for (const op of operations) {
       try {
         const opType = op.type;
         const filePath = normalizeEditorPath(op.path);
+        
+        // Check if this is a document file that shouldn't be opened in editor
+        const isDocument = op.is_document === true || op.open_in_editor === false || isDocumentFile(filePath);
 
         if (opType === 'create_file') {
           // For new files, check if user has modified the preview content
@@ -6271,11 +6534,16 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           // Use preview content if available (with user's accepted/declined changes), otherwise use original
           const content = existingFile?.content || op.content || '';
           
-          // Create file
-          await ApiService.writeFile(filePath, content);
+          // Create file (skip content for document files - they're binary)
+          if (!isDocument) {
+            await ApiService.writeFile(filePath, content);
+          } else {
+            // For document files, they're already created by tools, just notify
+            // Don't try to write text content to binary files
+          }
           
-          // Open the file if it doesn't exist in openFiles
-          if (!existingFile) {
+          // Only open in editor if it's not a document file
+          if (!isDocument && !existingFile) {
             const fileInfo = {
               path: normalizedFilePath,
               name: normalizedFilePath.split('/').pop() || 'untitled',
@@ -6298,7 +6566,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               setEditorContent(content);
               setEditorLanguage(fileInfo.language);
             }
-          } else {
+          } else if (!isDocument && existingFile) {
             // Update existing file entry to mark as no longer a preview
             setOpenFiles(prev => prev.map((f, idx) => 
               normalizeEditorPath(f.path) === normalizedFilePath 
@@ -6307,10 +6575,23 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             ));
           }
           
-          toast.success(`Created file: ${filePath}`);
+          if (isDocument) {
+            toast.success(`Created document: ${filePath} (binary file - not opened in editor)`);
+          } else {
+            toast.success(`Created file: ${filePath}`);
+          }
         } else if (opType === 'edit_file') {
-          // For edited files, use the preview content (which includes user's accepted/declined line changes)
+          // Check if this is a document file
           const normalizedFilePath = normalizeEditorPath(filePath);
+          const isEditDocument = op.is_document === true || op.open_in_editor === false || isDocumentFile(normalizedFilePath);
+          
+          // Document files should not be edited via file_operations - they're binary
+          if (isEditDocument) {
+            toast.warning(`Document files (${filePath}) cannot be edited as text. Use document creation tools instead.`);
+            continue;
+          }
+          
+          // For edited files, use the preview content (which includes user's accepted/declined line changes)
           const existingFile = openFiles.find(f => normalizeEditorPath(f.path) === normalizedFilePath);
           // Use preview content if available (with user's accepted/declined changes), otherwise use original
           const content = existingFile?.content || op.content || '';
@@ -9892,6 +10173,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                     >
                       <option value="ollama">Ollama (local)</option>
                       <option value="huggingface">Hugging Face Inference API</option>
+                      <option value="openrouter">OpenRouter (hosted)</option>
                     </select>
                   </div>
 
@@ -9925,7 +10207,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         Use proxy before direct connection
                       </label>
                     </>
-                  ) : (
+                  ) : connectivitySettings.provider === 'huggingface' ? (
                     <>
                       <div>
                         <label className="text-xs uppercase tracking-wide text-dark-400">Hugging Face API Base URL</label>
@@ -9966,6 +10248,47 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                           {connectivitySettings.hfApiKeySet
                             ? 'A Hugging Face token is already stored. Enter a new one to replace it.'
                             : 'No token stored yet. Add one to enable Hugging Face access.'}
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="text-xs uppercase tracking-wide text-dark-400">OpenRouter API Base URL</label>
+                        <input
+                          type="text"
+                          value={connectivitySettings.openrouterBaseUrl || ''}
+                          onChange={(e) => handleConnectivityChange('openrouterBaseUrl', e.target.value)}
+                          placeholder="https://openrouter.ai/api/v1"
+                          className="mt-1 w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs uppercase tracking-wide text-dark-400">OpenRouter Model ID</label>
+                        <input
+                          type="text"
+                          value={connectivitySettings.openrouterModel || ''}
+                          onChange={(e) => handleConnectivityChange('openrouterModel', e.target.value)}
+                          className="mt-1 w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                          placeholder="openrouter/auto or specific model id"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs uppercase tracking-wide text-dark-400">API Key</label>
+                        <input
+                          type="password"
+                          value={openrouterConnectivityApiKey}
+                          onChange={(e) => {
+                            setOpenrouterConnectivityApiKey(e.target.value);
+                            setOpenrouterConnectivityApiKeyDirty(true);
+                          }}
+                          placeholder={connectivitySettings.openrouterApiKeySet ? '••••••••••••••••' : 'sk-or-... (kept on backend only)'}
+                          className="mt-1 w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                        />
+                        <p className="text-xs text-dark-500 mt-1">
+                          {connectivitySettings.openrouterApiKeySet
+                            ? 'An OpenRouter key is already stored. Enter a new one to replace it.'
+                            : 'No key stored yet. Add one to enable OpenRouter access.'}
                         </p>
                       </div>
                     </>
