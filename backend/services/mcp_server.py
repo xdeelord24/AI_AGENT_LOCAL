@@ -31,6 +31,7 @@ MCP-compliant AI model or client.
 import asyncio
 import json
 import os
+import re
 import subprocess
 import time
 import logging
@@ -1255,12 +1256,13 @@ class MCPServerTools:
             return [TextContent(type="text", text=f"Error performing web search: {str(e)}")]
     
     async def _create_document(self, path: str, content: str, title: str = "", author: Optional[str] = None) -> List[TextContent]:
-        """Create a Word document (.docx)"""
+        """Create a Word document (.docx) with improved markdown parsing"""
         try:
             try:
                 from docx import Document
-                from docx.shared import Inches, Pt
+                from docx.shared import Inches, Pt, RGBColor
                 from docx.enum.text import WD_ALIGN_PARAGRAPH
+                from docx.oxml.ns import qn
             except ImportError:
                 return [TextContent(
                     type="text",
@@ -1294,53 +1296,197 @@ class MCPServerTools:
                 title_para = doc.add_heading(title, 0)
                 title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
             
+            # Helper function to parse inline markdown formatting (bold, italic)
+            def add_formatted_text(paragraph, text: str):
+                """Add text with markdown formatting (bold **text**, italic *text*)"""
+                if not text:
+                    return
+                
+                # Process bold (**text**) and italic (*text*) together
+                # First, mark bold regions, then process italic within non-bold regions
+                
+                # Find all bold markers (**text**)
+                bold_pattern = r'\*\*([^*]+)\*\*'
+                bold_matches = list(re.finditer(bold_pattern, text))
+                
+                # Find all italic markers (*text*) but not **text**
+                # We need to avoid italic markers that are part of bold markers
+                italic_pattern = r'(?<!\*)\*([^*]+?)\*(?!\*)'
+                italic_matches = list(re.finditer(italic_pattern, text))
+                
+                # Create a list of all formatting regions
+                regions = []
+                for match in bold_matches:
+                    regions.append({
+                        'start': match.start(),
+                        'end': match.end(),
+                        'type': 'bold',
+                        'text': match.group(1)
+                    })
+                for match in italic_matches:
+                    # Check if this italic is inside a bold region
+                    is_inside_bold = any(
+                        r['start'] <= match.start() < r['end'] or 
+                        r['start'] < match.end() <= r['end']
+                        for r in regions if r['type'] == 'bold'
+                    )
+                    if not is_inside_bold:
+                        regions.append({
+                            'start': match.start(),
+                            'end': match.end(),
+                            'type': 'italic',
+                            'text': match.group(1)
+                        })
+                
+                # Sort regions by start position
+                regions.sort(key=lambda x: x['start'])
+                
+                # Build text runs
+                if regions:
+                    pos = 0
+                    for region in regions:
+                        # Add text before this region
+                        if region['start'] > pos:
+                            plain_text = text[pos:region['start']]
+                            if plain_text:
+                                paragraph.add_run(plain_text)
+                        
+                        # Add formatted text
+                        run = paragraph.add_run(region['text'])
+                        if region['type'] == 'bold':
+                            run.bold = True
+                        elif region['type'] == 'italic':
+                            run.italic = True
+                        
+                        pos = region['end']
+                    
+                    # Add remaining text
+                    if pos < len(text):
+                        plain_text = text[pos:]
+                        if plain_text:
+                            paragraph.add_run(plain_text)
+                else:
+                    # No formatting found, add text as-is (with markers removed)
+                    cleaned_text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+                    cleaned_text = re.sub(r'(?<!\*)\*([^*]+?)\*(?!\*)', r'\1', cleaned_text)
+                    if cleaned_text:
+                        paragraph.add_run(cleaned_text)
+            
             # Parse content and add to document
             lines = content.split('\n')
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    doc.add_paragraph()  # Empty paragraph for spacing
+            i = 0
+            
+            while i < len(lines):
+                line = lines[i].rstrip()  # Keep leading spaces, remove trailing
+                
+                # Check for markdown table
+                if '|' in line and line.strip().startswith('|') and line.strip().endswith('|'):
+                    # Collect table rows
+                    table_rows = []
+                    header_row = None
+                    separator_row = None
+                    
+                    # Check if this is a table
+                    while i < len(lines) and '|' in lines[i]:
+                        current_line = lines[i].strip()
+                        if current_line.startswith('|') and current_line.endswith('|'):
+                            # Check if it's a separator row (contains dashes and colons)
+                            if re.match(r'^\|[\s\-\|:]+\|$', current_line):
+                                separator_row = current_line
+                            else:
+                                if header_row is None:
+                                    header_row = current_line
+                                else:
+                                    table_rows.append(current_line)
+                        i += 1
+                    
+                    # Create table if we have a valid header
+                    if header_row:
+                        # Parse header
+                        header_cells = [cell.strip() for cell in header_row.split('|')[1:-1]]
+                        num_cols = len(header_cells)
+                        
+                        if num_cols > 0:
+                            # Create Word table (1 row for header, will add data rows if any)
+                            table = doc.add_table(rows=1, cols=num_cols)
+                            table.style = 'Light Grid Accent 1'
+                            
+                            # Add header row
+                            header_cells_row = table.rows[0].cells
+                            for j, cell_text in enumerate(header_cells):
+                                cell = header_cells_row[j]
+                                cell.paragraphs[0].clear()
+                                add_formatted_text(cell.paragraphs[0], cell_text)
+                                # Make header bold
+                                for paragraph in cell.paragraphs:
+                                    for run in paragraph.runs:
+                                        run.bold = True
+                            
+                            # Add data rows if any
+                            for row_text in table_rows:
+                                row_cells = [cell.strip() for cell in row_text.split('|')[1:-1]]
+                                # Ensure we have the right number of cells
+                                while len(row_cells) < num_cols:
+                                    row_cells.append('')
+                                row_cells = row_cells[:num_cols]
+                                
+                                new_row = table.add_row()
+                                for j, cell_text in enumerate(row_cells):
+                                    cell = new_row.cells[j]
+                                    cell.paragraphs[0].clear()
+                                    add_formatted_text(cell.paragraphs[0], cell_text)
+                    
                     continue
                 
-                # Handle markdown-style formatting
+                # Handle empty lines
+                if not line.strip():
+                    doc.add_paragraph()  # Empty paragraph for spacing
+                    i += 1
+                    continue
+                
+                # Handle markdown-style headings
                 if line.startswith('# '):
-                    # Heading 1
-                    doc.add_heading(line[2:], level=1)
+                    heading_text = line[2:].strip()
+                    para = doc.add_heading('', level=1)  # Create empty heading to preserve style
+                    add_formatted_text(para, heading_text)
                 elif line.startswith('## '):
-                    # Heading 2
-                    doc.add_heading(line[3:], level=2)
+                    heading_text = line[3:].strip()
+                    para = doc.add_heading('', level=2)
+                    add_formatted_text(para, heading_text)
                 elif line.startswith('### '):
-                    # Heading 3
-                    doc.add_heading(line[4:], level=3)
-                elif line.startswith('- ') or line.startswith('* '):
-                    # Bullet list
-                    para = doc.add_paragraph(line[2:], style='List Bullet')
-                elif line.startswith('1. ') or line.startswith('1) '):
-                    # Numbered list
-                    para = doc.add_paragraph(line[3:], style='List Number')
+                    heading_text = line[4:].strip()
+                    para = doc.add_heading('', level=3)
+                    add_formatted_text(para, heading_text)
+                elif line.startswith('#### '):
+                    heading_text = line[5:].strip()
+                    para = doc.add_heading('', level=4)
+                    add_formatted_text(para, heading_text)
+                elif line.startswith('##### '):
+                    heading_text = line[6:].strip()
+                    para = doc.add_heading('', level=5)
+                    add_formatted_text(para, heading_text)
+                elif line.startswith('###### '):
+                    heading_text = line[7:].strip()
+                    para = doc.add_heading('', level=6)
+                    add_formatted_text(para, heading_text)
+                # Handle bullet lists
+                elif line.startswith('- ') or line.startswith('* ') or line.startswith('• '):
+                    list_text = line[2:].strip()
+                    para = doc.add_paragraph(style='List Bullet')
+                    add_formatted_text(para, list_text)
+                # Handle numbered lists
+                elif re.match(r'^\d+[\.\)]\s+', line):
+                    match = re.match(r'^(\d+)[\.\)]\s+(.*)$', line)
+                    if match:
+                        list_text = match.group(2)
+                        para = doc.add_paragraph(style='List Number')
+                        add_formatted_text(para, list_text)
                 else:
                     # Regular paragraph
                     para = doc.add_paragraph()
-                    # Handle bold and italic
-                    text = line
-                    # Simple bold/italic handling
-                    parts = text.split('**')
-                    for i, part in enumerate(parts):
-                        if i % 2 == 0:
-                            # Regular text
-                            para.add_run(part)
-                        else:
-                            # Bold text
-                            para.add_run(part).bold = True
-                    
-                    # If no bold markers, check for italic
-                    if '**' not in text:
-                        parts = text.split('*')
-                        for i, part in enumerate(parts):
-                            if i % 2 == 0:
-                                para.add_run(part)
-                            else:
-                                para.add_run(part).italic = True
+                    add_formatted_text(para, line)
+                
+                i += 1
             
             # Save document
             doc.save(path)

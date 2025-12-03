@@ -666,6 +666,15 @@ class ApiService {
   static async extractThemesFromExtension(extensionId) {
     return this.post(`/api/extensions/${extensionId}/extract-themes`);
   }
+
+  // Market Data API
+  static async getPriceData(asset, assetType = null, days = 30) {
+    const params = new URLSearchParams({ asset, days: days.toString() });
+    if (assetType) {
+      params.append('asset_type', assetType);
+    }
+    return this.get(`/api/market-data/price?${params.toString()}`);
+  }
 }
 
 export { ApiService };

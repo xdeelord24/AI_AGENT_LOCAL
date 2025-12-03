@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   AreaChart,
   Area,
@@ -9,48 +9,96 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
-
-// Deterministic random number generator based on seed
-const seededRandom = (seed) => {
-  let value = seed;
-  return () => {
-    value = (value * 9301 + 49297) % 233280;
-    return value / 233280;
-  };
-};
+import { ApiService } from '../services/api';
 
 const PriceChart = ({ priceData, assetName, assetType = 'crypto' }) => {
-  // Generate sample historical data if not provided
+  const [realHistoricalData, setRealHistoricalData] = useState(null);
+  const [isLoadingHistorical, setIsLoadingHistorical] = useState(false);
+
+  // Fetch real historical data if we have current price but no historical data
+  useEffect(() => {
+    const fetchRealData = async () => {
+      // Only fetch if we have current price but no historical data
+      const hasCurrentPrice = priceData?.currentPrice || priceData?.price;
+      const hasHistoricalData = priceData?.historicalData && Array.isArray(priceData.historicalData) && priceData.historicalData.length > 0;
+      
+      if (hasCurrentPrice && !hasHistoricalData && !isLoadingHistorical) {
+        // Determine asset identifier from assetName or priceData
+        const assetId = priceData?.assetName?.toLowerCase() || assetName?.toLowerCase();
+        if (assetId) {
+          setIsLoadingHistorical(true);
+          try {
+            const data = await ApiService.getPriceData(
+              assetId,
+              priceData?.assetType || assetType,
+              30
+            );
+            if (data?.historicalData && data.historicalData.length > 0) {
+              setRealHistoricalData(data.historicalData);
+            }
+          } catch (error) {
+            console.warn('Failed to fetch real historical data:', error);
+            // Continue with generated data as fallback
+          } finally {
+            setIsLoadingHistorical(false);
+          }
+        }
+      }
+    };
+
+    fetchRealData();
+  }, [priceData, assetName, assetType, isLoadingHistorical]);
+
+  // Use real historical data if available, otherwise use provided data or generate
   const chartData = useMemo(() => {
+    // Priority 1: Real historical data from API
+    if (realHistoricalData && realHistoricalData.length > 0) {
+      return realHistoricalData.map(item => ({
+        date: item.date || new Date(item.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        price: item.price,
+        timestamp: item.timestamp
+      }));
+    }
+    
+    // Priority 2: Historical data from priceData
+    if (priceData?.historicalData && Array.isArray(priceData.historicalData) && priceData.historicalData.length > 0) {
+      return priceData.historicalData.map(item => ({
+        date: item.date || new Date(item.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        price: item.price,
+        timestamp: item.timestamp
+      }));
+    }
+    
+    // Priority 3: Array of price data
     if (priceData && Array.isArray(priceData) && priceData.length > 0) {
       return priceData;
     }
     
-    // Generate sample data based on current price
+    // Priority 4: Generate sample data based on current price (fallback)
     const currentPrice = priceData?.currentPrice || priceData?.price || 0;
     if (!currentPrice || currentPrice === 0) return null;
     
-    // Use timestamp from price_data if available, otherwise use current time
-    // This ensures the same historical data is generated when restoring chats
     const baseTimestamp = priceData?.timestamp 
       ? new Date(priceData.timestamp).getTime() 
       : Date.now();
     const baseDate = new Date(baseTimestamp);
     
-    // Create a deterministic seed from timestamp and price
-    // This ensures the same data is generated for the same timestamp+price combination
-    const seed = Math.floor(baseTimestamp / 1000) + Math.floor(currentPrice * 100);
-    const random = seededRandom(seed);
-    
     const data = [];
-    const volatility = assetType === 'forex' ? 0.02 : 0.05; // Lower volatility for forex
+    const volatility = assetType === 'forex' ? 0.02 : 0.05;
+    
+    // Generate deterministic data based on timestamp and price
+    const seed = Math.floor(baseTimestamp / 1000) + Math.floor(currentPrice * 100);
+    let randomValue = seed;
+    const seededRandom = () => {
+      randomValue = (randomValue * 9301 + 49297) % 233280;
+      return randomValue / 233280;
+    };
     
     for (let i = 29; i >= 0; i--) {
       const date = new Date(baseDate);
       date.setDate(date.getDate() - i);
       
-      // Generate deterministic price movement based on seed
-      const randomChange = (random() - 0.5) * volatility;
+      const randomChange = (seededRandom() - 0.5) * volatility;
       const price = currentPrice * (1 + randomChange * (30 - i) / 30);
       
       data.push({
@@ -61,7 +109,7 @@ const PriceChart = ({ priceData, assetName, assetType = 'crypto' }) => {
     }
     
     return data;
-  }, [priceData, assetType]);
+  }, [priceData, assetType, realHistoricalData]);
 
   if (!chartData || chartData.length === 0) {
     return null;

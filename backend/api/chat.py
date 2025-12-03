@@ -615,7 +615,7 @@ async def send_message_stream(
                         )
                         
                         # Extract price data for charts if this is a price query
-                        price_data = ai_service._extract_price_data_for_chart(
+                        price_data = await ai_service._extract_price_data_for_chart(
                             current_message, 
                             cleaned_response or accumulated_response_round, 
                             context_payload
@@ -1182,7 +1182,7 @@ async def send_message_stream(
                     working_history.append({"role": "assistant", "content": round_response})
                     
                     # Extract price data from response for non-Ollama providers
-                    non_ollama_price_data = response.get('price_data') or ai_service._extract_price_data_for_chart(
+                    non_ollama_price_data = response.get('price_data') or await ai_service._extract_price_data_for_chart(
                         current_message, 
                         round_response, 
                         context_payload

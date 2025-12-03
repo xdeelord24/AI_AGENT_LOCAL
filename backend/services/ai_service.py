@@ -1771,9 +1771,10 @@ class AIService:
         
         return response
     
-    def _extract_price_data_for_chart(self, message: str, response: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract price data from response and search results for chart display"""
+    async def _extract_price_data_for_chart(self, message: str, response: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Extract price data and fetch real-time data from API for chart display"""
         import re
+        import aiohttp
         
         message_lower = message.lower()
         response_lower = response.lower()
@@ -1785,9 +1786,9 @@ class AIService:
         if not is_price_query:
             return None
         
-        # Determine asset type and name
+        # Determine asset type and identifier
         asset_type = 'crypto'
-        asset_name = None
+        asset_identifier = None
         
         # Check for crypto
         crypto_patterns = {
@@ -1806,75 +1807,144 @@ class AIService:
         
         for name, patterns in crypto_patterns.items():
             if any(pattern in message_lower or pattern in response_lower for pattern in patterns):
-                asset_name = name.capitalize()
+                asset_identifier = name  # Use lowercase for API
                 break
         
         # Check for forex
         forex_patterns = {
-            'EUR/USD': ['eur/usd', 'eur usd', 'euro'],
-            'GBP/USD': ['gbp/usd', 'gbp usd', 'pound'],
-            'USD/JPY': ['usd/jpy', 'usd jpy', 'yen'],
-            'USD/CHF': ['usd/chf', 'usd chf', 'swiss franc'],
-            'AUD/USD': ['aud/usd', 'aud usd', 'australian dollar'],
-            'USD/CAD': ['usd/cad', 'usd cad', 'canadian dollar'],
+            'eur/usd': ['eur/usd', 'eur usd', 'euro'],
+            'gbp/usd': ['gbp/usd', 'gbp usd', 'pound'],
+            'usd/jpy': ['usd/jpy', 'usd jpy', 'yen'],
+            'usd/chf': ['usd/chf', 'usd chf', 'swiss franc'],
+            'aud/usd': ['aud/usd', 'aud usd', 'australian dollar'],
+            'usd/cad': ['usd/cad', 'usd cad', 'canadian dollar'],
         }
         
         for pair, patterns in forex_patterns.items():
             if any(pattern in message_lower or pattern in response_lower for pattern in patterns):
-                asset_name = pair
+                asset_identifier = pair
                 asset_type = 'forex'
                 break
         
-        # Extract current price from response
+        # If we found an asset, fetch real-time data from API
+        if asset_identifier:
+            try:
+                # Import the market data functions directly instead of making HTTP calls
+                # This avoids circular dependencies and is more efficient
+                from backend.api.market_data import fetch_crypto_price, fetch_forex_rate
+                
+                if asset_type == 'crypto':
+                    # Map asset identifier to coin ID
+                    crypto_id_map = {
+                        'bitcoin': 'bitcoin',
+                        'btc': 'bitcoin',
+                        'ethereum': 'ethereum',
+                        'eth': 'ethereum',
+                        'cardano': 'cardano',
+                        'ada': 'cardano',
+                        'solana': 'solana',
+                        'sol': 'solana',
+                        'polkadot': 'polkadot',
+                        'dot': 'polkadot',
+                        'chainlink': 'chainlink',
+                        'link': 'chainlink',
+                        'avalanche': 'avalanche',
+                        'avax': 'avalanche',
+                        'polygon': 'polygon',
+                        'matic': 'polygon',
+                        'dogecoin': 'dogecoin',
+                        'doge': 'dogecoin',
+                        'litecoin': 'litecoin',
+                        'ltc': 'litecoin',
+                        'ripple': 'ripple',
+                        'xrp': 'ripple',
+                    }
+                    coin_id = crypto_id_map.get(asset_identifier, asset_identifier)
+                    price_data = await fetch_crypto_price(coin_id, days=30)
+                elif asset_type == 'forex':
+                    # Parse forex pair
+                    forex_map = {
+                        'eur/usd': {'base': 'EUR', 'target': 'USD'},
+                        'gbp/usd': {'base': 'GBP', 'target': 'USD'},
+                        'usd/jpy': {'base': 'USD', 'target': 'JPY'},
+                        'usd/chf': {'base': 'USD', 'target': 'CHF'},
+                        'aud/usd': {'base': 'AUD', 'target': 'USD'},
+                        'usd/cad': {'base': 'USD', 'target': 'CAD'},
+                    }
+                    pair_info = forex_map.get(asset_identifier)
+                    if pair_info:
+                        price_data = await fetch_forex_rate(pair_info['base'], pair_info['target'], days=30)
+                    else:
+                        raise ValueError(f"Unsupported forex pair: {asset_identifier}")
+                
+                if price_data:
+                    # Format historical data for chart component
+                    historical_data = price_data.get('historicalData', [])
+                    if historical_data:
+                        # Ensure data is in the format expected by PriceChart
+                        formatted_data = []
+                        for item in historical_data:
+                            formatted_data.append({
+                                'date': item.get('date', ''),
+                                'price': item.get('price', 0),
+                                'timestamp': item.get('timestamp', 0)
+                            })
+                        price_data['historicalData'] = formatted_data
+                    
+                    return price_data
+            except ImportError:
+                logger.warning("Market data API not available, falling back to text extraction")
+            except Exception as e:
+                logger.error(f"Error fetching real-time price data: {e}", exc_info=True)
+                # Fallback to extracting from response text
+                pass
+        
+        # Fallback: Extract current price from response if API fails
         current_price = None
+        asset_name = None
         
         # Try to extract price from response
         # For crypto: $XX,XXX.XX format - look for the largest/most recent price
         crypto_price_matches = re.findall(r'\$[\d,]+\.?\d*', response)
         if crypto_price_matches:
-            # Try all matches and use the largest (most likely current price)
             prices = []
             for match in crypto_price_matches:
                 try:
                     price_str = match.replace('$', '').replace(',', '')
                     price_val = float(price_str)
-                    # Reasonable crypto price range
                     if 100 < price_val < 200000:
                         prices.append(price_val)
                 except:
                     pass
             if prices:
-                current_price = max(prices)  # Use highest price found
+                current_price = max(prices)
+                if asset_identifier:
+                    asset_name = asset_identifier.capitalize()
         
-        # For forex: X.XXXX format - look for rates near currency mentions
-        if not current_price and asset_type == 'forex':
-            # Look for rates near currency pair mentions
+        # For forex: X.XXXX format
+        if not current_price and asset_type == 'forex' and asset_identifier:
             forex_rate_patterns = [
-                r'\b(\d+\.\d{2,5})\b',  # General rate pattern
-                rf'\b{asset_name.split("/")[0]}\s*[/-]?\s*{asset_name.split("/")[1]}\s*[:=]?\s*(\d+\.\d{{2,5}})\b',  # EUR/USD: 1.05
-                rf'\b(\d+\.\d{{2,5}})\s*{asset_name.split("/")[0]}\s*[/-]?\s*{asset_name.split("/")[1]}\b',  # 1.05 EUR/USD
+                r'\b(\d+\.\d{2,5})\b',
             ]
             for pattern in forex_rate_patterns:
                 forex_rate_matches = re.findall(pattern, response, re.IGNORECASE)
                 if forex_rate_matches:
-                    # Extract rate values
                     rates = []
                     for match in forex_rate_matches:
                         rate_str = match if isinstance(match, str) else (match[0] if isinstance(match, tuple) else str(match))
                         try:
                             rate_val = float(rate_str)
-                            # Reasonable forex rate range
                             if 0.1 < rate_val < 1000:
                                 rates.append(rate_val)
                         except:
                             pass
                     if rates:
-                        # Use median or most common rate
                         rates.sort()
                         current_price = rates[len(rates) // 2] if len(rates) > 1 else rates[0]
+                        asset_name = asset_identifier.upper()
                         break
         
-        # If we found a price and asset name, return price data
+        # Return fallback data if we found a price
         if current_price and asset_name:
             return {
                 'currentPrice': current_price,
@@ -2872,7 +2942,7 @@ class AIService:
             result["web_references"] = metadata["web_references"]
         
         # Extract price data for charts if this is a price query
-        price_data = self._extract_price_data_for_chart(message, cleaned_response, context)
+        price_data = await self._extract_price_data_for_chart(message, cleaned_response, context)
         if price_data:
             result["price_data"] = price_data
         
