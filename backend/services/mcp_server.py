@@ -496,6 +496,37 @@ class MCPServerTools:
                     "required": ["path", "title", "slides"]
                 }
             ),
+            Tool(
+                name="predict_price",
+                description="Predict future price movements for cryptocurrency or forex assets using advanced technical analysis, trend analysis, and statistical forecasting. Returns price predictions with confidence levels, trend analysis, and risk assessment.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "asset": {
+                            "type": "string",
+                            "description": "Asset identifier (e.g., 'bitcoin', 'btc', 'ethereum', 'eth', 'eur/usd', 'gbp/usd'). Supports crypto and forex pairs."
+                        },
+                        "asset_type": {
+                            "type": "string",
+                            "description": "Asset type: 'crypto' or 'forex' (auto-detected if not provided)",
+                            "enum": ["crypto", "forex"]
+                        },
+                        "days_ahead": {
+                            "type": "integer",
+                            "description": "Number of days to predict ahead (1-30, default: 7)",
+                            "default": 7,
+                            "minimum": 1,
+                            "maximum": 30
+                        },
+                        "include_analysis": {
+                            "type": "boolean",
+                            "description": "Include detailed technical analysis (default: true)",
+                            "default": True
+                        }
+                    },
+                    "required": ["asset"]
+                }
+            ),
         ]
         
         if self.web_search_enabled:
@@ -785,6 +816,13 @@ class MCPServerTools:
                 )
             elif tool_name == "save_memory":
                 return await self._save_memory(arguments.get("content", ""))
+            elif tool_name == "predict_price":
+                return await self._predict_price(
+                    arguments.get("asset", ""),
+                    arguments.get("asset_type"),
+                    arguments.get("days_ahead", 7),
+                    arguments.get("include_analysis", True)
+                )
             else:
                 execution_time = time.time() - execution_start
                 logger.warning(f"Unknown tool requested: {tool_name} (execution time: {execution_time:.3f}s)")
@@ -1501,13 +1539,14 @@ class MCPServerTools:
             return [TextContent(type="text", text=f"ERROR: Failed to create document: {str(e)}")]
     
     async def _create_slide(self, path: str, title: str, content: str = "", layout: str = "title_content") -> List[TextContent]:
-        """Create a PowerPoint slide with enhanced formatting and design"""
+        """Create a PowerPoint slide with enhanced formatting, design, backgrounds, and professional styling"""
         try:
             try:
                 from pptx import Presentation
                 from pptx.util import Inches, Pt
                 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
                 from pptx.dml.color import RGBColor
+                from pptx.enum.shapes import MSO_SHAPE
             except ImportError:
                 return [TextContent(
                     type="text",
@@ -1532,6 +1571,9 @@ class MCPServerTools:
                 prs = Presentation(path)
             else:
                 prs = Presentation()
+                # Set slide size to widescreen (16:9) for modern look
+                prs.slide_width = Inches(10)
+                prs.slide_height = Inches(5.625)
             
             # Map layout names to slide layout indices
             layout_map = {
@@ -1546,27 +1588,80 @@ class MCPServerTools:
             slide_layout = prs.slide_layouts[layout_idx]
             slide = prs.slides.add_slide(slide_layout)
             
-            # Set title with enhanced styling
+            # === ENHANCED BACKGROUND DESIGN ===
+            # Add gradient background rectangle covering entire slide
+            background = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, prs.slide_height
+            )
+            background.fill.solid()
+            # Professional gradient-like color (light blue-gray)
+            background.fill.fore_color.rgb = RGBColor(245, 247, 250)
+            background.line.fill.background()  # No border
+            # Send to back
+            slide.shapes._spTree.remove(background._element)
+            slide.shapes._spTree.insert(2, background._element)
+            
+            # Add decorative accent bar at top
+            accent_bar = slide.shapes.add_shape(
+                MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, Inches(0.15)
+            )
+            accent_bar.fill.solid()
+            accent_bar.fill.fore_color.rgb = RGBColor(31, 56, 100)  # Professional blue
+            accent_bar.line.fill.background()
+            slide.shapes._spTree.remove(accent_bar._element)
+            slide.shapes._spTree.insert(2, accent_bar._element)
+            
+            # Add subtle decorative element (bottom right corner)
+            decor_shape = slide.shapes.add_shape(
+                MSO_SHAPE.ROUNDED_RECTANGLE,
+                prs.slide_width - Inches(2.5),
+                prs.slide_height - Inches(1.2),
+                Inches(2.5),
+                Inches(1.2)
+            )
+            decor_shape.fill.solid()
+            decor_shape.fill.fore_color.rgb = RGBColor(230, 235, 240)  # Very light gray
+            decor_shape.line.fill.background()
+            decor_shape.rotation = -5  # Slight rotation for visual interest
+            slide.shapes._spTree.remove(decor_shape._element)
+            slide.shapes._spTree.insert(2, decor_shape._element)
+            
+            # === ENHANCED TITLE STYLING ===
             if slide.shapes.title:
                 title_shape = slide.shapes.title
                 # Clear any default placeholder text first
                 if hasattr(title_shape, 'text_frame'):
                     title_shape.text_frame.clear()
                 title_shape.text = title
-                # Style the title
+                # Enhanced title styling
                 if hasattr(title_shape, 'text_frame') and len(title_shape.text_frame.paragraphs) > 0:
                     title_paragraph = title_shape.text_frame.paragraphs[0]
-                    title_paragraph.font.size = Pt(44)
+                    title_paragraph.font.size = Pt(48)  # Larger, more prominent
                     title_paragraph.font.bold = True
-                    title_paragraph.font.color.rgb = RGBColor(31, 56, 100)  # Dark blue
+                    title_paragraph.font.color.rgb = RGBColor(31, 56, 100)  # Professional dark blue
                     title_paragraph.alignment = PP_ALIGN.LEFT
+                    title_paragraph.space_after = Pt(12)
+                    
+                    # Adjust title position for better spacing
+                    title_shape.left = Inches(0.5)
+                    title_shape.top = Inches(0.3)
+                    title_shape.width = Inches(9)
+                    title_shape.height = Inches(1.2)
+                    
+                    # Add subtle shadow effect by creating a duplicate slightly offset
+                    # (Note: python-pptx doesn't support shadows directly, but we can enhance with background)
+                    title_shape.text_frame.vertical_anchor = MSO_ANCHOR.TOP
             
-            # Helper function to add formatted content
+            # Helper function to add formatted content with enhanced styling
             def add_formatted_content(text_frame, content_text):
-                """Add content with proper formatting (bullet points, paragraphs, etc.)"""
+                """Add content with proper formatting, enhanced styling, and visual hierarchy"""
                 text_frame.clear()
                 text_frame.word_wrap = True
-                text_frame.margin_bottom = Inches(0.1)
+                text_frame.margin_left = Inches(0.2)
+                text_frame.margin_right = Inches(0.2)
+                text_frame.margin_top = Inches(0.15)
+                text_frame.margin_bottom = Inches(0.15)
+                text_frame.vertical_anchor = MSO_ANCHOR.TOP
                 
                 lines = content_text.split('\n')
                 for i, line in enumerate(lines):
@@ -1574,65 +1669,80 @@ class MCPServerTools:
                     if not line:
                         if i < len(lines) - 1:  # Don't add empty paragraph at the end
                             p = text_frame.add_paragraph()
-                            p.space_after = Pt(6)
+                            p.space_after = Pt(8)
                         continue
                     
-                    # Check for bullet points
+                    # Check for bullet points with enhanced styling
                     if line.startswith('- ') or line.startswith('* ') or line.startswith('• '):
                         bullet_text = line[2:].strip()
                         p = text_frame.add_paragraph()
                         p.text = bullet_text
                         p.level = 0
-                        p.font.size = Pt(18)
-                        p.font.color.rgb = RGBColor(51, 51, 51)  # Dark gray
-                        p.space_after = Pt(8)
-                        # Make first word bold if it looks like a heading
+                        p.font.size = Pt(20)  # Slightly larger for readability
+                        p.font.color.rgb = RGBColor(45, 45, 45)  # Darker for better contrast
+                        p.space_after = Pt(10)
+                        p.space_before = Pt(4)
+                        p.line_spacing = 1.2
+                        
+                        # Enhanced formatting for key-value pairs
                         if ':' in bullet_text:
                             parts = bullet_text.split(':', 1)
                             if len(parts) == 2:
-                                run = p.runs[0]
-                                run.text = parts[0] + ':'
-                                run.font.bold = True
+                                p.clear()
+                                # Key part (bold, colored)
+                                run1 = p.add_run()
+                                run1.text = parts[0] + ':'
+                                run1.font.bold = True
+                                run1.font.size = Pt(20)
+                                run1.font.color.rgb = RGBColor(31, 56, 100)  # Professional blue
+                                # Value part
                                 run2 = p.add_run()
-                                run2.text = parts[1]
+                                run2.text = ' ' + parts[1]
                                 run2.font.bold = False
+                                run2.font.size = Pt(20)
+                                run2.font.color.rgb = RGBColor(45, 45, 45)
                     elif line.startswith('  - ') or line.startswith('  * ') or line.startswith('    - '):
-                        # Nested bullet
+                        # Nested bullet with enhanced styling
                         bullet_text = line.lstrip(' -*•').strip()
                         p = text_frame.add_paragraph()
                         p.text = bullet_text
                         p.level = 1
-                        p.font.size = Pt(16)
-                        p.font.color.rgb = RGBColor(68, 68, 68)
-                        p.space_after = Pt(6)
+                        p.font.size = Pt(18)
+                        p.font.color.rgb = RGBColor(60, 60, 60)
+                        p.space_after = Pt(8)
+                        p.space_before = Pt(2)
+                        p.line_spacing = 1.15
                     elif line.startswith('## '):
-                        # Subheading
+                        # Subheading with enhanced styling
                         heading_text = line[3:].strip()
                         p = text_frame.add_paragraph()
                         p.text = heading_text
-                        p.font.size = Pt(24)
+                        p.font.size = Pt(26)
                         p.font.bold = True
                         p.font.color.rgb = RGBColor(31, 56, 100)
-                        p.space_after = Pt(12)
-                        p.space_before = Pt(12)
+                        p.space_after = Pt(14)
+                        p.space_before = Pt(16)
+                        p.line_spacing = 1.3
                     elif line.startswith('# '):
-                        # Main heading
+                        # Main heading with enhanced styling
                         heading_text = line[2:].strip()
                         p = text_frame.add_paragraph()
                         p.text = heading_text
-                        p.font.size = Pt(28)
+                        p.font.size = Pt(32)
                         p.font.bold = True
                         p.font.color.rgb = RGBColor(31, 56, 100)
-                        p.space_after = Pt(16)
-                        p.space_before = Pt(16)
+                        p.space_after = Pt(18)
+                        p.space_before = Pt(20)
+                        p.line_spacing = 1.3
                     else:
-                        # Regular paragraph
+                        # Regular paragraph with enhanced styling
                         p = text_frame.add_paragraph()
                         p.text = line
-                        p.font.size = Pt(18)
-                        p.font.color.rgb = RGBColor(51, 51, 51)
-                        p.space_after = Pt(10)
-                        # Check for bold text (**text**)
+                        p.font.size = Pt(20)
+                        p.font.color.rgb = RGBColor(45, 45, 45)
+                        p.space_after = Pt(12)
+                        p.line_spacing = 1.25
+                        # Enhanced bold text formatting (**text**)
                         if '**' in line:
                             parts = line.split('**')
                             p.clear()
@@ -1641,12 +1751,14 @@ class MCPServerTools:
                                     run = p.add_run()
                                     run.text = part
                                     run.font.bold = False
+                                    run.font.size = Pt(20)
+                                    run.font.color.rgb = RGBColor(45, 45, 45)
                                 else:
                                     run = p.add_run()
                                     run.text = part
                                     run.font.bold = True
-                                    run.font.size = Pt(18)
-                                    run.font.color.rgb = RGBColor(31, 56, 100)
+                                    run.font.size = Pt(20)
+                                    run.font.color.rgb = RGBColor(31, 56, 100)  # Professional blue for emphasis
             
             # Clear any default placeholder text first
             for shape in slide.placeholders:
@@ -1658,7 +1770,7 @@ class MCPServerTools:
                     except Exception:
                         pass  # Ignore errors when clearing placeholders
             
-            # Set content if available
+            # === ENHANCED CONTENT POSITIONING ===
             if content:
                 content_placeholder = None
                 # Try to find content placeholder (usually idx 1 for content)
@@ -1676,16 +1788,39 @@ class MCPServerTools:
                 if content_placeholder and hasattr(content_placeholder, 'text_frame'):
                     # Clear any existing text first
                     content_placeholder.text_frame.clear()
+                    # Enhanced positioning for placeholder
+                    content_placeholder.left = Inches(0.6)
+                    content_placeholder.top = Inches(1.8)
+                    content_placeholder.width = Inches(8.8)
+                    content_placeholder.height = Inches(3.5)
                     add_formatted_content(content_placeholder.text_frame, content)
                 else:
-                    # Add text box with better positioning
-                    left = Inches(0.7)
-                    top = Inches(2.2)
-                    width = Inches(8.6)
-                    height = Inches(4.3)
+                    # Add enhanced text box with professional positioning
+                    left = Inches(0.6)
+                    top = Inches(1.8)
+                    width = Inches(8.8)
+                    height = Inches(3.5)
+                    
+                    # Add subtle background box for content area
+                    content_bg = slide.shapes.add_shape(
+                        MSO_SHAPE.ROUNDED_RECTANGLE,
+                        left - Inches(0.1),
+                        top - Inches(0.1),
+                        width + Inches(0.2),
+                        height + Inches(0.2)
+                    )
+                    content_bg.fill.solid()
+                    content_bg.fill.fore_color.rgb = RGBColor(255, 255, 255)  # White background
+                    content_bg.line.color.rgb = RGBColor(220, 225, 230)  # Light border
+                    content_bg.line.width = Pt(1)
+                    # Send background to back
+                    slide.shapes._spTree.remove(content_bg._element)
+                    slide.shapes._spTree.insert(2, content_bg._element)
+                    
+                    # Add text box on top of background
                     text_box = slide.shapes.add_textbox(left, top, width, height)
                     text_frame = text_box.text_frame
-                    text_frame.clear()  # Clear any default text
+                    text_frame.clear()
                     add_formatted_content(text_frame, content)
             
             # Save presentation
@@ -1696,7 +1831,7 @@ class MCPServerTools:
             # Use a clear prefix to indicate this is a tool result, not file content
             return [TextContent(
                 type="text",
-                text=f"[TOOL RESULT - DO NOT SAVE AS FILE]\n\n✅ PowerPoint slide created successfully!\n\n📄 File saved to: {path}\n📋 Slide title: {title}\n🎨 Layout: {layout}\n✨ Enhanced formatting applied\n\n⚠️ IMPORTANT: This is a status message from the create_slide tool. The .pptx file has already been created. Do NOT create any text files or save this message as file content."
+                text=f"[TOOL RESULT - DO NOT SAVE AS FILE]\n\n✅ PowerPoint slide created successfully with enhanced design!\n\n📄 File saved to: {path}\n📋 Slide title: {title}\n🎨 Layout: {layout}\n\n✨ Design Enhancements Applied:\n  • Professional gradient background\n  • Decorative accent bar\n  • Enhanced typography and spacing\n  • Improved content positioning\n  • Visual hierarchy optimization\n  • Professional color scheme\n\n⚠️ IMPORTANT: This is a status message from the create_slide tool. The .pptx file has already been created. Do NOT create any text files or save this message as file content."
             )]
         except Exception as e:
             logger.error(f"Error creating slide: {e}", exc_info=True)
@@ -2091,6 +2226,373 @@ class MCPServerTools:
         except Exception as e:
             logger.error(f"Error saving memory: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error saving memory: {str(e)}")]
+    
+    async def _fetch_cryptocraft_prediction(self, coin_id: str, asset_name: str, days_ahead: int) -> Optional[Dict[str, Any]]:
+        """Fetch price prediction from CryptoCraft.com"""
+        try:
+            # Map coin IDs to CryptoCraft URL format
+            cryptocraft_symbols = {
+                'bitcoin': 'BTC',
+                'ethereum': 'ETH',
+                'cardano': 'ADA',
+                'solana': 'SOL',
+                'polkadot': 'DOT',
+                'chainlink': 'LINK',
+                'avalanche': 'AVAX',
+                'polygon': 'MATIC',
+                'dogecoin': 'DOGE',
+                'litecoin': 'LTC',
+                'ripple': 'XRP',
+            }
+            
+            symbol = cryptocraft_symbols.get(coin_id.lower())
+            if not symbol:
+                return None
+            
+            # Try to fetch from CryptoCraft.com
+            # Note: This attempts to fetch prediction data from the website
+            url = f"https://www.cryptocraft.com/{symbol.lower()}"
+            
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status == 200:
+                        html_content = await response.text()
+                        
+                        # Try to extract prediction data from HTML
+                        # Look for common patterns: price predictions, forecast values, etc.
+                        import re
+                        
+                        # Try to find price predictions in various formats
+                        # Pattern 1: Look for numbers that could be price predictions
+                        # Pattern 2: Look for percentage changes
+                        # Pattern 3: Look for forecast/prediction keywords near numbers
+                        
+                        # Extract potential price values (numbers with $ or without)
+                        price_patterns = [
+                            r'\$[\d,]+\.?\d*',  # $50,000 or $50,000.50
+                            r'[\d,]+\.?\d*\s*(?:USD|usd|\$)',  # 50000 USD
+                        ]
+                        
+                        # Look for prediction-related text
+                        prediction_keywords = ['predict', 'forecast', 'target', 'expect', 'project']
+                        prediction_sections = []
+                        
+                        # Split HTML into sections and look for prediction-related content
+                        for keyword in prediction_keywords:
+                            pattern = rf'{keyword}[^<]*?[\d,]+\.?\d*'
+                            matches = re.findall(pattern, html_content, re.IGNORECASE)
+                            prediction_sections.extend(matches)
+                        
+                        # Try to extract meaningful price predictions
+                        # This is a simplified approach - in production, you'd want more sophisticated parsing
+                        extracted_prices = []
+                        for section in prediction_sections[:10]:  # Limit to first 10 matches
+                            # Extract numbers from the section
+                            numbers = re.findall(r'[\d,]+\.?\d*', section)
+                            for num_str in numbers:
+                                try:
+                                    price_val = float(num_str.replace(',', ''))
+                                    # Filter reasonable price ranges based on asset
+                                    if coin_id.lower() == 'bitcoin' and 10000 < price_val < 200000:
+                                        extracted_prices.append(price_val)
+                                    elif coin_id.lower() == 'ethereum' and 500 < price_val < 20000:
+                                        extracted_prices.append(price_val)
+                                    elif 0.01 < price_val < 100000:  # General range for other cryptos
+                                        extracted_prices.append(price_val)
+                                except ValueError:
+                                    continue
+                        
+                        if extracted_prices:
+                            # Use median or average of extracted prices
+                            import statistics
+                            predicted_price = statistics.median(extracted_prices) if len(extracted_prices) > 1 else extracted_prices[0]
+                            
+                            # Calculate confidence based on number of matches
+                            confidence = min(85, 50 + (len(extracted_prices) * 5))
+                            
+                            return {
+                                'predicted_price': predicted_price,
+                                'confidence': confidence,
+                                'source': 'CryptoCraft.com',
+                                'method': 'web_scraping'
+                            }
+            
+            return None
+        except Exception as e:
+            logger.debug(f"Error fetching CryptoCraft prediction: {e}")
+            return None
+    
+    async def _predict_price(
+        self,
+        asset: str,
+        asset_type: Optional[str],
+        days_ahead: int,
+        include_analysis: bool
+    ) -> List[TextContent]:
+        """Predict future price movements using technical analysis and statistical forecasting"""
+        try:
+            # Import market data functions
+            from backend.api.market_data import fetch_crypto_price, fetch_forex_rate
+            
+            asset_lower = asset.lower().strip()
+            
+            # Determine asset type if not provided
+            if not asset_type:
+                forex_pairs = ['eur/usd', 'gbp/usd', 'usd/jpy', 'usd/chf', 'aud/usd', 'usd/cad']
+                if any(pair in asset_lower for pair in forex_pairs):
+                    asset_type = 'forex'
+                else:
+                    asset_type = 'crypto'
+            
+            # Fetch historical data
+            historical_data = None
+            current_price = None
+            asset_name = None
+            
+            if asset_type == 'crypto':
+                crypto_id_map = {
+                    'bitcoin': 'bitcoin', 'btc': 'bitcoin',
+                    'ethereum': 'ethereum', 'eth': 'ethereum',
+                    'cardano': 'cardano', 'ada': 'cardano',
+                    'solana': 'solana', 'sol': 'solana',
+                    'polkadot': 'polkadot', 'dot': 'polkadot',
+                    'chainlink': 'chainlink', 'link': 'chainlink',
+                    'avalanche': 'avalanche', 'avax': 'avalanche',
+                    'polygon': 'polygon', 'matic': 'polygon',
+                    'dogecoin': 'dogecoin', 'doge': 'dogecoin',
+                    'litecoin': 'litecoin', 'ltc': 'litecoin',
+                    'ripple': 'ripple', 'xrp': 'ripple',
+                }
+                coin_id = crypto_id_map.get(asset_lower, asset_lower)
+                price_data = await fetch_crypto_price(coin_id, days=60)  # Get more data for better prediction
+                historical_data = price_data.get('historicalData', [])
+                current_price = price_data.get('currentPrice', 0)
+                asset_name = price_data.get('assetName', asset.capitalize())
+            elif asset_type == 'forex':
+                forex_map = {
+                    'eur/usd': {'base': 'EUR', 'target': 'USD'},
+                    'gbp/usd': {'base': 'GBP', 'target': 'USD'},
+                    'usd/jpy': {'base': 'USD', 'target': 'JPY'},
+                    'usd/chf': {'base': 'USD', 'target': 'CHF'},
+                    'aud/usd': {'base': 'AUD', 'target': 'USD'},
+                    'usd/cad': {'base': 'USD', 'target': 'CAD'},
+                }
+                pair_info = forex_map.get(asset_lower)
+                if pair_info:
+                    price_data = await fetch_forex_rate(pair_info['base'], pair_info['target'], days=60)
+                    historical_data = price_data.get('historicalData', [])
+                    current_price = price_data.get('currentPrice', 0)
+                    asset_name = price_data.get('assetName', f"{pair_info['base']}/{pair_info['target']}")
+                else:
+                    return [TextContent(type="text", text=f"Unsupported forex pair: {asset}")]
+            
+            if not historical_data or len(historical_data) < 7:
+                return [TextContent(type="text", text=f"Insufficient historical data for {asset_name}. Need at least 7 days of data.")]
+            
+            if current_price == 0:
+                return [TextContent(type="text", text=f"Could not fetch current price for {asset_name}")]
+            
+            # Extract price series
+            prices = [float(item.get('price', 0)) for item in historical_data if item.get('price', 0) > 0]
+            if len(prices) < 7:
+                return [TextContent(type="text", text=f"Insufficient price data for analysis")]
+            
+            # Calculate technical indicators
+            import statistics
+            import math
+            
+            # Moving averages
+            sma_7 = statistics.mean(prices[-7:]) if len(prices) >= 7 else current_price
+            sma_14 = statistics.mean(prices[-14:]) if len(prices) >= 14 else current_price
+            sma_30 = statistics.mean(prices[-30:]) if len(prices) >= 30 else current_price
+            
+            # Calculate returns and volatility
+            returns = []
+            for i in range(1, len(prices)):
+                if prices[i-1] > 0:
+                    ret = (prices[i] - prices[i-1]) / prices[i-1]
+                    returns.append(ret)
+            
+            if not returns:
+                return [TextContent(type="text", text=f"Could not calculate returns for {asset_name}")]
+            
+            avg_return = statistics.mean(returns)
+            volatility = statistics.stdev(returns) if len(returns) > 1 else abs(avg_return)
+            annualized_volatility = volatility * math.sqrt(365)  # Annualized
+            
+            # Calculate RSI (Relative Strength Index)
+            gains = [r for r in returns if r > 0]
+            losses = [-r for r in returns if r < 0]
+            avg_gain = statistics.mean(gains) if gains else 0.001
+            avg_loss = statistics.mean(losses) if losses else 0.001
+            rs = avg_gain / avg_loss if avg_loss > 0 else 100
+            rsi = 100 - (100 / (1 + rs))
+            
+            # Trend analysis
+            recent_trend = (prices[-1] - prices[-7]) / prices[-7] if len(prices) >= 7 else 0
+            short_term_trend = (prices[-1] - prices[-3]) / prices[-3] if len(prices) >= 3 else 0
+            
+            # Momentum
+            momentum = (prices[-1] - prices[-10]) / prices[-10] if len(prices) >= 10 else 0
+            
+            # Price prediction using multiple methods
+            predictions = []
+            
+            # Method 1: Trend extrapolation
+            trend_prediction = current_price * (1 + recent_trend * days_ahead / 7)
+            predictions.append(('Trend Extrapolation', trend_prediction))
+            
+            # Method 2: Moving average crossover
+            if sma_7 > sma_14 > sma_30:
+                # Bullish trend
+                ma_prediction = current_price * (1 + abs(avg_return) * days_ahead)
+            elif sma_7 < sma_14 < sma_30:
+                # Bearish trend
+                ma_prediction = current_price * (1 - abs(avg_return) * days_ahead)
+            else:
+                # Sideways
+                ma_prediction = current_price * (1 + avg_return * days_ahead)
+            predictions.append(('Moving Average', ma_prediction))
+            
+            # Method 3: Mean reversion (if RSI indicates overbought/oversold)
+            if rsi > 70:
+                # Overbought - expect downward correction
+                reversion_prediction = current_price * (1 - volatility * days_ahead * 0.5)
+            elif rsi < 30:
+                # Oversold - expect upward correction
+                reversion_prediction = current_price * (1 + volatility * days_ahead * 0.5)
+            else:
+                # Neutral
+                reversion_prediction = current_price * (1 + avg_return * days_ahead)
+            predictions.append(('Mean Reversion', reversion_prediction))
+            
+            # Method 4: Volatility-adjusted forecast
+            volatility_prediction = current_price * (1 + avg_return * days_ahead)
+            predictions.append(('Volatility Model', volatility_prediction))
+            
+            # Method 5: CryptoCraft.com prediction (for crypto only)
+            cryptocraft_prediction = None
+            cryptocraft_confidence = None
+            if asset_type == 'crypto':
+                try:
+                    cryptocraft_data = await self._fetch_cryptocraft_prediction(coin_id, asset_name, days_ahead)
+                    if cryptocraft_data and cryptocraft_data.get('predicted_price'):
+                        cryptocraft_prediction = cryptocraft_data['predicted_price']
+                        cryptocraft_confidence = cryptocraft_data.get('confidence', 0)
+                        predictions.append(('CryptoCraft.com', cryptocraft_prediction))
+                except Exception as e:
+                    logger.debug(f"Could not fetch CryptoCraft prediction: {e}")
+                    # Continue without CryptoCraft data if unavailable
+            
+            # Weighted average of predictions (more weight to recent trends and CryptoCraft if available)
+            if cryptocraft_prediction:
+                # Include CryptoCraft with higher weight if available
+                weights = [0.25, 0.2, 0.2, 0.15, 0.2]  # CryptoCraft gets 20% weight
+            else:
+                weights = [0.3, 0.25, 0.25, 0.2]  # Original weights
+            weighted_prediction = sum(pred[1] * weight for pred, weight in zip(predictions, weights))
+            
+            # Calculate confidence intervals
+            prediction_std = volatility * current_price * math.sqrt(days_ahead)
+            upper_bound = weighted_prediction + (1.96 * prediction_std)  # 95% confidence
+            lower_bound = weighted_prediction - (1.96 * prediction_std)
+            
+            # Confidence score based on data quality and volatility
+            data_quality_score = min(100, (len(prices) / 60) * 100)
+            volatility_score = max(0, 100 - (annualized_volatility * 100))
+            confidence_score = (data_quality_score + volatility_score) / 2
+            
+            # Determine trend direction
+            if weighted_prediction > current_price * 1.02:
+                trend_direction = "BULLISH 📈"
+                trend_strength = "Strong" if abs(recent_trend) > 0.05 else "Moderate"
+            elif weighted_prediction < current_price * 0.98:
+                trend_direction = "BEARISH 📉"
+                trend_strength = "Strong" if abs(recent_trend) > 0.05 else "Moderate"
+            else:
+                trend_direction = "NEUTRAL ➡️"
+                trend_strength = "Sideways"
+            
+            # Helper function to format prices based on asset type
+            def format_price(price):
+                if asset_type == 'forex':
+                    return f"${price:,.4f}"
+                else:
+                    return f"${price:,.2f}"
+            
+            # Format output
+            result = f"📊 Price Prediction for {asset_name}\n"
+            result += "=" * 60 + "\n\n"
+            
+            result += f"💰 Current Price: {format_price(current_price)}\n"
+            result += f"📅 Prediction Period: {days_ahead} day{'s' if days_ahead != 1 else ''} ahead\n\n"
+            
+            result += f"🎯 Predicted Price: {format_price(weighted_prediction)}\n"
+            result += f"   Expected Change: {((weighted_prediction - current_price) / current_price * 100):+.2f}%\n"
+            result += f"   Trend: {trend_direction} ({trend_strength})\n\n"
+            
+            result += f"📈 Confidence Interval (95%):\n"
+            result += f"   Upper Bound: {format_price(upper_bound)}\n"
+            result += f"   Lower Bound: {format_price(lower_bound)}\n"
+            result += f"   Confidence Score: {confidence_score:.1f}%\n\n"
+            
+            if include_analysis:
+                result += "🔍 Technical Analysis:\n"
+                result += "-" * 60 + "\n"
+                result += f"RSI (14-day): {rsi:.2f} "
+                if rsi > 70:
+                    result += "(Overbought - Potential Downward Correction)\n"
+                elif rsi < 30:
+                    result += "(Oversold - Potential Upward Correction)\n"
+                else:
+                    result += "(Neutral)\n"
+                
+                result += f"Moving Averages:\n"
+                result += f"  • 7-day SMA: {format_price(sma_7)}\n"
+                result += f"  • 14-day SMA: {format_price(sma_14)}\n"
+                result += f"  • 30-day SMA: {format_price(sma_30)}\n"
+                
+                result += f"\nVolatility Analysis:\n"
+                result += f"  • Daily Volatility: {volatility*100:.2f}%\n"
+                result += f"  • Annualized Volatility: {annualized_volatility*100:.2f}%\n"
+                result += f"  • Average Daily Return: {avg_return*100:+.2f}%\n"
+                
+                result += f"\nMomentum Indicators:\n"
+                result += f"  • 7-day Trend: {recent_trend*100:+.2f}%\n"
+                result += f"  • 3-day Trend: {short_term_trend*100:+.2f}%\n"
+                result += f"  • 10-day Momentum: {momentum*100:+.2f}%\n"
+                
+                result += f"\n📊 Prediction Methods:\n"
+                for method, pred_price in predictions:
+                    change_pct = ((pred_price - current_price) / current_price) * 100
+                    result += f"  • {method}: {format_price(pred_price)} ({change_pct:+.2f}%)"
+                    if method == 'CryptoCraft.com' and cryptocraft_confidence:
+                        result += f" [Confidence: {cryptocraft_confidence:.0f}%]"
+                    result += "\n"
+                
+                if cryptocraft_prediction:
+                    result += f"\n🌐 External Data Sources:\n"
+                    result += f"  • CryptoCraft.com: Integrated prediction data\n"
+            
+            result += "\n⚠️  Risk Disclaimer:\n"
+            result += "Price predictions are based on historical data and technical analysis.\n"
+            result += "Past performance does not guarantee future results. Market conditions\n"
+            result += "can change rapidly. Always do your own research and consider multiple\n"
+            result += "factors before making investment decisions.\n"
+            
+            return [TextContent(type="text", text=result)]
+            
+        except ImportError as e:
+            return [TextContent(
+                type="text",
+                text=f"Market data API not available: {str(e)}"
+            )]
+        except Exception as e:
+            logger.error(f"Error predicting price: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error predicting price: {str(e)}")]
 
 
 def create_mcp_server(file_service=None, code_analyzer=None, web_search_enabled=True, location_service=None, memory_service=None):

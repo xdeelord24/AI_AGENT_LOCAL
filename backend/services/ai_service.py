@@ -4511,15 +4511,47 @@ class AIService:
             ],
         }
 
-        timeout = aiohttp.ClientTimeout(total=self.request_timeout)
+        # Use a longer timeout for OpenRouter (can be slow for complex requests)
+        openrouter_timeout = max(self.request_timeout, 300)  # At least 5 minutes
+        timeout = aiohttp.ClientTimeout(
+            total=openrouter_timeout,
+            connect=30,  # 30 seconds to establish connection
+            sock_read=openrouter_timeout  # Timeout for reading response
+        )
         async with aiohttp.ClientSession(timeout=timeout) as session:
             try:
                 async with session.post(url, headers=headers, json=payload) as resp:
                     if resp.status != 200:
-                        text = await resp.text()
+                        try:
+                            text = await asyncio.wait_for(resp.text(), timeout=10)
+                        except asyncio.TimeoutError:
+                            text = f"Failed to read error response (timeout)"
                         raise Exception(f"OpenRouter API error (status {resp.status}): {text}")
-                    data = await resp.json()
+                    
+                    # Read JSON with timeout protection
+                    try:
+                        data = await asyncio.wait_for(resp.json(), timeout=openrouter_timeout - 30)
+                    except asyncio.TimeoutError:
+                        raise Exception(
+                            f"OpenRouter API response timeout after {openrouter_timeout}s. "
+                            f"The model may be processing a complex request. Try again or use a simpler prompt."
+                        )
+            except asyncio.TimeoutError as timeout_error:
+                raise Exception(
+                    f"OpenRouter API request timed out after {openrouter_timeout}s. "
+                    f"This can happen with complex requests or slow model responses. "
+                    f"Try again or use a simpler prompt."
+                ) from timeout_error
+            except aiohttp.ClientError as client_error:
+                raise Exception(f"OpenRouter API connection error: {client_error}") from client_error
             except Exception as error:
+                # Check if it's a timeout-related error
+                error_str = str(error).lower()
+                if 'timeout' in error_str or isinstance(error, (asyncio.TimeoutError, aiohttp.ServerTimeoutError)):
+                    raise Exception(
+                        f"OpenRouter API request timed out. "
+                        f"The model may be processing a complex request. Try again or use a simpler prompt."
+                    ) from error
                 raise Exception(f"OpenRouter API request failed: {error}") from error
 
         try:
