@@ -194,7 +194,7 @@ async def get_extensions(
                     vscode_extensions = vscode_result.get("extensions", [])
                     logger.info(f"Fetched {len(vscode_extensions)} VSCode extensions")
                     
-                    # Filter by category if needed
+                    # Filter by category if needed (client-side filtering as backup)
                     if category and category != "all" and category != "mcp_servers":
                         category_map = {
                             "themes": "Themes",
@@ -209,10 +209,20 @@ async def get_extensions(
                         }
                         category_name = category_map.get(category)
                         if category_name:
-                            vscode_extensions = [
+                            # Filter by exact category match
+                            filtered = [
                                 ext for ext in vscode_extensions
                                 if ext.get("category") == category_name
                             ]
+                            # If no exact matches, try filtering by tags
+                            if not filtered and vscode_service:
+                                possible_tags = vscode_service._get_category_tags_list(category)
+                                filtered = [
+                                    ext for ext in vscode_extensions
+                                    if any(tag.lower() in [t.lower() for t in ext.get("tags", [])] 
+                                          for tag in possible_tags)
+                                ]
+                            vscode_extensions = filtered
                             logger.info(f"Filtered to {len(vscode_extensions)} extensions in category {category_name}")
                     
                     all_extensions.extend(vscode_extensions)

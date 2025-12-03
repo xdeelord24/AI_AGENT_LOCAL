@@ -86,14 +86,29 @@ class VSCodeExtensionService:
             if query:
                 params["query"] = query
             
-            # Add category filter using tags
+            # Add category filter using search terms
+            # Open VSX search doesn't support tag: syntax, so we use keyword matching
             if category and category != "all":
-                tag = self._get_category_tag(category)
-                if tag:
+                # Map categories to search keywords
+                category_keywords = {
+                    "themes": "theme color",
+                    "icon_themes": "icon theme",
+                    "languages": "language programming",
+                    "grammars": "grammar syntax",
+                    "language_servers": "language server lsp",
+                    "snippets": "snippet code",
+                    "debuggers": "debugger debug",
+                    "formatters": "formatter format",
+                    "linters": "linter lint",
+                }
+                keywords = category_keywords.get(category)
+                if keywords:
                     if "query" in params:
-                        params["query"] = f"{params['query']} tag:{tag}"
+                        # Combine with existing query
+                        params["query"] = f"{params['query']} {keywords}"
                     else:
-                        params["query"] = f"tag:{tag}"
+                        params["query"] = keywords
+                    logger.debug(f"Filtering by category '{category}' with keywords '{keywords}'")
             
             # Make API request to Open VSX
             async with aiohttp.ClientSession() as session:
@@ -114,7 +129,24 @@ class VSCodeExtensionService:
                     extensions = []
                     extensions_data = data.get("extensions", [])
                     
-                    for ext in extensions_data:
+                    # If tags are missing from search results, fetch full details for better categorization
+                    # But only do this for a limited number to avoid too many API calls
+                    fetch_details_limit = 20 if category != "all" else 0
+                    
+                    for i, ext in enumerate(extensions_data):
+                        # If tags are missing and we're filtering by category, fetch full details
+                        if i < fetch_details_limit and not ext.get("tags") and category != "all":
+                            try:
+                                namespace = ext.get("namespace")
+                                name = ext.get("name")
+                                if namespace and name:
+                                    detail_url = f"https://open-vsx.org/api/{namespace}/{name}"
+                                    async with session.get(detail_url, timeout=aiohttp.ClientTimeout(total=10)) as detail_response:
+                                        if detail_response.status == 200:
+                                            ext = await detail_response.json()
+                            except Exception as e:
+                                logger.debug(f"Could not fetch details for {ext.get('namespace')}.{ext.get('name')}: {e}")
+                        
                         parsed = self._parse_openvsx_extension(ext)
                         if parsed:
                             extensions.append(parsed)
@@ -133,7 +165,8 @@ class VSCodeExtensionService:
             return {"extensions": [], "total": 0, "error": str(e)}
     
     def _get_category_tag(self, category: str) -> Optional[str]:
-        """Get Open VSX tag for a category"""
+        """Get Open VSX tag/category for filtering"""
+        # Map our category names to Open VSX tags/categories
         category_tag_map = {
             "themes": "theme",
             "icon_themes": "icon-theme",
@@ -146,6 +179,22 @@ class VSCodeExtensionService:
             "linters": "linter",
         }
         return category_tag_map.get(category)
+    
+    def _get_category_tags_list(self, category: str) -> List[str]:
+        """Get list of possible tags for a category (for better matching)"""
+        # Return multiple possible tags that might match a category
+        category_tags_map = {
+            "themes": ["theme", "color-theme", "color theme"],
+            "icon_themes": ["icon-theme", "icon theme", "icons"],
+            "languages": ["programming-language", "programming language", "language"],
+            "grammars": ["grammar", "textmate", "syntax"],
+            "language_servers": ["language-server", "lsp", "language-server-protocol"],
+            "snippets": ["snippet", "snippets", "code-snippets"],
+            "debuggers": ["debugger", "debug", "debugging"],
+            "formatters": ["formatter", "format", "formatting"],
+            "linters": ["linter", "lint", "linting"],
+        }
+        return category_tags_map.get(category, [])
     
     def _parse_openvsx_extension(self, ext_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Parse Open VSX extension data into our format"""
@@ -165,7 +214,7 @@ class VSCodeExtensionService:
             
             # Get categories/tags
             tags = ext_data.get("tags", [])
-            category = self._determine_category(tags)
+            category = self._determine_category(tags, ext_data)
             
             # Get statistics
             download_count = ext_data.get("downloadCount", 0)
@@ -289,28 +338,70 @@ class VSCodeExtensionService:
             logger.error(f"Error parsing extension: {e}", exc_info=True)
             return None
     
-    def _determine_category(self, tags: List[str]) -> str:
-        """Determine extension category from tags"""
+    def _determine_category(self, tags: List[str], ext_data: Dict[str, Any] = None) -> str:
+        """Determine extension category from tags and extension data"""
+        # Handle None or empty tags
+        if not tags:
+            tags = []
         tag_lower = [t.lower() for t in tags]
+        tag_str = " ".join(tag_lower)
         
-        if any(t in tag_lower for t in ["theme", "color-theme", "icon-theme"]):
-            if "icon" in " ".join(tag_lower):
-                return "Icon Themes"
+        # Also check extension name and description for category hints
+        name_lower = ""
+        desc_lower = ""
+        if ext_data:
+            name_lower = (ext_data.get("displayName") or ext_data.get("name") or "").lower()
+            desc_lower = (ext_data.get("description") or "").lower()
+            combined_text = f"{name_lower} {desc_lower} {tag_str}".lower()
+        else:
+            combined_text = tag_str
+        
+        # Check for icon themes first (more specific)
+        if any(t in combined_text for t in ["icon-theme", "icon theme", "icons", "icon pack"]):
+            return "Icon Themes"
+        # Check for color themes
+        elif any(t in combined_text for t in ["theme", "color-theme", "color theme", "colorization", "color scheme"]):
             return "Themes"
-        elif any(t in tag_lower for t in ["language", "programming-language"]):
-            return "Languages"
-        elif any(t in tag_lower for t in ["grammar", "textmate"]):
-            return "Grammars"
-        elif any(t in tag_lower for t in ["lsp", "language-server", "language-server-protocol"]):
+        # Check for language servers (LSP)
+        elif any(t in combined_text for t in ["language-server", "lsp", "language-server-protocol", "languageserver", "language server"]):
             return "Language Servers"
-        elif any(t in tag_lower for t in ["snippet", "snippets"]):
+        # Check for programming languages
+        elif any(t in combined_text for t in ["programming-language", "programming language", "language support", "syntax highlighting"]):
+            return "Languages"
+        # Check for grammars/textmate
+        elif any(t in combined_text for t in ["grammar", "textmate", "syntax grammar"]):
+            return "Grammars"
+        # Check for snippets
+        elif any(t in combined_text for t in ["snippet", "snippets", "code-snippets", "code snippet"]):
             return "Snippets"
-        elif any(t in tag_lower for t in ["debugger", "debug"]):
+        # Check for debuggers
+        elif any(t in combined_text for t in ["debugger", "debug", "debugging", "debug adapter"]):
             return "Debuggers"
-        elif any(t in tag_lower for t in ["formatter", "format"]):
+        # Check for formatters
+        elif any(t in combined_text for t in ["formatter", "format", "formatting", "beautifier", "code formatter"]):
             return "Formatters"
-        elif any(t in tag_lower for t in ["linter", "lint"]):
+        # Check for linters
+        elif any(t in combined_text for t in ["linter", "lint", "linting", "eslint", "pylint", "code linter"]):
             return "Linters"
+        # Check extension data for category if available (Open VSX)
+        elif ext_data:
+            categories = ext_data.get("categories", [])
+            if categories:
+                cat_lower = [c.lower() for c in categories]
+                if "theme" in cat_lower or "themes" in cat_lower:
+                    if "icon" in " ".join(cat_lower):
+                        return "Icon Themes"
+                    return "Themes"
+                elif "programming languages" in cat_lower or "languages" in cat_lower:
+                    return "Languages"
+                elif "snippets" in cat_lower:
+                    return "Snippets"
+                elif "debuggers" in cat_lower:
+                    return "Debuggers"
+                elif "formatters" in cat_lower:
+                    return "Formatters"
+                elif "linters" in cat_lower:
+                    return "Linters"
         else:
             return "Other"
     
