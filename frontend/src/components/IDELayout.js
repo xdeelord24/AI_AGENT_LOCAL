@@ -12,6 +12,7 @@ import {
   ThumbsUp, ThumbsDown, Copy, Search, Download, Package, Settings, Palette
 } from 'lucide-react';
 import CommandPalette from './CommandPalette';
+import PriceChart from './PriceChart';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
 import { formatMessageContent, initializeCopyCodeListeners, copyToClipboard, highlightCodeBlocks } from '../utils/messageFormatter';
@@ -649,6 +650,455 @@ const normalizeDetailValue = (value) => {
   if (value.label) return value.label;
   if (value.title) return value.title;
   return null;
+};
+
+// Image Carousel Component for Search Results
+const ImageCarousel = ({ images = [], title = 'Search Results', webReferences = null }) => {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [imageErrors, setImageErrors] = useState(new Set());
+  const [loadedImages, setLoadedImages] = useState(new Set());
+  
+  // Filter out page URLs that aren't direct images
+  const directImages = images.filter(img => {
+    const url = typeof img === 'string' ? img : img.url || img.src || img.dataUrl || '';
+    return !img.isPageUrl && url && !url.match(/\.(html|php|aspx)$/i);
+  });
+  
+  if (!directImages || directImages.length === 0) {
+    // If no direct images but we have web references and it's an image search, show links
+    if (webReferences && webReferences.length > 0) {
+      return (
+        <div className="mb-3 rounded-lg border border-dark-600 bg-dark-800/50 p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Image className="w-4 h-4 text-primary-400" />
+            <span className="text-xs font-semibold text-dark-300">Image Search Results</span>
+          </div>
+          <div className="space-y-2">
+            <p className="text-xs text-dark-400 mb-2">Click the links below to view image galleries:</p>
+            {webReferences.slice(0, 5).map((ref, idx) => (
+              <a
+                key={idx}
+                href={ref.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-xs text-primary-400 hover:text-primary-300 hover:underline py-1"
+              >
+                {ref.index && `[${ref.index}] `}
+                {ref.title || ref.url}
+              </a>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    return null;
+  }
+  
+  // Use direct images for the carousel
+  const displayImages = directImages;
+  
+  const currentImage = displayImages[currentIndex];
+  const imageUrl = typeof currentImage === 'string' 
+    ? currentImage 
+    : (currentImage.url || currentImage.src || currentImage.dataUrl || currentImage);
+  const imageTitle = typeof currentImage === 'object' 
+    ? (currentImage.title || currentImage.alt || currentImage.caption || '')
+    : '';
+  const sourceUrl = typeof currentImage === 'object' ? currentImage.sourceUrl : null;
+  const hasError = imageErrors.has(currentIndex);
+  
+  const goToPrevious = () => {
+    setCurrentIndex((prev) => (prev === 0 ? images.length - 1 : prev - 1));
+  };
+  
+  const goToNext = () => {
+    setCurrentIndex((prev) => (prev === images.length - 1 ? 0 : prev + 1));
+  };
+  
+  const goToImage = (index) => {
+    setCurrentIndex(index);
+  };
+  
+  const handleImageError = () => {
+    setImageErrors(prev => new Set(prev).add(currentIndex));
+  };
+  
+  const handleImageLoad = () => {
+    setLoadedImages(prev => new Set(prev).add(currentIndex));
+  };
+  
+  if (isFullscreen) {
+    return (
+      <div 
+        className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
+        onClick={() => setIsFullscreen(false)}
+      >
+        <div className="relative max-w-[90vw] max-h-[90vh] flex items-center justify-center">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsFullscreen(false);
+            }}
+            className="absolute top-4 right-4 z-10 p-2 bg-dark-800/80 hover:bg-dark-700 rounded-lg text-white transition-colors"
+            title="Close fullscreen"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          {displayImages.length > 1 && (
+            <>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  goToPrevious();
+                }}
+                className="absolute left-4 z-10 p-2 bg-dark-800/80 hover:bg-dark-700 rounded-lg text-white transition-colors"
+                title="Previous image"
+              >
+                <ChevronLeft className="w-6 h-6" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  goToNext();
+                }}
+                className="absolute right-4 z-10 p-2 bg-dark-800/80 hover:bg-dark-700 rounded-lg text-white transition-colors"
+                title="Next image"
+              >
+                <ChevronRight className="w-6 h-6" />
+              </button>
+            </>
+          )}
+          {hasError ? (
+            <div className="flex flex-col items-center justify-center p-8 text-dark-400">
+              <Image className="w-12 h-12 mb-2 opacity-50" />
+              <p className="text-sm mb-2">Failed to load image</p>
+              {sourceUrl && (
+                <a
+                  href={sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary-400 hover:text-primary-300 underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  View source page
+                </a>
+              )}
+            </div>
+          ) : (
+            <img
+              src={imageUrl}
+              alt={imageTitle || `Image ${currentIndex + 1} of ${displayImages.length}`}
+              className="max-w-full max-h-[90vh] object-contain rounded-lg"
+              onClick={(e) => e.stopPropagation()}
+              onError={handleImageError}
+              onLoad={handleImageLoad}
+            />
+          )}
+          {displayImages.length > 1 && (
+            <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex gap-2">
+              {displayImages.map((_, idx) => (
+                <button
+                  key={idx}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    goToImage(idx);
+                  }}
+                  className={`w-2 h-2 rounded-full transition-all ${
+                    idx === currentIndex ? 'bg-primary-500 w-6' : 'bg-dark-600 hover:bg-dark-500'
+                  }`}
+                  title={`Go to image ${idx + 1}`}
+                />
+              ))}
+            </div>
+          )}
+          {imageTitle && (
+            <div className="absolute bottom-12 left-1/2 transform -translate-x-1/2 bg-dark-800/80 px-4 py-2 rounded-lg text-white text-sm max-w-md text-center">
+              {imageTitle}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="mb-3 rounded-lg border border-dark-600 bg-dark-800/50 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-dark-600">
+        <div className="flex items-center gap-2">
+          <Image className="w-4 h-4 text-primary-400" />
+          <span className="text-xs font-semibold text-dark-300">{title}</span>
+          {displayImages.length > 1 && (
+            <span className="text-xs text-dark-400">
+              ({currentIndex + 1} / {displayImages.length})
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => setIsFullscreen(true)}
+          className="p-1 text-dark-400 hover:text-dark-200 transition-colors"
+          title="View fullscreen"
+        >
+          <Maximize2 className="w-4 h-4" />
+        </button>
+      </div>
+      <div className="relative">
+        <div className="relative aspect-video bg-dark-900 flex items-center justify-center overflow-hidden">
+          {hasError ? (
+            <div className="flex flex-col items-center justify-center p-4 text-dark-400">
+              <Image className="w-8 h-8 mb-2 opacity-50" />
+              <p className="text-xs mb-2">Failed to load image</p>
+              {sourceUrl && (
+                <a
+                  href={sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary-400 hover:text-primary-300 underline"
+                >
+                  View source page
+                </a>
+              )}
+            </div>
+          ) : (
+            <img
+              src={imageUrl}
+              alt={imageTitle || `Image ${currentIndex + 1} of ${displayImages.length}`}
+              className="max-w-full max-h-full object-contain"
+              onError={handleImageError}
+              onLoad={handleImageLoad}
+            />
+          )}
+          {displayImages.length > 1 && (
+            <>
+              <button
+                onClick={goToPrevious}
+                className="absolute left-2 top-1/2 transform -translate-y-1/2 p-2 bg-dark-800/80 hover:bg-dark-700 rounded-lg text-white transition-colors opacity-80 hover:opacity-100"
+                title="Previous image"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+              <button
+                onClick={goToNext}
+                className="absolute right-2 top-1/2 transform -translate-y-1/2 p-2 bg-dark-800/80 hover:bg-dark-700 rounded-lg text-white transition-colors opacity-80 hover:opacity-100"
+                title="Next image"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            </>
+          )}
+        </div>
+        {imageTitle && (
+          <div className="px-3 py-2 text-xs text-dark-400 bg-dark-800/30">
+            {imageTitle}
+          </div>
+        )}
+        {images.length > 1 && (
+          <div className="flex items-center justify-center gap-1 px-3 py-2 bg-dark-800/30">
+            {displayImages.map((_, idx) => (
+              <button
+                key={idx}
+                onClick={() => goToImage(idx)}
+                className={`w-1.5 h-1.5 rounded-full transition-all ${
+                  idx === currentIndex ? 'bg-primary-500 w-4' : 'bg-dark-600 hover:bg-dark-500'
+                }`}
+                title={`Go to image ${idx + 1}`}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Helper function to check if a query is image-related
+const isImageSearchQuery = (content) => {
+  if (!content || typeof content !== 'string') return false;
+  const imageKeywords = ['image', 'images', 'photo', 'photos', 'picture', 'pictures', 'pic', 'pics', 'visual', 'gallery', 'view image', 'show image', 'display image'];
+  const contentLower = content.toLowerCase();
+  return imageKeywords.some(keyword => contentLower.includes(keyword));
+};
+
+// Helper function to extract images from web references or message data
+const extractSearchImages = (message, userQuery = '') => {
+  const images = [];
+  
+  // Check if message has images array (for assistant messages from search)
+  if (message.searchImages && Array.isArray(message.searchImages)) {
+    images.push(...message.searchImages);
+  }
+  
+  // Check web references for image URLs
+  const webReferences = message.web_references || message.webReferences;
+  const content = message.content || message.rawContent || '';
+  const isImageQuery = isImageSearchQuery(userQuery) || isImageSearchQuery(content);
+  
+  if (webReferences && Array.isArray(webReferences)) {
+    webReferences.forEach((ref) => {
+      // Check if reference has an image field
+      if (ref.image || ref.imageUrl || ref.image_url || ref.thumbnail || ref.thumbnailUrl) {
+        const imageUrl = ref.image || ref.imageUrl || ref.image_url || ref.thumbnail || ref.thumbnailUrl;
+        images.push({
+          url: imageUrl,
+          title: ref.title || ref.url || '',
+          alt: ref.title || ref.url || '',
+          sourceUrl: ref.url
+        });
+      }
+      // Also check if the URL itself is an image
+      else if (ref.url) {
+        const urlLower = ref.url.toLowerCase();
+        const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
+        if (imageExtensions.some(ext => urlLower.includes(ext)) || 
+            urlLower.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp)(\?|$)/i)) {
+          images.push({
+            url: ref.url,
+            title: ref.title || ref.url || '',
+            alt: ref.title || ref.url || ''
+          });
+        }
+        // For image-related queries, try to construct image URLs from common image hosting sites
+        else if (isImageQuery) {
+          // Try to extract image URLs from common image hosting sites
+          const imageHostingPatterns = [
+            // Pexels patterns
+            {
+              match: /pexels\.com\/photo\/([^\/\?\s]+)/i,
+              construct: (match) => {
+                const photoId = match[1];
+                return `https://images.pexels.com/photos/${photoId}/pexels-photo-${photoId}.jpeg?auto=compress&cs=tinysrgb&w=800`;
+              }
+            },
+            {
+              match: /pexels\.com\/search\/([^\/\?\s]+)/i,
+              construct: (match) => {
+                // For search pages, we can't construct a specific image URL, but we'll mark it
+                return null; // Will be handled by fallback
+              }
+            },
+            // Unsplash patterns
+            {
+              match: /unsplash\.com\/photos\/([^\/\?\s]+)/i,
+              construct: (match) => `https://images.unsplash.com/photo-${match[1]}?w=800&q=80`
+            },
+            {
+              match: /unsplash\.com\/s\/photos\/([^\/\?\s]+)/i,
+              construct: (match) => null // Search page, can't construct specific image
+            },
+            // Pixabay patterns
+            {
+              match: /pixabay\.com\/(?:photos|images)\/([^\/\?\s-]+)/i,
+              construct: (match) => `https://pixabay.com/get/${match[1]}.jpg`
+            },
+            // Generic image hosting - try common patterns
+            {
+              match: /(?:imgur|imgbox|postimg|tinypic)\.com\/([^\/\?\s]+)/i,
+              construct: (match) => {
+                // These sites often have direct image URLs
+                return ref.url.replace(/\/$/, '') + '.jpg';
+              }
+            }
+          ];
+          
+          for (const pattern of imageHostingPatterns) {
+            const match = ref.url.match(pattern.match);
+            if (match) {
+              const imageUrl = pattern.construct(match);
+              if (imageUrl) {
+                images.push({
+                  url: imageUrl,
+                  title: ref.title || ref.url || '',
+                  alt: ref.title || ref.url || '',
+                  sourceUrl: ref.url
+                });
+                break;
+              }
+            }
+          }
+          
+          // For Pexels search pages, try to fetch a sample image URL
+          // Since we can't fetch from the frontend, we'll add the URL as a potential image source
+          if (ref.url.includes('pexels.com') && ref.url.includes('search')) {
+            // Add a placeholder that will show the link fallback
+            images.push({
+              url: ref.url, // Use the page URL as fallback
+              title: ref.title || 'View images on Pexels',
+              alt: ref.title || ref.url || '',
+              sourceUrl: ref.url,
+              isPageUrl: true // Flag to indicate this is a page, not direct image
+            });
+          }
+        }
+      }
+    });
+  }
+  
+  // Check if message content contains image URLs (markdown images or direct URLs)
+  if (typeof content === 'string') {
+    // Match markdown images: ![alt](url)
+    const markdownImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+    let match;
+    while ((match = markdownImageRegex.exec(content)) !== null) {
+      const imageUrl = match[2];
+      if (imageUrl && !images.some(img => {
+        const url = typeof img === 'string' ? img : img.url || img.src || img.dataUrl;
+        return url === imageUrl;
+      })) {
+        images.push({
+          url: imageUrl,
+          title: match[1] || '',
+          alt: match[1] || ''
+        });
+      }
+    }
+    
+    // Match direct image URLs (more comprehensive pattern)
+    const imageUrlRegex = /https?:\/\/[^\s<>"{}|\\^`\[\]()]+\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)(\?[^\s<>"{}|\\^`\[\]()]*)?/gi;
+    let urlMatch;
+    while ((urlMatch = imageUrlRegex.exec(content)) !== null) {
+      const imageUrl = urlMatch[0];
+      if (!images.some(img => {
+        const url = typeof img === 'string' ? img : img.url || img.src || img.dataUrl;
+        return url === imageUrl;
+      })) {
+        // Try to extract title from surrounding text
+        const beforeUrl = content.substring(Math.max(0, urlMatch.index - 100), urlMatch.index);
+        const titleMatch = beforeUrl.match(/(?:^|\n|\.)\s*([^.\n]{10,100})\s*$/);
+        const title = titleMatch ? titleMatch[1].trim() : '';
+        
+        images.push({
+          url: imageUrl,
+          title: title,
+          alt: title
+        });
+      }
+    }
+    
+    // For image queries, also look for image URLs in HTML img tags if content is HTML
+    if (content.includes('<img')) {
+      const imgTagRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+      let imgMatch;
+      while ((imgMatch = imgTagRegex.exec(content)) !== null) {
+        const imageUrl = imgMatch[1];
+        if (imageUrl && !imageUrl.startsWith('data:') && !images.some(img => {
+          const url = typeof img === 'string' ? img : img.url || img.src || img.dataUrl;
+          return url === imageUrl;
+        })) {
+          // Extract alt text if available
+          const altMatch = imgMatch[0].match(/alt=["']([^"']*)["']/i);
+          const alt = altMatch ? altMatch[1] : '';
+          
+          images.push({
+            url: imageUrl,
+            title: alt,
+            alt: alt
+          });
+        }
+      }
+    }
+  }
+  
+  return images;
 };
 
 const formatListPreview = (items = [], limit = 3) => {
@@ -2890,7 +3340,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         timestamp: msg.timestamp,
         rawContent: msg.rawContent,
         plan: msg.plan || null,  // Ensure plan is included
-        activityLog: msg.activityLog || null  // Ensure activityLog is included
+        activityLog: msg.activityLog || null,  // Ensure activityLog is included
+        price_data: msg.price_data || null,  // Include price_data for charts
+        images: msg.images || null,  // Include images
+        web_references: msg.web_references || msg.webReferences || null,  // Include web references
+        thinking: msg.thinking || null,  // Include thinking
+        messageId: msg.messageId || null,
+        conversationId: msg.conversationId || null
       }));
 
       // First, try to update existing session by currentChatSessionId
@@ -2961,14 +3417,20 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       const session = await ApiService.getChatSession(sessionId);
       if (session && session.messages) {
         // Convert session messages to chat message format
-        const restoredMessages = session.messages.map(msg => ({
-          id: Date.now() + Math.random(),
+        const restoredMessages = session.messages.map((msg, index) => ({
+          id: msg.messageId || `restored-${Date.now()}-${index}-${Math.random()}`,
           role: msg.role,
           content: msg.content,
           rawContent: msg.rawContent || msg.content,
           timestamp: msg.timestamp,
-          plan: msg.plan,
-          activityLog: msg.activityLog
+          plan: msg.plan || null,
+          activityLog: msg.activityLog || null,
+          price_data: msg.price_data || null,  // Restore price_data for charts
+          images: msg.images || null,  // Restore images
+          web_references: msg.web_references || msg.webReferences || null,  // Restore web references
+          thinking: msg.thinking || null,  // Restore thinking
+          messageId: msg.messageId || null,
+          conversationId: msg.conversationId || null
         }));
         
         setChatMessages(restoredMessages);
@@ -5939,6 +6401,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         messageId: null,
         conversationId: null,
         thinking: '',
+        price_data: null,
       };
       
       // Add the message immediately so we can update it
@@ -6163,6 +6626,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         timestamp: chunk.timestamp || new Date().toISOString(),
                         messageId: chunk.message_id || null,
                         conversationId: conversationId,
+                        price_data: chunk.price_data || msg.price_data || null,  // Preserve price_data when updating
                         plan: (() => {
                           const newPlan = chunk.ai_plan || chunk.plan || null;
                           if (newPlan) {
@@ -6171,7 +6635,8 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                           return newPlan || msg.plan || null;
                         })(), // Preserve existing plan if new one is null
                         activityLog: chunk.activity_log || null,
-                        web_references: chunk.web_references || null
+                        web_references: chunk.web_references || null,
+                        price_data: chunk.price_data || null
                       }
                     : msg
                 );
@@ -9764,6 +10229,41 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                     </div>
                                   ))}
                                 </div>
+                              )}
+                              {/* Display image carousel for search results in assistant messages */}
+                              {message.role === 'assistant' && (() => {
+                                // Find the previous user message to check if it was an image query
+                                const messageIndex = chatMessages.findIndex(msg => msg.id === message.id);
+                                const previousUserMessage = messageIndex > 0 
+                                  ? chatMessages.slice(0, messageIndex).reverse().find(msg => msg.role === 'user')
+                                  : null;
+                                const userQuery = previousUserMessage 
+                                  ? (previousUserMessage.content || previousUserMessage.rawContent || '')
+                                  : '';
+                                
+                                const searchImages = extractSearchImages(message, userQuery);
+                                const hasWebRefs = webReferences && webReferences.length > 0;
+                                const isImageQuery = isImageSearchQuery(userQuery) || isImageSearchQuery(message.content || message.rawContent || '');
+                                
+                                // Show carousel if we have images, or if it's an image query with web references
+                                if (searchImages.length > 0 || (isImageQuery && hasWebRefs)) {
+                                  return (
+                                    <ImageCarousel 
+                                      images={searchImages} 
+                                      title={hasWebRefs ? 'Search Results' : 'Images'}
+                                      webReferences={hasWebRefs && searchImages.length === 0 ? webReferences : null}
+                                    />
+                                  );
+                                }
+                                return null;
+                              })()}
+                              {/* Display price chart if price data is available */}
+                              {message.role === 'assistant' && message.price_data && (
+                                <PriceChart
+                                  priceData={message.price_data}
+                                  assetName={message.price_data.assetName}
+                                  assetType={message.price_data.assetType || 'crypto'}
+                                />
                               )}
                               {hasContent && (
                                 <div

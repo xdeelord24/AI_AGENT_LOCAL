@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import json
@@ -17,15 +17,25 @@ CHAT_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class ChatSessionMessage(BaseModel):
+    model_config = ConfigDict(extra='allow')  # Allow extra fields for backward compatibility
+    
     role: str  # "user" or "assistant"
     content: str
     timestamp: str
     rawContent: Optional[str] = None
     plan: Optional[Dict[str, Any]] = None
     activityLog: Optional[List[Dict[str, Any]]] = None
+    price_data: Optional[Dict[str, Any]] = None  # Price data for charts
+    images: Optional[List[Any]] = None  # Images attached to messages
+    web_references: Optional[List[Dict[str, Any]]] = None  # Web references
+    thinking: Optional[str] = None  # Thinking content
+    messageId: Optional[str] = None
+    conversationId: Optional[str] = None
 
 
 class ChatSession(BaseModel):
+    model_config = ConfigDict(extra='allow')  # Allow extra fields for backward compatibility
+    
     id: str
     title: str
     messages: List[ChatSessionMessage]
@@ -116,7 +126,13 @@ async def create_chat_session(session: ChatSessionCreate):
                 "timestamp": msg.get("timestamp", now),
                 "rawContent": msg.get("rawContent"),
                 "plan": msg.get("plan"),
-                "activityLog": msg.get("activityLog")
+                "activityLog": msg.get("activityLog"),
+                "price_data": msg.get("price_data"),  # Include price_data for charts
+                "images": msg.get("images"),  # Include images
+                "web_references": msg.get("web_references") or msg.get("webReferences"),  # Include web references
+                "thinking": msg.get("thinking"),  # Include thinking
+                "messageId": msg.get("messageId"),  # Include messageId
+                "conversationId": msg.get("conversationId")  # Include conversationId
             })
         
         chat_session = {

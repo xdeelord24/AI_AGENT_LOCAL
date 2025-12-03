@@ -1644,10 +1644,25 @@ class AIService:
         if not search_results_text:
             return response  # No search results available
         
+        # Detect what type of price query this is (crypto, forex, stock)
+        response_lower = response.lower()
+        search_lower = search_results_text.lower()
+        
+        # Check for crypto queries
+        crypto_keywords = ['bitcoin', 'btc', 'ethereum', 'eth', 'crypto', 'cryptocurrency']
+        is_crypto = any(keyword in response_lower for keyword in crypto_keywords)
+        
+        # Check for forex queries
+        forex_keywords = ['forex', 'fx', 'exchange rate', 'eur/usd', 'usd/eur', 'gbp/usd', 'usd/jpy', 'currency pair']
+        forex_currencies = ['usd', 'eur', 'gbp', 'jpy', 'aud', 'cad', 'chf', 'cny', 'nzd', 'sek', 'nok', 'mxn', 'zar', 'inr', 'krw', 'sgd', 'hkd']
+        is_forex = any(keyword in response_lower for keyword in forex_keywords) or \
+                   (any(curr in response_lower for curr in forex_currencies) and ('rate' in response_lower or 'exchange' in response_lower))
+        
         # Check for outdated BTC/crypto prices ($23,000-$24,000 range - common outdated training data)
-        outdated_price_pattern = r'\$23[,.]?\d{3}[,.]?\d*'
-        if re.search(outdated_price_pattern, response):
+        outdated_crypto_pattern = r'\$23[,.]?\d{3}[,.]?\d*'
+        if is_crypto and re.search(outdated_crypto_pattern, response):
             # Extract all prices from search results
+            # Look for USD prices: $XX,XXX.XX or $XX,XXX
             price_pattern = r'\$[\d,]+\.?\d*'
             prices_found = re.findall(price_pattern, search_results_text)
             
@@ -1660,7 +1675,8 @@ class AIService:
                         return 0
                 
                 prices = [parse_price(p) for p in prices_found]
-                valid_prices = [p for p in prices if 1000 < p < 200000]  # Reasonable BTC price range
+                # Reasonable crypto price ranges (BTC can be $20k-$150k+, ETH $1k-$10k+, etc.)
+                valid_prices = [p for p in prices if 100 < p < 200000]
                 if valid_prices:
                     # Use the highest price found (most likely current)
                     correct_price = max(valid_prices)
@@ -1668,11 +1684,60 @@ class AIService:
                     
                     # Replace outdated price with correct price
                     response = re.sub(
-                        outdated_price_pattern,
+                        outdated_crypto_pattern,
                         correct_price_str,
                         response,
                         count=1  # Replace only first occurrence
                     )
+        
+        # Handle forex exchange rates
+        if is_forex:
+            # Look for exchange rate patterns: 1.05, 1.1234, 0.85, etc. (typical forex rates)
+            # Also look for formats like "EUR/USD 1.05" or "1.05 EUR/USD"
+            forex_rate_patterns = [
+                r'\b(\d+\.\d{2,5})\b.*\b(usd|eur|gbp|jpy|aud|cad|chf|cny|nzd|sek|nok|mxn|zar|inr|krw|sgd|hkd)\b',
+                r'\b(usd|eur|gbp|jpy|aud|cad|chf|cny|nzd|sek|nok|mxn|zar|inr|krw|sgd|hkd)\b.*\b(\d+\.\d{2,5})\b',
+                r'\b(\d+\.\d{2,5})\s*[/-]\s*(usd|eur|gbp|jpy|aud|cad|chf|cny|nzd|sek|nok|mxn|zar|inr|krw|sgd|hkd)\b',
+            ]
+            
+            # Extract rates from search results
+            rates_found = []
+            for pattern in forex_rate_patterns:
+                matches = re.finditer(pattern, search_results_text, re.IGNORECASE)
+                for match in matches:
+                    rate_str = match.group(1) if match.group(1) and '.' in match.group(1) else match.group(2)
+                    try:
+                        rate = float(rate_str)
+                        # Forex rates are typically between 0.5 and 2.0 for major pairs, but can be wider
+                        # For JPY pairs, rates can be 100+ (e.g., USD/JPY ~150)
+                        if 0.1 < rate < 1000:  # Reasonable forex rate range
+                            rates_found.append(rate)
+                    except:
+                        continue
+            
+            # If we found rates and response doesn't have a clear rate, try to extract and add it
+            if rates_found and not re.search(r'\b\d+\.\d{2,5}\b', response):
+                # Use the most common rate (or median if multiple)
+                if len(rates_found) > 1:
+                    rates_found.sort()
+                    correct_rate = rates_found[len(rates_found) // 2]  # Median
+                else:
+                    correct_rate = rates_found[0]
+                
+                # Find currency pair mentioned in response
+                currency_pair_match = re.search(r'\b([A-Z]{3})\s*[/-]\s*([A-Z]{3})\b', response, re.IGNORECASE)
+                if currency_pair_match:
+                    pair = f"{currency_pair_match.group(1).upper()}/{currency_pair_match.group(2).upper()}"
+                    # Add rate if not already present
+                    if f"{pair} {correct_rate:.4f}" not in response and f"{correct_rate:.4f} {pair}" not in response:
+                        # Try to insert rate near currency pair mention
+                        response = re.sub(
+                            rf'\b({currency_pair_match.group(1)}[/-]{currency_pair_match.group(2)})\b',
+                            f"{pair} {correct_rate:.4f}",
+                            response,
+                            count=1,
+                            flags=re.IGNORECASE
+                        )
         
         # Check for other common outdated patterns when web search results are available
         # If the response mentions "I don't have access" or "I cannot" but we have search results, 
@@ -1705,6 +1770,120 @@ class AIService:
             response = f"⚠️ NOTE: Current information from web search is available above. " + response
         
         return response
+    
+    def _extract_price_data_for_chart(self, message: str, response: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Extract price data from response and search results for chart display"""
+        import re
+        
+        message_lower = message.lower()
+        response_lower = response.lower()
+        
+        # Check if this is a price query
+        price_keywords = ['price', 'rate', 'exchange rate', 'forex', 'crypto', 'bitcoin', 'btc', 'ethereum', 'eth']
+        is_price_query = any(keyword in message_lower for keyword in price_keywords)
+        
+        if not is_price_query:
+            return None
+        
+        # Determine asset type and name
+        asset_type = 'crypto'
+        asset_name = None
+        
+        # Check for crypto
+        crypto_patterns = {
+            'bitcoin': ['bitcoin', 'btc'],
+            'ethereum': ['ethereum', 'eth'],
+            'cardano': ['cardano', 'ada'],
+            'solana': ['solana', 'sol'],
+            'polkadot': ['polkadot', 'dot'],
+            'chainlink': ['chainlink', 'link'],
+            'avalanche': ['avalanche', 'avax'],
+            'polygon': ['polygon', 'matic'],
+            'dogecoin': ['dogecoin', 'doge'],
+            'litecoin': ['litecoin', 'ltc'],
+            'ripple': ['ripple', 'xrp'],
+        }
+        
+        for name, patterns in crypto_patterns.items():
+            if any(pattern in message_lower or pattern in response_lower for pattern in patterns):
+                asset_name = name.capitalize()
+                break
+        
+        # Check for forex
+        forex_patterns = {
+            'EUR/USD': ['eur/usd', 'eur usd', 'euro'],
+            'GBP/USD': ['gbp/usd', 'gbp usd', 'pound'],
+            'USD/JPY': ['usd/jpy', 'usd jpy', 'yen'],
+            'USD/CHF': ['usd/chf', 'usd chf', 'swiss franc'],
+            'AUD/USD': ['aud/usd', 'aud usd', 'australian dollar'],
+            'USD/CAD': ['usd/cad', 'usd cad', 'canadian dollar'],
+        }
+        
+        for pair, patterns in forex_patterns.items():
+            if any(pattern in message_lower or pattern in response_lower for pattern in patterns):
+                asset_name = pair
+                asset_type = 'forex'
+                break
+        
+        # Extract current price from response
+        current_price = None
+        
+        # Try to extract price from response
+        # For crypto: $XX,XXX.XX format - look for the largest/most recent price
+        crypto_price_matches = re.findall(r'\$[\d,]+\.?\d*', response)
+        if crypto_price_matches:
+            # Try all matches and use the largest (most likely current price)
+            prices = []
+            for match in crypto_price_matches:
+                try:
+                    price_str = match.replace('$', '').replace(',', '')
+                    price_val = float(price_str)
+                    # Reasonable crypto price range
+                    if 100 < price_val < 200000:
+                        prices.append(price_val)
+                except:
+                    pass
+            if prices:
+                current_price = max(prices)  # Use highest price found
+        
+        # For forex: X.XXXX format - look for rates near currency mentions
+        if not current_price and asset_type == 'forex':
+            # Look for rates near currency pair mentions
+            forex_rate_patterns = [
+                r'\b(\d+\.\d{2,5})\b',  # General rate pattern
+                rf'\b{asset_name.split("/")[0]}\s*[/-]?\s*{asset_name.split("/")[1]}\s*[:=]?\s*(\d+\.\d{{2,5}})\b',  # EUR/USD: 1.05
+                rf'\b(\d+\.\d{{2,5}})\s*{asset_name.split("/")[0]}\s*[/-]?\s*{asset_name.split("/")[1]}\b',  # 1.05 EUR/USD
+            ]
+            for pattern in forex_rate_patterns:
+                forex_rate_matches = re.findall(pattern, response, re.IGNORECASE)
+                if forex_rate_matches:
+                    # Extract rate values
+                    rates = []
+                    for match in forex_rate_matches:
+                        rate_str = match if isinstance(match, str) else (match[0] if isinstance(match, tuple) else str(match))
+                        try:
+                            rate_val = float(rate_str)
+                            # Reasonable forex rate range
+                            if 0.1 < rate_val < 1000:
+                                rates.append(rate_val)
+                        except:
+                            pass
+                    if rates:
+                        # Use median or most common rate
+                        rates.sort()
+                        current_price = rates[len(rates) // 2] if len(rates) > 1 else rates[0]
+                        break
+        
+        # If we found a price and asset name, return price data
+        if current_price and asset_name:
+            return {
+                'currentPrice': current_price,
+                'assetName': asset_name,
+                'assetType': asset_type,
+                'timestamp': datetime.now().isoformat()
+            }
+        
+        return None
 
     async def perform_web_search(self, query: str, max_results: Optional[int] = None) -> List[Dict[str, Any]]:
         """Fetch search results from DuckDuckGo when browsing is enabled."""
@@ -2692,6 +2871,11 @@ class AIService:
         if metadata.get("web_references"):
             result["web_references"] = metadata["web_references"]
         
+        # Extract price data for charts if this is a price query
+        price_data = self._extract_price_data_for_chart(message, cleaned_response, context)
+        if price_data:
+            result["price_data"] = price_data
+        
         return result
     
     def _strip_file_operation_mentions(self, response: str) -> str:
@@ -2740,6 +2924,26 @@ class AIService:
         is_agent_mode = is_composer or mode_value in ("agent", "plan") or chat_mode_value in ("agent", "plan")
         is_ask_mode = (not is_agent_mode) and (mode_value == "ask" or chat_mode_value == "ask")
 
+        # Get current date and time for accurate date information
+        now = datetime.now()
+        current_date_str = now.strftime("%A, %B %d, %Y")
+        # Try to get timezone name, fallback to UTC offset if not available
+        try:
+            tz_name = time.tzname[0] if time.tzname else ""
+            tz_offset = now.strftime("%z")
+            if tz_offset:
+                tz_offset_formatted = f"{tz_offset[:3]}:{tz_offset[3:]}"
+            else:
+                tz_offset_formatted = ""
+            current_time_str = now.strftime("%I:%M %p")
+            if tz_name:
+                current_time_str += f" {tz_name}"
+            elif tz_offset_formatted:
+                current_time_str += f" UTC{tz_offset_formatted}"
+        except Exception:
+            current_time_str = now.strftime("%I:%M %p")
+        current_datetime_iso = now.isoformat()
+        
         prompt_parts = [
             "You are an expert AI coding assistant similar to Cursor. You help developers with:",
             "- Code generation and completion",
@@ -2748,6 +2952,18 @@ class AIService:
             "- Explaining complex code",
             "- Creating and editing files",
             "- Best practices and patterns",
+            "",
+            "=" * 80,
+            "CURRENT DATE AND TIME INFORMATION:",
+            "=" * 80,
+            f"Current date: {current_date_str}",
+            f"Current time: {current_time_str}",
+            f"ISO format: {current_datetime_iso}",
+            "",
+            "IMPORTANT: Always use the current date and time provided above when answering questions about dates, times, or temporal information.",
+            "Do NOT use dates from your training data - use the current date/time information provided above.",
+            "",
+            "=" * 80,
             "",
         ]
         
@@ -3122,8 +3338,11 @@ class AIService:
                 "",
                 "5. FOR PRICE/ASSET QUERIES:",
                 "   - Use web_search to get the latest price and respond with that value.",
-                "   - Include the currency and a brief note that prices change quickly.",
-                "   - If search results show a price, use THAT price, not your training data.",
+                "   - For CRYPTO: Include the currency symbol and USD (e.g., 'Bitcoin (BTC) is $92,641 USD').",
+                "   - For FOREX: Always include both currencies in the pair (e.g., 'EUR/USD 1.05').",
+                "   - For STOCKS: Include the ticker symbol and price (e.g., 'AAPL is $150.25').",
+                "   - Include a brief note that prices change quickly.",
+                "   - If search results show a price/rate, use THAT price/rate, not your training data.",
                 ""
             ])
 
@@ -3157,11 +3376,27 @@ class AIService:
                 prompt_parts.append("🚫 If you are about to write $23,433 or similar, STOP - that is wrong. Look at the search results above instead.")
                 prompt_parts.append("")
                 prompt_parts.append("- Extract specific facts, numbers, prices, or data DIRECTLY from the search results above.")
-                prompt_parts.append("- For price queries: SCAN the search results above line by line and find the price value mentioned there.")
-                prompt_parts.append("- For price queries: Look for dollar amounts like $92,641, $90,000+, $95,000, $80,000+, etc. in the search results.")
-                prompt_parts.append("- For price queries: Use the HIGHEST/MOST RECENT price value you find in the search results.")
-                prompt_parts.append("- For price queries: Copy the price EXACTLY as shown in the search results (e.g., if results show '$92,641.37', use that EXACT value).")
-                prompt_parts.append("- If you cannot find a price in the search results, say 'Price information not found in search results' - DO NOT make up a price.")
+                prompt_parts.append("")
+                prompt_parts.append("FOR CRYPTO PRICE QUERIES:")
+                prompt_parts.append("- SCAN the search results above line by line and find the price value mentioned there.")
+                prompt_parts.append("- Look for dollar amounts like $92,641, $90,000+, $95,000, $80,000+, etc. in the search results.")
+                prompt_parts.append("- Use the HIGHEST/MOST RECENT price value you find in the search results.")
+                prompt_parts.append("- Copy the price EXACTLY as shown in the search results (e.g., if results show '$92,641.37', use that EXACT value).")
+                prompt_parts.append("- Always specify the currency (e.g., 'Bitcoin (BTC) is $92,641 USD').")
+                prompt_parts.append("")
+                prompt_parts.append("FOR FOREX PRICE QUERIES:")
+                prompt_parts.append("- Look for exchange rates like 1.05, 1.1234, 0.85, 150.25, etc. in the search results.")
+                prompt_parts.append("- Exchange rates are typically shown as 'EUR/USD 1.05' or '1.05 EUR/USD' format.")
+                prompt_parts.append("- Extract the rate value (number with 2-5 decimal places) and the currency pair.")
+                prompt_parts.append("- Use the MOST RECENT rate value you find in the search results.")
+                prompt_parts.append("- CRITICAL: Always include BOTH currencies in the pair (e.g., 'EUR/USD 1.05' not just '1.05').")
+                prompt_parts.append("")
+                prompt_parts.append("FOR STOCK PRICE QUERIES:")
+                prompt_parts.append("- Look for dollar amounts like $150.25, $1,234.56, etc. in the search results.")
+                prompt_parts.append("- Extract the price EXACTLY as shown (including decimals).")
+                prompt_parts.append("")
+                prompt_parts.append("GENERAL:")
+                prompt_parts.append("- If you cannot find a price/rate in the search results, say 'Price/Rate information not found in search results' - DO NOT make up a price.")
                 prompt_parts.append("- If you see prices like $92,641, $90,000+, or similar HIGH values in the search results, use THOSE, NOT $23,433.")
                 prompt_parts.append("")
                 # Only restrict plans in ASK mode - allow plans in agent/plan modes
@@ -3224,11 +3459,27 @@ class AIService:
                 prompt_parts.append("🚫 If you are about to write $23,433 or similar, STOP - that is wrong. Look at the search results above instead.")
                 prompt_parts.append("")
                 prompt_parts.append("- Extract specific facts, numbers, prices, or data DIRECTLY from the search results above.")
-                prompt_parts.append("- For price queries: SCAN the search results above line by line and find the price value mentioned there.")
-                prompt_parts.append("- For price queries: Look for dollar amounts like $92,641, $90,000+, $95,000, $80,000+, etc. in the search results.")
-                prompt_parts.append("- For price queries: Use the HIGHEST/MOST RECENT price value you find in the search results.")
-                prompt_parts.append("- For price queries: Copy the price EXACTLY as shown in the search results (e.g., if results show '$92,641.37', use that EXACT value).")
-                prompt_parts.append("- If you cannot find a price in the search results, say 'Price information not found in search results' - DO NOT make up a price.")
+                prompt_parts.append("")
+                prompt_parts.append("FOR CRYPTO PRICE QUERIES:")
+                prompt_parts.append("- SCAN the search results above line by line and find the price value mentioned there.")
+                prompt_parts.append("- Look for dollar amounts like $92,641, $90,000+, $95,000, $80,000+, etc. in the search results.")
+                prompt_parts.append("- Use the HIGHEST/MOST RECENT price value you find in the search results.")
+                prompt_parts.append("- Copy the price EXACTLY as shown in the search results (e.g., if results show '$92,641.37', use that EXACT value).")
+                prompt_parts.append("- Always specify the currency (e.g., 'Bitcoin (BTC) is $92,641 USD').")
+                prompt_parts.append("")
+                prompt_parts.append("FOR FOREX PRICE QUERIES:")
+                prompt_parts.append("- Look for exchange rates like 1.05, 1.1234, 0.85, 150.25, etc. in the search results.")
+                prompt_parts.append("- Exchange rates are typically shown as 'EUR/USD 1.05' or '1.05 EUR/USD' format.")
+                prompt_parts.append("- Extract the rate value (number with 2-5 decimal places) and the currency pair.")
+                prompt_parts.append("- Use the MOST RECENT rate value you find in the search results.")
+                prompt_parts.append("- CRITICAL: Always include BOTH currencies in the pair (e.g., 'EUR/USD 1.05' not just '1.05').")
+                prompt_parts.append("")
+                prompt_parts.append("FOR STOCK PRICE QUERIES:")
+                prompt_parts.append("- Look for dollar amounts like $150.25, $1,234.56, etc. in the search results.")
+                prompt_parts.append("- Extract the price EXACTLY as shown (including decimals).")
+                prompt_parts.append("")
+                prompt_parts.append("GENERAL:")
+                prompt_parts.append("- If you cannot find a price/rate in the search results, say 'Price/Rate information not found in search results' - DO NOT make up a price.")
                 prompt_parts.append("- If you see prices like $92,641, $90,000+, or similar HIGH values in the search results, use THOSE, NOT $23,433.")
                 prompt_parts.append("")
                 # Only restrict plans in ASK mode - allow plans in agent/plan modes
@@ -3496,13 +3747,23 @@ class AIService:
             if re.search(pattern, normalized, re.IGNORECASE):
                 return False
         
-        # Price/Value queries
+        # Price/Value queries - Enhanced for forex, crypto, and stocks
         price_patterns = [
-            r'\b(price|cost|value|worth|rate|exchange rate)\b.*\b(bitcoin|btc|ethereum|eth|crypto|stock|currency|usd|eur|gbp|jpy)\b',
-            r'\b(bitcoin|btc|ethereum|eth)\b.*\b(price|cost|value|worth|rate)\b',
-            r'\b(current|latest|today|now)\b.*\b(price|value|rate)\b',
-            r'\bhow much.*\b(bitcoin|btc|ethereum|eth|stock|currency)\b',
-            r'\bwhat.*\b(bitcoin|btc|ethereum|eth)\b.*\b(price|worth|value)\b',
+            # Crypto patterns
+            r'\b(price|cost|value|worth|rate)\b.*\b(bitcoin|btc|ethereum|eth|cardano|ada|solana|sol|polkadot|dot|chainlink|link|avalanche|avax|polygon|matic|dogecoin|doge|shiba|shib|litecoin|ltc|ripple|xrp|binance|bnb|tether|usdt|usdc|stablecoin|crypto|cryptocurrency)\b',
+            r'\b(bitcoin|btc|ethereum|eth|cardano|ada|solana|sol|polkadot|dot|chainlink|link|avalanche|avax|polygon|matic|dogecoin|doge|shiba|shib|litecoin|ltc|ripple|xrp|binance|bnb|tether|usdt|usdc)\b.*\b(price|cost|value|worth|rate)\b',
+            # Forex patterns
+            r'\b(price|rate|exchange rate|exchange|forex|fx)\b.*\b(usd|eur|gbp|jpy|aud|cad|chf|cny|nzd|sek|nok|mxn|zar|inr|krw|sgd|hkd|usd/eur|eur/usd|gbp/usd|usd/jpy|eur/gbp|aud/usd|usd/cad|forex pair)\b',
+            r'\b(usd|eur|gbp|jpy|aud|cad|chf|cny|nzd|sek|nok|mxn|zar|inr|krw|sgd|hkd|usd/eur|eur/usd|gbp/usd|usd/jpy|eur/gbp|aud/usd|usd/cad)\b.*\b(price|rate|exchange rate|exchange|forex|fx)\b',
+            r'\b(forex|fx|currency pair|exchange rate)\b.*\b(price|rate|value|worth)\b',
+            # Stock patterns
+            r'\b(price|cost|value|worth|rate|stock price|share price)\b.*\b(stock|share|equity|ticker|nasdaq|nyse|sp500|s&p)\b',
+            r'\b(stock|share|equity|ticker)\b.*\b(price|cost|value|worth|rate)\b',
+            # General price queries
+            r'\b(current|latest|today|now|live|real-time|real time)\b.*\b(price|value|rate|exchange rate)\b',
+            r'\bhow much.*\b(bitcoin|btc|ethereum|eth|stock|currency|crypto|cryptocurrency|forex|forex pair)\b',
+            r'\bwhat.*\b(bitcoin|btc|ethereum|eth|forex|currency pair)\b.*\b(price|worth|value|rate)\b',
+            r'\b(current|latest|live)\b.*\b(bitcoin|btc|ethereum|eth|crypto|forex|currency)\b.*\b(price|rate)\b',
         ]
         
         # Current events/news queries
@@ -3835,6 +4096,26 @@ class AIService:
         # Remove trailing question marks and common phrases
         normalized = normalized.rstrip("?")
         normalized = re.sub(r'\b(please|can you|could you|would you)\b', '', normalized, flags=re.IGNORECASE)
+        
+        # Optimize for price queries - add "current price" or "live price" if it's a price query
+        normalized_lower = normalized.lower()
+        price_keywords = ['price', 'rate', 'exchange rate', 'forex', 'crypto', 'bitcoin', 'btc', 'ethereum', 'eth', 
+                         'usd', 'eur', 'gbp', 'jpy', 'currency', 'stock', 'forex pair']
+        is_price_query = any(keyword in normalized_lower for keyword in price_keywords)
+        
+        if is_price_query:
+            # Add "current price" or "live price" to improve search results
+            if 'current' not in normalized_lower and 'live' not in normalized_lower and 'latest' not in normalized_lower:
+                # Check if it's forex (currency pair)
+                forex_pattern = r'\b(usd|eur|gbp|jpy|aud|cad|chf|cny|nzd|sek|nok|mxn|zar|inr|krw|sgd|hkd)\s*[/-]\s*(usd|eur|gbp|jpy|aud|cad|chf|cny|nzd|sek|nok|mxn|zar|inr|krw|sgd|hkd)\b'
+                if re.search(forex_pattern, normalized_lower):
+                    normalized = f"{normalized} current exchange rate"
+                # Check if it's crypto
+                elif any(crypto in normalized_lower for crypto in ['bitcoin', 'btc', 'ethereum', 'eth', 'crypto', 'cryptocurrency']):
+                    normalized = f"{normalized} current price"
+                # General price query
+                else:
+                    normalized = f"{normalized} current price"
         
         return normalized.strip() or message.strip()
     

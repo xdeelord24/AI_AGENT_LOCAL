@@ -490,6 +490,7 @@ async def send_message_stream(
             final_ai_plan = None
             accumulated_file_ops = []
             accumulated_web_references = []  # Track web references from web_search tool results
+            accumulated_price_data = None  # Track price data for charts
             
             while True:
                 # Build prompt for current message (include images if provided, only on first round)
@@ -612,6 +613,15 @@ async def send_message_stream(
                             accumulated_response_round,
                             context_payload
                         )
+                        
+                        # Extract price data for charts if this is a price query
+                        price_data = ai_service._extract_price_data_for_chart(
+                            current_message, 
+                            cleaned_response or accumulated_response_round, 
+                            context_payload
+                        )
+                        if price_data:
+                            accumulated_price_data = price_data
                         
                         # Extract file operations and plans from metadata
                         file_ops = metadata.get("file_operations", []) if not is_ask_mode else []
@@ -1009,7 +1019,8 @@ async def send_message_stream(
                                 'file_operations': final_file_ops,
                                 'ai_plan': finalized_plan,
                                 'activity_log': None,
-                                'web_references': accumulated_web_references if accumulated_web_references else None
+                                'web_references': accumulated_web_references if accumulated_web_references else None,
+                                'price_data': accumulated_price_data
                             })}\n\n"
                             break
                         
@@ -1041,7 +1052,8 @@ async def send_message_stream(
                                 'file_operations': final_file_ops,
                                 'ai_plan': finalized_plan,
                                 'activity_log': None,
-                                'web_references': accumulated_web_references if accumulated_web_references else None
+                                'web_references': accumulated_web_references if accumulated_web_references else None,
+                                'price_data': accumulated_price_data
                             })}\n\n"
                             break
                         
@@ -1065,7 +1077,8 @@ async def send_message_stream(
                                 'file_operations': final_file_ops,
                                 'ai_plan': finalized_plan,
                                 'activity_log': None,
-                                'web_references': accumulated_web_references if accumulated_web_references else None
+                                'web_references': accumulated_web_references if accumulated_web_references else None,
+                                'price_data': accumulated_price_data
                             })}\n\n"
                             break
                         
@@ -1118,7 +1131,8 @@ async def send_message_stream(
                             'file_operations': accumulated_file_ops if accumulated_file_ops else None,
                             'ai_plan': _finalize_ai_plan(final_ai_plan) if final_ai_plan else None,
                             'activity_log': None,
-                            'web_references': accumulated_web_references if accumulated_web_references else None
+                            'web_references': accumulated_web_references if accumulated_web_references else None,
+                            'price_data': accumulated_price_data
                         })}\n\n"
                         break
                 else:
@@ -1165,6 +1179,15 @@ async def send_message_stream(
                     working_history.append({"role": "user", "content": current_message})
                     working_history.append({"role": "assistant", "content": round_response})
                     
+                    # Extract price data from response for non-Ollama providers
+                    non_ollama_price_data = response.get('price_data') or ai_service._extract_price_data_for_chart(
+                        current_message, 
+                        round_response, 
+                        context_payload
+                    )
+                    if non_ollama_price_data:
+                        accumulated_price_data = non_ollama_price_data
+                    
                     if is_ask_mode:
                         combined_response = "\n\n".join(accumulated_responses) if accumulated_responses else round_response
                         yield f"data: {json.dumps({
@@ -1176,7 +1199,8 @@ async def send_message_stream(
                             'timestamp': response.get('timestamp') or datetime.now().isoformat(),
                             'file_operations': None,
                             'ai_plan': None,
-                            'activity_log': response.get('activity_log')
+                            'activity_log': response.get('activity_log'),
+                            'price_data': accumulated_price_data
                         })}\n\n"
                         break
                     
@@ -1194,7 +1218,8 @@ async def send_message_stream(
                             'timestamp': response.get('timestamp') or datetime.now().isoformat(),
                             'file_operations': accumulated_file_ops if accumulated_file_ops else None,
                             'ai_plan': finalized_plan,
-                            'activity_log': response.get('activity_log')
+                            'activity_log': response.get('activity_log'),
+                            'price_data': accumulated_price_data
                         })}\n\n"
                         break
                     
@@ -1211,7 +1236,8 @@ async def send_message_stream(
                             'timestamp': response.get('timestamp') or datetime.now().isoformat(),
                             'file_operations': accumulated_file_ops if accumulated_file_ops else None,
                             'ai_plan': finalized_plan,
-                            'activity_log': response.get('activity_log')
+                            'activity_log': response.get('activity_log'),
+                            'price_data': accumulated_price_data
                         })}\n\n"
                         break
                     
