@@ -1900,6 +1900,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [isLoadingStatus, setIsLoadingStatus] = useState(false);
   const [showConnectivityPanel, setShowConnectivityPanel] = useState(false);
   const [showMemoryPanel, setShowMemoryPanel] = useState(false);
+  const [showMemoryManagePanel, setShowMemoryManagePanel] = useState(false);
+  const [memorySearchQuery, setMemorySearchQuery] = useState('');
+  const [editingMemory, setEditingMemory] = useState(null);
+  const [memoryMenuOpen, setMemoryMenuOpen] = useState(null);
   const [thinkingAiPlan, setThinkingAiPlan] = useState(null);
   const [connectivitySettings, setConnectivitySettings] = useState(null);
   const [isConnectivityLoading, setIsConnectivityLoading] = useState(false);
@@ -2722,6 +2726,20 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     // Preload memory settings
     loadMemorySettings();
   }, [loadMemorySettings]);
+
+  // Close memory menu when clicking outside
+  useEffect(() => {
+    if (!showMemoryManagePanel) return;
+    const handleClickOutside = (event) => {
+      if (!event.target.closest('[data-memory-menu]')) {
+        setMemoryMenuOpen(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showMemoryManagePanel]);
 
   const handleSaveMemorySettings = async () => {
     setIsMemorySaving(true);
@@ -11320,7 +11338,8 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         <h4 className="text-sm font-medium text-white">Saved Memories</h4>
                         <button
                           onClick={() => {
-                            toast.info('Memory management coming soon');
+                            setShowMemoryManagePanel(true);
+                            loadMemorySettings();
                           }}
                           className="text-xs text-primary-400 hover:text-primary-300"
                         >
@@ -11355,6 +11374,206 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               >
                 {isMemorySaving ? 'Saving…' : 'Save'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Memory Management Panel */}
+      {showMemoryManagePanel && (
+        <div className="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center px-4">
+          <div className="bg-dark-900 border border-dark-700 rounded-2xl w-full max-w-3xl shadow-2xl flex flex-col" style={{ maxHeight: '85vh' }}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700">
+              <div>
+                <h3 className="text-lg font-semibold text-white">Saved memories</h3>
+                <p className="text-xs text-dark-400 mt-1">
+                  ChatGPT remembers and automatically manages useful information from chats, making responses more relevant and personal.{' '}
+                  <a href="#" className="text-primary-400 hover:text-primary-300 underline">Learn more</a>
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowMemoryManagePanel(false);
+                  setMemorySearchQuery('');
+                  setEditingMemory(null);
+                  setMemoryMenuOpen(null);
+                }}
+                className="p-2 rounded hover:bg-dark-800 transition-colors"
+              >
+                <X className="w-4 h-4 text-dark-300" />
+              </button>
+            </div>
+
+            {/* Search Bar and Controls */}
+            <div className="px-6 py-4 border-b border-dark-700 flex items-center gap-3">
+              <div className="flex-1 relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-dark-400" />
+                <input
+                  type="text"
+                  value={memorySearchQuery}
+                  onChange={(e) => setMemorySearchQuery(e.target.value)}
+                  placeholder="Search memories"
+                  className="w-full pl-10 pr-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                />
+              </div>
+              <button
+                onClick={() => {
+                  // Sort functionality - can be implemented later
+                  toast.success('Sort feature coming soon');
+                }}
+                className="p-2 rounded hover:bg-dark-800 transition-colors"
+                title="Sort memories"
+              >
+                <ChevronUp className="w-4 h-4 text-dark-400" />
+              </button>
+              <div className="relative" data-memory-menu>
+                <button
+                  onClick={() => setMemoryMenuOpen(memoryMenuOpen === 'main' ? null : 'main')}
+                  className="p-2 rounded hover:bg-dark-800 transition-colors"
+                  title="More options"
+                >
+                  <MoreVertical className="w-4 h-4 text-dark-400" />
+                </button>
+                {memoryMenuOpen === 'main' && (
+                  <div className="absolute right-0 top-full mt-1 bg-dark-800 border border-dark-700 rounded-lg shadow-lg z-10 min-w-[150px]" data-memory-menu>
+                    <button
+                      onClick={async () => {
+                        if (window.confirm('Are you sure you want to clear all memories? This cannot be undone.')) {
+                          try {
+                            await ApiService.clearAllMemories();
+                            toast.success('All memories cleared');
+                            await loadMemorySettings();
+                            setMemoryMenuOpen(null);
+                          } catch (error) {
+                            toast.error('Failed to clear memories');
+                          }
+                        }
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm text-dark-200 hover:bg-dark-700 transition-colors"
+                    >
+                      Clear all memories
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Memories List */}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {isMemoryLoading ? (
+                <div className="flex items-center justify-center py-10 text-dark-400">
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  Loading memories...
+                </div>
+              ) : (() => {
+                const filteredMemories = memories.filter(memory =>
+                  memory.content.toLowerCase().includes(memorySearchQuery.toLowerCase())
+                );
+
+                if (filteredMemories.length === 0) {
+                  return (
+                    <div className="text-center py-10">
+                      <p className="text-sm text-dark-400">
+                        {memorySearchQuery ? 'No memories found matching your search.' : 'No saved memories yet.'}
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="space-y-3">
+                    {filteredMemories.map((memory) => (
+                      <div
+                        key={memory.id}
+                        className="group relative bg-dark-800 border border-dark-700 rounded-lg p-4 hover:border-dark-600 transition-colors"
+                      >
+                        {editingMemory?.id === memory.id ? (
+                          <div className="space-y-3">
+                            <textarea
+                              value={editingMemory.content}
+                              onChange={(e) => setEditingMemory({ ...editingMemory, content: e.target.value })}
+                              className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded text-sm text-dark-100 focus:outline-none focus:ring-1 focus:ring-primary-500 resize-none"
+                              rows={3}
+                              autoFocus
+                            />
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                onClick={() => setEditingMemory(null)}
+                                className="px-3 py-1 text-xs text-dark-300 hover:text-dark-100 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await ApiService.updateMemory(memory.id, editingMemory.content);
+                                    toast.success('Memory updated');
+                                    setEditingMemory(null);
+                                    await loadMemorySettings();
+                                  } catch (error) {
+                                    toast.error('Failed to update memory');
+                                  }
+                                }}
+                                className="px-3 py-1 text-xs bg-primary-600 hover:bg-primary-700 text-white rounded transition-colors"
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p className="text-sm text-dark-200 leading-relaxed pr-8">
+                              {memory.content}
+                            </p>
+                            <div className="absolute top-4 right-4" data-memory-menu>
+                              <div className="relative">
+                                <button
+                                  onClick={() => setMemoryMenuOpen(memoryMenuOpen === memory.id ? null : memory.id)}
+                                  className="p-1 rounded hover:bg-dark-700 transition-colors opacity-0 group-hover:opacity-100"
+                                  title="Memory options"
+                                >
+                                  <MoreVertical className="w-4 h-4 text-dark-400" />
+                                </button>
+                                {memoryMenuOpen === memory.id && (
+                                  <div className="absolute right-0 top-full mt-1 bg-dark-800 border border-dark-700 rounded-lg shadow-lg z-10 min-w-[120px]" data-memory-menu>
+                                    <button
+                                      onClick={() => {
+                                        setEditingMemory({ id: memory.id, content: memory.content });
+                                        setMemoryMenuOpen(null);
+                                      }}
+                                      className="w-full text-left px-3 py-2 text-sm text-dark-200 hover:bg-dark-700 transition-colors"
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      onClick={async () => {
+                                        if (window.confirm('Are you sure you want to delete this memory?')) {
+                                          try {
+                                            await ApiService.deleteMemory(memory.id);
+                                            toast.success('Memory deleted');
+                                            setMemoryMenuOpen(null);
+                                            await loadMemorySettings();
+                                          } catch (error) {
+                                            toast.error('Failed to delete memory');
+                                          }
+                                        }
+                                      }}
+                                      className="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-dark-700 transition-colors"
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
