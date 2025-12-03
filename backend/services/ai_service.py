@@ -1812,11 +1812,16 @@ class AIService:
             context["disable_active_file_context"] = True
 
         # Detect if query needs web search and use MCP tools to perform it
-        force_web_search = (
-            web_search_mode in ("browser_tab", "google_chrome")
-            and not context.get("disable_forced_web_search")
-        )
-        needs_web_search = force_web_search or self._detect_web_search_needed(message, web_search_mode)
+        # Only allow web search if it's not explicitly disabled
+        if web_search_mode == "off":
+            needs_web_search = False
+        else:
+            force_web_search = (
+                web_search_mode in ("browser_tab", "google_chrome")
+                and not context.get("disable_forced_web_search")
+            )
+            needs_web_search = force_web_search or self._detect_web_search_needed(message, web_search_mode)
+        
         if needs_web_search:
             normalized_query = (message or "").strip().lower()
             requires_browser = any(term in normalized_query for term in [
@@ -1865,10 +1870,9 @@ class AIService:
                             structured_results = self._parse_web_search_results_text(result_text)
                             if structured_results:
                                 context["web_search_results"] = structured_results
-                            context["web_search_mode"] = "auto"  # Mark as auto-triggered
-                            if web_search_mode == "off":
-                                web_search_mode = "auto"
-                                context["web_search_mode"] = "auto"
+                            # Only mark as auto if web search mode wasn't explicitly off
+                            if web_search_mode != "off":
+                                context["web_search_mode"] = "auto"  # Mark as auto-triggered
                             web_search_enabled = True
                             context["_web_search_attempted"] = True
                         else:
@@ -1880,20 +1884,19 @@ class AIService:
                         context["_web_search_attempted"] = True
                 else:
                     # Fallback: if MCP not available, use direct search (shouldn't happen in production)
-                    try:
-                        search_query = self._extract_search_query(message)
-                        search_results = await self.perform_web_search(search_query)
-                        if search_results:
-                            context["web_search_results"] = search_results
-                            context["web_search_mode"] = "auto"
-                            if web_search_mode == "off":
-                                web_search_mode = "auto"
+                    # Only if web search is not explicitly disabled
+                    if web_search_mode != "off":
+                        try:
+                            search_query = self._extract_search_query(message)
+                            search_results = await self.perform_web_search(search_query)
+                            if search_results:
+                                context["web_search_results"] = search_results
                                 context["web_search_mode"] = "auto"
-                            web_search_enabled = True
+                                web_search_enabled = True
+                                context["_web_search_attempted"] = True
+                        except Exception as error:
+                            context["web_search_error"] = f"{type(error).__name__}: {error}"
                             context["_web_search_attempted"] = True
-                    except Exception as error:
-                        context["web_search_error"] = f"{type(error).__name__}: {error}"
-                        context["_web_search_attempted"] = True
         if needs_web_search and not web_search_enabled and not context.get("web_search_error"):
             context["web_search_error"] = (
                 "Browser mode is off, so live web searches are unavailable for this request."
@@ -2100,15 +2103,16 @@ class AIService:
         has_search_results = bool(context.get("web_search_results_mcp") or context.get("web_search_results"))
         web_search_attempted = context.get("_web_search_attempted", False)
         
-        # Auto-trigger web search for clear queries even if mode is "off"
+        # Auto-trigger web search for clear queries (only if web_search_mode is not "off")
         # Check if we already have a web_search tool call
         has_web_search_call = any(tc.get("name") == "web_search" for tc in tool_calls) if tool_calls else False
         
         # Auto-trigger if:
-        # 1. We don't already have a web_search tool call
-        # 2. We don't already have search results
-        # 3. The query clearly needs web search
-        if not has_web_search_call and not has_search_results:
+        # 1. Web search mode is not explicitly disabled
+        # 2. We don't already have a web_search tool call
+        # 3. We don't already have search results
+        # 4. The query clearly needs web search
+        if web_search_mode != "off" and not has_web_search_call and not has_search_results:
             # Keywords that clearly indicate web search is needed
             web_search_keywords = ["who is", "what is", "current price", "latest news", "recent", "today", "now", "current", "find information", "search for", "look up", "tell me about", "information about"]
             web_search_intent = any(keyword in message_lower for keyword in web_search_keywords)
@@ -2143,41 +2147,23 @@ class AIService:
             logger.info(f"[DEBUG] Web search detection: intent={web_search_intent}, describing={web_search_describing}, has_results={has_search_results}, attempted={web_search_attempted}")
             
             # Auto-trigger web search if user clearly needs it OR AI said it will search
-            # ALWAYS trigger for clear search intents, even if web_search_mode is "off"
-            # This ensures web search is used when needed, regardless of mode setting
+            # Only trigger if web_search_mode is not explicitly disabled
             should_auto_trigger = False
             reason = ""
             
             if web_search_intent:
                 should_auto_trigger = True
                 reason = "user query requires web search"
-                # ALWAYS enable web search mode if it was off - force enable for clear queries
-                if web_search_mode == "off":
-                    web_search_mode = "auto"
-                    context["web_search_mode"] = "auto"
-                    web_search_enabled = True
-                    logger.info(f"Force-enabled web_search_mode to 'auto' for query: {message[:50]}")
             elif web_search_describing:
                 should_auto_trigger = True
                 reason = "AI described search action without tool call"
-                # ALWAYS enable web search mode if it was off - force enable when AI wants to search
-                if web_search_mode == "off":
-                    web_search_mode = "auto"
-                    context["web_search_mode"] = "auto"
-                    web_search_enabled = True
-                    logger.info(f"Force-enabled web_search_mode to 'auto' because AI described search: {message[:50]}")
             
-            # ALWAYS trigger for questions about people, places, or current information
-            # This is a catch-all to ensure web search is used when appropriate
+            # Trigger for questions about people, places, or current information
+            # But only if web search mode is not explicitly disabled
             if not should_auto_trigger and (is_question or has_name_pattern):
                 # Double-check: if it's a question or has a name, it likely needs web search
                 should_auto_trigger = True
                 reason = "question or name pattern detected - likely needs web search"
-                if web_search_mode == "off":
-                    web_search_mode = "auto"
-                    context["web_search_mode"] = "auto"
-                    web_search_enabled = True
-                    logger.info(f"Force-enabled web_search_mode to 'auto' for question/name pattern: {message[:50]}")
             
             if should_auto_trigger:
                 logger.info(f"Auto-triggering web_search tool - reason: {reason}, query: {message[:100]}")
@@ -3486,8 +3472,8 @@ class AIService:
         
         # If explicitly disabled, don't auto-trigger
         if web_search_mode == "off":
-            # But still check if it's clearly needed (user can override)
-            pass
+            # When web search is off, never auto-trigger searches
+            return False
         
         normalized = message.lower().strip()
         

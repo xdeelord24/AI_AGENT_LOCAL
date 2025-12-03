@@ -8383,9 +8383,12 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                     { id: 'languages', label: 'Languages' },
                     { id: 'grammars', label: 'Grammars' },
                     { id: 'language_servers', label: 'Language Servers' },
+                    { id: 'snippets', label: 'Snippets' },
+                    { id: 'debuggers', label: 'Debuggers' },
+                    { id: 'formatters', label: 'Formatters' },
+                    { id: 'linters', label: 'Linters' },
                     { id: 'mcp_servers', label: 'MCP Servers' },
-                    { id: 'agent_servers', label: 'Agent Servers' },
-                    { id: 'snippets', label: 'Snippets' }
+                    { id: 'agent_servers', label: 'Agent Servers' }
                   ].map((category) => (
                     <button
                       key={category.id}
@@ -8440,24 +8443,47 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                           >
                             <div className="flex items-start justify-between mb-2">
                               <div className="flex-1">
-                                <div className="flex items-center gap-2 mb-1">
+                                <div className="flex items-center gap-2 mb-1 flex-wrap">
                                   <h4 className="text-sm font-semibold text-dark-100">
                                     {extension.name || 'Unnamed Extension'}
                                   </h4>
                                   <span className="text-xs text-dark-500">
                                     {extension.version || 'v0.0.0'}
                                   </span>
-                                  <span className="px-2 py-0.5 bg-dark-800 text-dark-400 text-[10px] rounded-full">
-                                    {extension.category || 'MCP Servers'}
+                                  <span className={`px-2 py-0.5 text-[10px] rounded-full ${
+                                    extension.extension_type === 'vscode' 
+                                      ? 'bg-blue-900 text-blue-300' 
+                                      : 'bg-purple-900 text-purple-300'
+                                  }`}>
+                                    {extension.extension_type === 'vscode' ? 'VSCode' : 'MCP'}
                                   </span>
+                                  <span className="px-2 py-0.5 bg-dark-800 text-dark-400 text-[10px] rounded-full">
+                                    {extension.category || 'Other'}
+                                  </span>
+                                  {extension.extension_type === 'vscode' && extension.is_compatible === false && (
+                                    <span className="px-2 py-0.5 bg-yellow-900 text-yellow-300 text-[10px] rounded-full" title="May have limited compatibility">
+                                      ⚠️ Limited
+                                    </span>
+                                  )}
                                 </div>
                                 <p className="text-xs text-dark-400 mb-2 line-clamp-2">
                                   {extension.description || 'No description available'}
                                 </p>
-                                <div className="flex items-center gap-4 text-xs text-dark-500">
-                                  <span>{extension.author || 'Unknown'}</span>
+                                <div className="flex items-center gap-4 text-xs text-dark-500 flex-wrap">
+                                  <span>{extension.publisher || extension.author || 'Unknown'}</span>
                                   {extension.downloads && (
                                     <span>{extension.downloads.toLocaleString()} downloads</span>
+                                  )}
+                                  {extension.marketplace_url && (
+                                    <a
+                                      href={extension.marketplace_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-primary-400 hover:text-primary-300 underline"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      View on Marketplace
+                                    </a>
                                   )}
                                 </div>
                               </div>
@@ -9737,13 +9763,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   </div>
                 )}
                 <form onSubmit={handleFollowUpSubmit} className="flex items-center gap-2">
-                  <input
-                    type="text"
+                  <textarea
                     value={followUpInput}
                     onChange={(e) => setFollowUpInput(e.target.value)}
                     onPaste={handleImagePaste}
                     placeholder="Add a follow-up (or paste an image)"
-                    className="flex-1 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm"
+                    rows={1}
+                    className="flex-1 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] max-h-32 overflow-y-auto"
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
@@ -9751,6 +9777,11 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                       } else if (e.key === 'Escape') {
                         setShowFileSuggestions(false);
                       }
+                    }}
+                    onInput={(e) => {
+                      // Auto-resize textarea based on content
+                      e.target.style.height = 'auto';
+                      e.target.style.height = Math.min(e.target.scrollHeight, 128) + 'px';
                     }}
                   />
                   <input

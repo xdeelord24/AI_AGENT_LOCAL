@@ -3,8 +3,39 @@ from typing import Optional, List, Dict, Any
 import os
 import json
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Import VSCode extension service
+try:
+    import sys
+    from pathlib import Path
+    # Add backend directory to path for imports
+    backend_path = Path(__file__).parent.parent
+    if str(backend_path) not in sys.path:
+        sys.path.insert(0, str(backend_path))
+    
+    from services.vscode_extension_service import VSCodeExtensionService
+    VSCODE_SERVICE_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"VSCode extension service not available: {e}")
+    VSCODE_SERVICE_AVAILABLE = False
+    VSCodeExtensionService = None
 
 router = APIRouter()
+
+# Initialize VSCode extension service if available
+vscode_service = None
+if VSCODE_SERVICE_AVAILABLE and VSCodeExtensionService:
+    try:
+        vscode_service = VSCodeExtensionService()
+        logger.info("VSCode extension service initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize VSCode extension service: {e}", exc_info=True)
+        vscode_service = None
+else:
+    logger.warning(f"VSCode service not available. VSCODE_SERVICE_AVAILABLE={VSCODE_SERVICE_AVAILABLE}, VSCodeExtensionService={VSCodeExtensionService}")
 
 # Path to MCP configuration file
 MCP_CONFIG_DIR = Path(os.getenv("AI_AGENT_CONFIG_DIR", os.path.expanduser("~/.ai_agent")))
@@ -108,38 +139,109 @@ def save_installed_extensions(extensions: List[Dict[str, Any]]):
 @router.get("")
 async def get_extensions(
     category: Optional[str] = Query("all", description="Filter by category"),
-    search: Optional[str] = Query("", description="Search query")
+    search: Optional[str] = Query("", description="Search query"),
+    source: Optional[str] = Query("all", description="Extension source: 'all', 'mcp', or 'vscode'")
 ):
-    """Get list of available extensions"""
+    """Get list of available extensions from MCP and VSCode marketplace"""
     try:
-        # Filter by category
-        filtered = MOCK_EXTENSIONS
-        if category and category != "all":
-            category_map = {
-                "mcp_servers": "MCP Servers",
-                "themes": "Themes",
-                "icon_themes": "Icon Themes",
-                "languages": "Languages",
-                "grammars": "Grammars",
-                "language_servers": "Language Servers",
-                "agent_servers": "Agent Servers",
-                "snippets": "Snippets"
+        all_extensions = []
+        
+        # Get MCP extensions
+        if source in ("all", "mcp"):
+            mcp_extensions = MOCK_EXTENSIONS.copy()
+            
+            # Filter MCP extensions by category
+            if category and category != "all":
+                category_map = {
+                    "mcp_servers": "MCP Servers",
+                }
+                category_name = category_map.get(category)
+                if category_name:
+                    mcp_extensions = [ext for ext in mcp_extensions if ext.get("category") == category_name]
+                elif category not in ["themes", "icon_themes", "languages", "grammars", "language_servers", "snippets", "debuggers", "formatters", "linters"]:
+                    # If category doesn't match VSCode categories, filter MCP extensions
+                    mcp_extensions = []
+            
+            # Filter MCP extensions by search
+            if search:
+                search_lower = search.lower()
+                mcp_extensions = [
+                    ext for ext in mcp_extensions
+                    if search_lower in ext.get("name", "").lower() or
+                       search_lower in ext.get("description", "").lower() or
+                       search_lower in ext.get("author", "").lower()
+                ]
+            
+            # Add extension type marker
+            for ext in mcp_extensions:
+                ext["extension_type"] = "mcp"
+            
+            all_extensions.extend(mcp_extensions)
+        
+        # Get VSCode extensions
+        if source in ("all", "vscode"):
+            if not vscode_service:
+                logger.warning("VSCode service not available when trying to fetch extensions")
+            else:
+                try:
+                    logger.info(f"Fetching VSCode extensions: category={category}, search={search}, source={source}")
+                    vscode_result = await vscode_service.search_extensions(
+                        query=search or "",
+                        category=category if category != "mcp_servers" else "all",
+                        page_size=50
+                    )
+                    
+                    vscode_extensions = vscode_result.get("extensions", [])
+                    logger.info(f"Fetched {len(vscode_extensions)} VSCode extensions")
+                    
+                    # Filter by category if needed
+                    if category and category != "all" and category != "mcp_servers":
+                        category_map = {
+                            "themes": "Themes",
+                            "icon_themes": "Icon Themes",
+                            "languages": "Languages",
+                            "grammars": "Grammars",
+                            "language_servers": "Language Servers",
+                            "snippets": "Snippets",
+                            "debuggers": "Debuggers",
+                            "formatters": "Formatters",
+                            "linters": "Linters"
+                        }
+                        category_name = category_map.get(category)
+                        if category_name:
+                            vscode_extensions = [
+                                ext for ext in vscode_extensions
+                                if ext.get("category") == category_name
+                            ]
+                            logger.info(f"Filtered to {len(vscode_extensions)} extensions in category {category_name}")
+                    
+                    all_extensions.extend(vscode_extensions)
+                except Exception as e:
+                    logger.error(f"Error fetching VSCode extensions: {e}", exc_info=True)
+                    # Continue without VSCode extensions if there's an error
+        
+        # Sort by downloads (if available) or name
+        all_extensions.sort(key=lambda x: (
+            -x.get("downloads", 0),
+            x.get("name", "").lower()
+        ))
+        
+        result = {
+            "extensions": all_extensions,
+            "total": len(all_extensions),
+            "sources": {
+                "mcp": source in ("all", "mcp"),
+                "vscode": source in ("all", "vscode") and vscode_service is not None
+            },
+            "debug": {
+                "vscode_service_available": vscode_service is not None,
+                "vscode_service_initialized": VSCODE_SERVICE_AVAILABLE
             }
-            category_name = category_map.get(category, category)
-            filtered = [ext for ext in MOCK_EXTENSIONS if ext.get("category") == category_name]
-        
-        # Filter by search query
-        if search:
-            search_lower = search.lower()
-            filtered = [
-                ext for ext in filtered
-                if search_lower in ext.get("name", "").lower() or
-                   search_lower in ext.get("description", "").lower() or
-                   search_lower in ext.get("author", "").lower()
-            ]
-        
-        return {"extensions": filtered}
+        }
+        logger.info(f"Returning {len(all_extensions)} extensions (MCP: {len([e for e in all_extensions if e.get('extension_type') == 'mcp'])}, VSCode: {len([e for e in all_extensions if e.get('extension_type') == 'vscode'])})")
+        return result
     except Exception as e:
+        logger.error(f"Error fetching extensions: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch extensions: {str(e)}")
 
 @router.get("/installed")
@@ -155,8 +257,18 @@ async def get_installed_extensions():
 async def get_extension_details(extension_id: str):
     """Get details and usage instructions for a specific extension"""
     try:
-        # Check if it's an available extension
+        extension = None
+        
+        # Check MCP extensions first
         extension = next((ext for ext in MOCK_EXTENSIONS if ext["id"] == extension_id), None)
+        
+        # If not found in MCP, check VSCode marketplace
+        if not extension and vscode_service:
+            try:
+                extension = await vscode_service.get_extension_details(extension_id)
+            except Exception as e:
+                logger.error(f"Error fetching VSCode extension details: {e}")
+        
         if not extension:
             raise HTTPException(status_code=404, detail=f"Extension '{extension_id}' not found")
         
@@ -165,7 +277,11 @@ async def get_extension_details(extension_id: str):
         is_installed = any(ext["id"] == extension_id for ext in installed)
         
         # Generate usage instructions based on extension type
-        usage_instructions = generate_usage_instructions(extension)
+        extension_type = extension.get("extension_type", "mcp")
+        if extension_type == "mcp":
+            usage_instructions = generate_usage_instructions(extension)
+        else:
+            usage_instructions = generate_vscode_usage_instructions(extension)
         
         return {
             "extension": extension,
@@ -175,6 +291,7 @@ async def get_extension_details(extension_id: str):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error fetching extension details: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch extension details: {str(e)}")
 
 def generate_usage_instructions(extension: Dict[str, Any]) -> Dict[str, Any]:
@@ -264,12 +381,131 @@ def generate_usage_instructions(extension: Dict[str, Any]) -> Dict[str, Any]:
     
     return instructions
 
+def generate_vscode_usage_instructions(extension: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate usage instructions for VSCode extensions"""
+    extension_id = extension.get("id", "")
+    category = extension.get("category", "")
+    marketplace_url = extension.get("marketplace_url", "")
+    repository_url = extension.get("repository_url", "")
+    is_compatible = extension.get("is_compatible", True)
+    
+    instructions = {
+        "title": f"How to use {extension.get('name', 'Extension')}",
+        "steps": [],
+        "notes": []
+    }
+    
+    if category == "Themes" or category == "Icon Themes":
+        instructions["steps"] = [
+            {
+                "step": 1,
+                "title": "Install the Extension",
+                "description": f"Click the 'Install' button to add this extension to your system. The extension will be downloaded and installed automatically."
+            },
+            {
+                "step": 2,
+                "title": "Activate the Theme",
+                "description": "After installation, go to Settings > Appearance and select this theme from the theme selector."
+            },
+            {
+                "step": 3,
+                "title": "Restart if Needed",
+                "description": "Some themes may require a restart of the application to take full effect."
+            }
+        ]
+    elif category == "Languages" or category == "Grammars":
+        instructions["steps"] = [
+            {
+                "step": 1,
+                "title": "Install the Extension",
+                "description": f"Click the 'Install' button to add language support. Syntax highlighting and language features will be enabled automatically."
+            },
+            {
+                "step": 2,
+                "title": "Open Files",
+                "description": "Open files with the supported file extensions to see syntax highlighting and language features."
+            }
+        ]
+    elif category == "Language Servers":
+        instructions["steps"] = [
+            {
+                "step": 1,
+                "title": "Install the Extension",
+                "description": f"Click the 'Install' button to add the language server. This provides advanced features like autocomplete, error checking, and refactoring."
+            },
+            {
+                "step": 2,
+                "title": "Install Language Server",
+                "description": "The extension may require additional setup. Check the extension's documentation for specific requirements."
+            },
+            {
+                "step": 3,
+                "title": "Configure if Needed",
+                "description": "Some language servers require configuration. Check Settings > Extensions for configuration options."
+            }
+        ]
+    elif category == "Snippets":
+        instructions["steps"] = [
+            {
+                "step": 1,
+                "title": "Install the Extension",
+                "description": f"Click the 'Install' button to add code snippets. Snippets will be available immediately after installation."
+            },
+            {
+                "step": 2,
+                "title": "Use Snippets",
+                "description": "Type the snippet prefix and press Tab to expand the snippet. Check the extension documentation for available snippets."
+            }
+        ]
+    else:
+        instructions["steps"] = [
+            {
+                "step": 1,
+                "title": "Install the Extension",
+                "description": f"Click the 'Install' button to add this extension. Features will be available after installation."
+            },
+            {
+                "step": 2,
+                "title": "Check Documentation",
+                "description": f"Visit the extension's marketplace page for detailed usage instructions: {marketplace_url}"
+            }
+        ]
+    
+    if not is_compatible:
+        instructions["notes"].append(
+            "⚠️ This extension may have limited compatibility with this system. Some features might not work as expected."
+        )
+    
+    instructions["notes"].extend([
+        f"Marketplace URL: {marketplace_url}",
+        "Extensions are installed locally and do not require internet access after installation.",
+        "Some extensions may require additional dependencies or configuration."
+    ])
+    
+    if repository_url:
+        instructions["notes"].append(f"Repository: {repository_url}")
+    
+    return instructions
+
 @router.post("/{extension_id}/install")
 async def install_extension(extension_id: str):
-    """Install an extension"""
+    """Install an extension (MCP or VSCode)"""
     try:
-        # Find the extension
+        extension = None
+        extension_type = "mcp"
+        
+        # Find the extension - check MCP first
         extension = next((ext for ext in MOCK_EXTENSIONS if ext["id"] == extension_id), None)
+        
+        # If not found in MCP, check VSCode marketplace
+        if not extension and vscode_service:
+            try:
+                extension = await vscode_service.get_extension_details(extension_id)
+                if extension:
+                    extension_type = "vscode"
+            except Exception as e:
+                logger.error(f"Error fetching VSCode extension for installation: {e}")
+        
         if not extension:
             raise HTTPException(status_code=404, detail=f"Extension '{extension_id}' not found")
         
@@ -280,25 +516,43 @@ async def install_extension(extension_id: str):
         if any(ext["id"] == extension_id for ext in installed):
             return {"message": "Extension already installed", "extension": extension}
         
-        # Add to installed list
-        installed.append({
+        # Prepare extension data for installation
+        extension_data = {
             **extension,
-            "installed_at": str(Path(__file__).stat().st_mtime)  # Simple timestamp
-        })
+            "extension_type": extension_type,
+            "installed_at": str(Path(__file__).stat().st_mtime)
+        }
+        
+        # For VSCode extensions, add installation metadata
+        if extension_type == "vscode":
+            extension_data["vsix_url"] = extension.get("vsix_url")
+            extension_data["marketplace_url"] = extension.get("marketplace_url")
+            extension_data["is_compatible"] = extension.get("is_compatible", True)
+        
+        # Add to installed list
+        installed.append(extension_data)
         
         # Save to config file
         save_installed_extensions(installed)
         
-        # In a real implementation, you would:
-        # 1. Download the extension from the repository
-        # 2. Install dependencies
-        # 3. Configure the extension
-        # 4. Register it with the MCP system
+        # For VSCode extensions, we would download and extract the VSIX file here
+        # For MCP extensions, we would configure them in the MCP config
+        # This is a simplified implementation - in production, you'd want to:
+        # 1. Download VSIX file for VSCode extensions
+        # 2. Extract and install to extensions directory
+        # 3. For MCP extensions, add to MCP config file
+        # 4. Register with the system
         
-        return {"message": "Extension installed successfully", "extension": extension}
+        return {
+            "message": "Extension installed successfully",
+            "extension": extension_data,
+            "type": extension_type,
+            "note": "Extension has been registered. Some extensions may require a restart to take effect."
+        }
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error installing extension: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to install extension: {str(e)}")
 
 @router.delete("/{extension_id}/install")

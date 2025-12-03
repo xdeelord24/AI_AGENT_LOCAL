@@ -54,6 +54,10 @@ class WebSearchService:
         self.default_max_results = 5
         self.max_results_limit = 20
         
+        # Relevance filtering
+        self.min_relevance_score = 2.0  # Minimum score to include a result
+        self.require_title_match = True  # Require at least one query word in title
+        
         # Retry configuration
         self.max_retries = 3
         self.retry_delay_base = 1.0  # Base delay in seconds
@@ -76,6 +80,12 @@ class WebSearchService:
             "developer.mozilla.org", "w3.org", "python.org",
             "npmjs.com", "pypi.org", "rust-lang.org", "go.dev",
             "nodejs.org", "react.dev", "vuejs.org", "angular.io"
+        }
+        
+        # Low-quality/spam domains to exclude
+        self.excluded_domains = {
+            "ad.", "ads.", "advertising", "click", "affiliate",
+            "spam", "malware", "phishing"
         }
         
         # Load cache from disk if available
@@ -168,6 +178,7 @@ class WebSearchService:
     def _optimize_query(self, query: str) -> str:
         """Optimize search query for better results"""
         query_lower = query.lower()
+        original_query = query.strip()
         
         # For price queries, add "current" or "live" if not present
         is_price_query = any(keyword in query_lower for keyword in [
@@ -178,22 +189,32 @@ class WebSearchService:
         if is_price_query:
             # Add "current" if not already present
             if "current" not in query_lower and "live" not in query_lower and "today" not in query_lower and "now" not in query_lower:
-                return f"current {query}".strip()
-            return query.strip()
+                return f"current {original_query}".strip()
+            return original_query
         
-        # Remove common stop words that don't help search
+        # Remove common stop words that don't help search, but be conservative
         stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by"}
         
         # Split and filter
-        words = query.split()
-        optimized = [w for w in words if w.lower() not in stop_words or len(words) <= 3]
+        words = original_query.split()
+        
+        # Don't remove stop words if query is very short (3 words or less)
+        if len(words) <= 3:
+            return original_query
+        
+        # Only remove stop words if there are enough remaining words
+        optimized = [w for w in words if w.lower() not in stop_words]
+        
+        # If we removed too many words, keep the original
+        if len(optimized) < max(2, len(words) * 0.6):  # Keep at least 60% of words or minimum 2
+            return original_query
         
         # Rejoin
         optimized_query = " ".join(optimized)
         
         # If optimization removed too much, use original
-        if len(optimized_query.strip()) < len(query.strip()) * 0.5:
-            return query.strip()
+        if len(optimized_query.strip()) < len(original_query.strip()) * 0.5:
+            return original_query
         
         return optimized_query.strip()
     
@@ -263,73 +284,105 @@ class WebSearchService:
     def _score_relevance(self, result: Dict[str, Any], query: str) -> float:
         """Score search result relevance based on query with improved algorithm"""
         score = 0.0
-        query_lower = query.lower()
+        query_lower = query.lower().strip()
         query_words = set(query_lower.split())
+        
+        # Filter out stop words from query words for matching
+        stop_words = {"the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "is", "are", "was", "were", "be", "been", "being"}
+        significant_query_words = {w for w in query_words if w not in stop_words and len(w) > 2}
+        if not significant_query_words:
+            significant_query_words = query_words  # Fallback if all words are stop words
         
         # Check title
         title = (result.get("title") or "").lower()
+        title_matched = False
         if title:
             title_words = set(title.split())
-            common_words = query_words.intersection(title_words)
-            score += len(common_words) * 2.5  # Title matches are more important
+            common_words = significant_query_words.intersection(title_words)
             
-            # Boost for query words at the start of title
-            title_start = " ".join(title.split()[:3])
-            if any(word in title_start for word in query_words):
-                score += 1.0
+            if common_words:
+                title_matched = True
+                # More weight for matching significant words
+                score += len(common_words) * 3.0  # Increased from 2.5
+                
+                # Boost for query words at the start of title
+                title_start = " ".join(title.split()[:3])
+                if any(word in title_start for word in significant_query_words):
+                    score += 2.0  # Increased from 1.0
+            else:
+                # Penalize if no significant words match in title
+                score -= 1.0
         
         # Check snippet/body
         body = (result.get("body") or result.get("description") or "").lower()
+        body_matched = False
         if body:
             body_words = set(body.split())
-            common_words = query_words.intersection(body_words)
-            score += len(common_words) * 1.0
+            common_words = significant_query_words.intersection(body_words)
             
-            # Boost for multiple occurrences
-            for word in query_words:
-                count = body.count(word)
-                if count > 1:
-                    score += 0.2 * (count - 1)  # Diminishing returns
+            if common_words:
+                body_matched = True
+                score += len(common_words) * 1.5  # Increased from 1.0
+                
+                # Boost for multiple occurrences
+                for word in significant_query_words:
+                    count = body.count(word)
+                    if count > 1:
+                        score += 0.3 * (count - 1)  # Increased from 0.2
+            else:
+                # Small penalty if no matches in body
+                score -= 0.5
+        
+        # Require at least some match in title or body
+        if not title_matched and not body_matched:
+            return 0.0  # No relevance if nothing matches
         
         # Boost for exact phrase matches
         if query_lower in title:
-            score += 4.0
+            score += 5.0  # Increased from 4.0
         if query_lower in body:
-            score += 2.5
+            score += 3.0  # Increased from 2.5
         
         # Boost for partial phrase matches (consecutive words)
         query_phrases = self._extract_phrases(query_lower)
         for phrase in query_phrases:
             if len(phrase.split()) >= 2:
                 if phrase in title:
-                    score += 2.0
+                    score += 3.0  # Increased from 2.0
                 if phrase in body:
-                    score += 1.0
+                    score += 1.5  # Increased from 1.0
         
         # Boost for domain authority
         url = result.get("href") or result.get("url") or ""
         try:
             domain = urlparse(url).netloc.lower()
+            # Check for excluded domains first
+            if any(excluded in domain for excluded in self.excluded_domains):
+                score -= 5.0  # Heavy penalty for spam domains
+            
             if domain in self.trusted_domains:
-                score += 2.0  # Increased boost for trusted domains
+                score += 2.5  # Increased from 2.0
             elif any(trusted in domain for trusted in self.trusted_domains):
-                score += 1.0
+                score += 1.5  # Increased from 1.0
         except Exception:
             pass
         
         # Penalize very short titles or bodies (likely low quality)
         if title and len(title) < 10:
-            score -= 0.5
+            score -= 1.0  # Increased penalty
         if body and len(body) < 20:
-            score -= 0.3
+            score -= 0.5  # Increased penalty
+        
+        # Penalize generic/spam-like titles
+        spam_indicators = ["click here", "buy now", "free download", "limited time", "act now"]
+        if any(indicator in title for indicator in spam_indicators):
+            score -= 3.0
         
         # Boost for recent content (if date available)
         date = result.get("date") or result.get("published")
         if date:
             try:
-                # Try to parse date and boost recent content
                 if isinstance(date, str):
-                    # Simple heuristic: if date string contains current year
                     current_year = str(datetime.now().year)
                     if current_year in date:
                         score += 0.5
@@ -479,6 +532,16 @@ class WebSearchService:
                 if deduplicate:
                     results = self._deduplicate_results(results)
                 
+                # Apply relevance filtering to cached results too
+                scored_results = []
+                for result in results:
+                    score = self._score_relevance(result, original_query)
+                    if score >= self.min_relevance_score * 0.5:  # Slightly relaxed for cached results
+                        scored_results.append((score, result))
+                
+                scored_results.sort(key=lambda x: x[0], reverse=True)
+                results = [result for _, result in scored_results]
+                
                 return results[:max_results], metadata
         
         # Rate limiting
@@ -496,17 +559,34 @@ class WebSearchService:
                 results = self._deduplicate_results(results)
             
             # Score and sort by relevance
+            original_results_count = len(results)
             scored_results = []
             for result in results:
                 score = self._score_relevance(result, original_query)
-                scored_results.append((score, result))
+                # Filter out low-relevance results
+                if score >= self.min_relevance_score:
+                    scored_results.append((score, result))
             
             # Sort by score (descending)
             scored_results.sort(key=lambda x: x[0], reverse=True)
-            results = [result for _, result in scored_results]
+            filtered_results = [result for _, result in scored_results]
+            
+            # If we filtered out too many results, relax the threshold slightly
+            if len(filtered_results) < max_results and original_results_count > len(filtered_results):
+                # Re-score all original results with a lower threshold
+                all_scored = []
+                for result in results:
+                    score = self._score_relevance(result, original_query)
+                    # Use a lower threshold (half of min_relevance_score) but still require some relevance
+                    if score >= self.min_relevance_score * 0.5:
+                        all_scored.append((score, result))
+                
+                all_scored.sort(key=lambda x: x[0], reverse=True)
+                # Take top results, prioritizing higher scores
+                filtered_results = [result for _, result in all_scored[:max_results * 2]]
             
             # Limit to max_results
-            results = results[:max_results]
+            results = filtered_results[:max_results]
             
             # Store in cache
             cache_entry = {
@@ -562,30 +642,38 @@ class WebSearchService:
         filter_domains: Optional[List[str]] = None,
         exclude_domains: Optional[List[str]] = None
     ) -> List[Dict[str, Any]]:
-        """Filter results by domain whitelist/blacklist"""
-        if not filter_domains and not exclude_domains:
-            return results
-        
+        """Filter results by domain whitelist/blacklist and quality checks"""
         filtered = []
         for result in results:
             url = result.get("href") or result.get("url") or ""
+            title = (result.get("title") or "").lower()
+            
+            # Skip results with empty or very short titles
+            if not title or len(title.strip()) < 5:
+                continue
+            
             try:
                 domain = urlparse(url).netloc.lower()
                 
-                # Check blacklist
+                # Always check built-in excluded domains
+                if any(excluded in domain for excluded in self.excluded_domains):
+                    continue
+                
+                # Check user-provided blacklist
                 if exclude_domains:
                     if any(excluded in domain for excluded in exclude_domains):
                         continue
                 
-                # Check whitelist
+                # Check user-provided whitelist
                 if filter_domains:
                     if not any(allowed in domain for allowed in filter_domains):
                         continue
                 
                 filtered.append(result)
             except Exception:
-                # If URL parsing fails, include the result
-                filtered.append(result)
+                # If URL parsing fails, still include if title looks reasonable
+                if title and len(title.strip()) >= 5:
+                    filtered.append(result)
         
         return filtered
     
