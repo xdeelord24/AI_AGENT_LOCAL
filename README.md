@@ -11,8 +11,9 @@ A local-first AI pair programmer built with FastAPI and React. The backend (`mai
 - **Code intelligence** – `/api/code/*` offers analysis, refactors, completions, suggestions, and semantic search powered by the same model context used in chat.
 - **Terminal streaming** – `/api/terminal/command/stream` mirrors a persistent PTY session so the assistant can run tests or CLI tools and show incremental output.
 - **Session + status metadata** – chat sessions are persisted by `backend/api/chat_sessions.py`, and each response ships an `ai_plan`, `file_operations`, `agent_statuses`, and `activity_log` that the UI renders as live status cards.
-- **Multiple model backends** – Ollama (default) with optional proxy (`ollama_proxy.py`), HuggingFace fallback, configurable generation parameters, and automatic connection caching.
-- **MCP & web search** – Model Context Protocol tools (`backend/services/mcp_server.py`) and the enhanced DuckDuckGo cache (`backend/services/web_search_service.py`) can be toggled via environment flags.
+- **Multiple model backends** – Ollama (default) with optional proxy (`ollama_proxy.py`), HuggingFace fallback, OpenRouter (OpenAI-compatible hosted API), configurable generation parameters, and automatic connection caching.
+- **MCP tool ecosystem** – Built‑in Model Context Protocol server (`backend/services/mcp_server.py`) exposes standardized tools for file operations, code analysis, terminal commands, and web search, with read‑only safety in ASK mode and full capabilities in agent/plan mode (see `MCP_INTEGRATION.md`).
+- **Enhanced web search** – DuckDuckGo‑based search with caching, deduplication, query optimization, relevance scoring, domain filtering, multi‑query search, and summarization, available both as MCP tools and via dedicated REST endpoints (see `WEB_SEARCH_IMPROVEMENTS.md`).
 
 ```text
 ┌───────────────────────┐    ┌────────────────────────┐    ┌─────────────────────┐
@@ -41,6 +42,7 @@ Optional:
 - `ddgs` for richer web search answers.
 - `mcp` extras for Model Context Protocol support (see `MCP_INTEGRATION.md`).
 - HuggingFace account/key if you want to set `LLM_PROVIDER=huggingface`.
+- OpenRouter account/key if you want to set `LLM_PROVIDER=openrouter`.
 
 ---
 
@@ -92,10 +94,11 @@ All runtime settings are pulled from `.env` (see `env.example`) and standard env
 
 - **API**: `API_HOST`, `API_PORT`, `LOG_LEVEL`, `DEBUG`, `RELOAD`.
 - **Model routing** (`backend/services/ai_service.py`):
-  - `LLM_PROVIDER` – `ollama` (default) or `huggingface`.
+  - `LLM_PROVIDER` – `ollama` (default), `huggingface`, or `openrouter`.
   - `OLLAMA_URL` – proxy endpoint (default `http://localhost:5000`); `OLLAMA_DIRECT_URL` – direct endpoint (`http://localhost:11434`).
   - `USE_PROXY`, `OLLAMA_REQUEST_TIMEOUT`, `OLLAMA_NUM_*`, `OLLAMA_KEEP_ALIVE`.
   - `DEFAULT_MODEL`, `HF_MODEL`, `HF_API_KEY`, `HF_BASE_URL`.
+  - `OPENROUTER_MODEL`, `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api/v1`), plus optional `OPENROUTER_SITE_URL` / `OPENROUTER_APP_NAME` for analytics headers.
 - **Generation controls**: `MAX_TOKENS`, `TEMPERATURE`, `TOP_P`, `OLLAMA_NUM_PREDICT`, etc.
 - **File limits**: `MAX_FILE_SIZE`, `SUPPORTED_EXTENSIONS`.
 - **Web search**: `ENABLE_WEB_SEARCH`, `WEB_SEARCH_CACHE_SIZE`, `WEB_SEARCH_CACHE_TTL`, `WEB_SEARCH_MAX_RESULTS`.
@@ -147,6 +150,20 @@ npm test      # CRA test runner
 - **Model not downloaded** – `setup.py` checks `ollama list` and can automatically `ollama pull codellama`. Otherwise run the `ollama pull` commands listed in `INSTALL.md`.
 - **HuggingFace provider** – set `LLM_PROVIDER=huggingface`, fill `HF_API_KEY` and `HF_MODEL`, and optionally `HF_BASE_URL` for an OpenAI-compatible proxy.
 - **MCP / web search** – enable by installing the optional dependencies referenced in `MCP_INTEGRATION.md` and `WEB_SEARCH_IMPROVEMENTS.md`.
+
+### OpenRouter usage notes
+
+- **Backend behavior**
+  - When `LLM_PROVIDER=openrouter`, the AI service uses `OPENROUTER_MODEL` and `OPENROUTER_API_KEY` to call the OpenRouter OpenAI-compatible `chat/completions` API.
+  - `GET /api/chat/status`, `GET /api/chat/models`, and `POST /api/chat/models/{name}/select` all work with OpenRouter the same way they do for Ollama/Hugging Face (the "models" list is effectively the single configured OpenRouter model).
+  - `GET/PUT /api/settings` and `POST /api/settings/test-connection` now read/write OpenRouter fields (`openrouter_model`, `openrouter_api_key`, `openrouter_base_url`) alongside the existing Ollama/HF settings.
+
+- **Frontend configuration**
+  - The main **Settings** page (`frontend/src/pages/Settings.js`) exposes a **Model Provider** dropdown with three options: **Ollama (local)**, **Hugging Face Inference API**, and **OpenRouter (hosted)**.
+    - Selecting **OpenRouter** shows fields for **OpenRouter API Base URL**, **OpenRouter Model ID**, and **OpenRouter API Key**.
+    - Saving settings persists them to `~/.offline_ai_agent/settings.json` via the `/api/settings` endpoint, and the **Test Connection** button calls `/api/settings/test-connection`.
+  - The in-IDE **Connectivity Settings** panel (`frontend/src/components/IDELayout.js`) mirrors these provider options so you can quickly switch between Ollama, Hugging Face, and OpenRouter without leaving the editor.
+    - Changing provider or model from this panel updates the same backend settings and re-runs the connection test, updating the status badges in the header.
 
 ---
 
