@@ -90,13 +90,14 @@ class MCPServerTools:
     any MCP-compliant AI model or client.
     """
     
-    def __init__(self, file_service=None, code_analyzer=None, web_search_enabled=True, web_search_service=None, workspace_root=None, location_service=None):
+    def __init__(self, file_service=None, code_analyzer=None, web_search_enabled=True, web_search_service=None, workspace_root=None, location_service=None, memory_service=None):
         self.file_service = file_service
         self.code_analyzer = code_analyzer
         self.web_search_enabled = web_search_enabled
         self.workspace_root = os.path.abspath(workspace_root) if workspace_root else os.getcwd()
         self._web_search_service = web_search_service  # Shared web search service instance
         self._location_service = location_service  # Location service for weather/news
+        self._memory_service = memory_service  # Memory service for saving memories
         try:
             self._cache_ttl_seconds = max(1, int(os.getenv("MCP_CACHE_TTL_SECONDS", "4")))
         except ValueError:
@@ -600,6 +601,25 @@ class MCPServerTools:
                 ),
             ])
         
+        # Add memory tools if memory service is available
+        if self._memory_service:
+            tools.extend([
+                Tool(
+                    name="save_memory",
+                    description="Save a memory that the user wants you to remember. Use this when the user explicitly asks you to remember, save, or keep in mind something. Examples: 'Remember that my name is John', 'Save that I prefer dark mode', 'Keep in mind that I'm a Python developer'.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "The memory content to save. Should be a clear, concise statement of what to remember (e.g., 'User's name is John', 'User prefers dark mode', 'User is a Python developer')."
+                            }
+                        },
+                        "required": ["content"]
+                    }
+                ),
+            ])
+        
         return tools
     
     def get_server_info(self) -> Dict[str, Any]:
@@ -762,6 +782,8 @@ class MCPServerTools:
                     arguments.get("query"),
                     arguments.get("max_results", 10)
                 )
+            elif tool_name == "save_memory":
+                return await self._save_memory(arguments.get("content", ""))
             else:
                 execution_time = time.time() - execution_start
                 logger.warning(f"Unknown tool requested: {tool_name} (execution time: {execution_time:.3f}s)")
@@ -1899,9 +1921,33 @@ class MCPServerTools:
         except Exception as e:
             logger.error(f"Error getting news: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error getting news: {str(e)}")]
+    
+    async def _save_memory(self, content: str) -> List[TextContent]:
+        """Save a memory"""
+        if not self._memory_service:
+            return [TextContent(
+                type="text",
+                text="Memory service not available. Please ensure memory_service is initialized."
+            )]
+        
+        if not content or not content.strip():
+            return [TextContent(
+                type="text",
+                text="ERROR: Memory content cannot be empty"
+            )]
+        
+        try:
+            memory = self._memory_service.add_memory(content.strip())
+            return [TextContent(
+                type="text",
+                text=f"✅ Memory saved successfully!\n\nSaved: {memory['content']}\n\nThis information will now be remembered for future conversations."
+            )]
+        except Exception as e:
+            logger.error(f"Error saving memory: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error saving memory: {str(e)}")]
 
 
-def create_mcp_server(file_service=None, code_analyzer=None, web_search_enabled=True, location_service=None):
+def create_mcp_server(file_service=None, code_analyzer=None, web_search_enabled=True, location_service=None, memory_service=None):
     """
     Create and configure an MCP server instance following the Model Context Protocol
     
@@ -1935,7 +1981,7 @@ def create_mcp_server(file_service=None, code_analyzer=None, web_search_enabled=
     if not MCP_AVAILABLE:
         return None
     
-    tools = MCPServerTools(file_service, code_analyzer, web_search_enabled, location_service=location_service)
+    tools = MCPServerTools(file_service, code_analyzer, web_search_enabled, location_service=location_service, memory_service=memory_service)
     server = Server("ai-agent-mcp")
     
     @server.list_tools()

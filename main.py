@@ -70,6 +70,15 @@ async def lifespan(app: FastAPI):
         print(f"⚠️  Warning: Location service not available: {e}")
         location_service = None
     
+    # Initialize memory service
+    try:
+        from backend.services.memory_service import MemoryService
+        memory_service = MemoryService()
+        print("✅ Memory service initialized")
+    except Exception as e:
+        print(f"⚠️  Warning: Memory service not available: {e}")
+        memory_service = None
+    
     # Initialize MCP tools if available
     if MCP_AVAILABLE and MCPServerTools:
         try:
@@ -79,7 +88,8 @@ async def lifespan(app: FastAPI):
                 code_analyzer=app.state.code_analyzer,
                 web_search_enabled=web_search_enabled,
                 web_search_service=web_search_service,  # Share web search service instance
-                location_service=location_service  # Share location service instance
+                location_service=location_service,  # Share location service instance
+                memory_service=memory_service  # Share memory service instance
             )
             app.state.ai_service.set_mcp_tools(mcp_tools)
             print("✅ MCP tools enabled and available")
