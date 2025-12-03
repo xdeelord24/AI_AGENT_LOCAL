@@ -61,6 +61,15 @@ async def lifespan(app: FastAPI):
         print(f"⚠️  Warning: Enhanced web search not available: {e}")
         web_search_service = None
     
+    # Initialize location service for weather and news
+    try:
+        from backend.services.location_service import LocationService
+        location_service = LocationService()
+        print("✅ Location service initialized (weather & news available)")
+    except Exception as e:
+        print(f"⚠️  Warning: Location service not available: {e}")
+        location_service = None
+    
     # Initialize MCP tools if available
     if MCP_AVAILABLE and MCPServerTools:
         try:
@@ -69,7 +78,8 @@ async def lifespan(app: FastAPI):
                 file_service=app.state.file_service,
                 code_analyzer=app.state.code_analyzer,
                 web_search_enabled=web_search_enabled,
-                web_search_service=web_search_service  # Share web search service instance
+                web_search_service=web_search_service,  # Share web search service instance
+                location_service=location_service  # Share location service instance
             )
             app.state.ai_service.set_mcp_tools(mcp_tools)
             print("✅ MCP tools enabled and available")

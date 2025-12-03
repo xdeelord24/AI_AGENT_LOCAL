@@ -90,12 +90,13 @@ class MCPServerTools:
     any MCP-compliant AI model or client.
     """
     
-    def __init__(self, file_service=None, code_analyzer=None, web_search_enabled=True, web_search_service=None, workspace_root=None):
+    def __init__(self, file_service=None, code_analyzer=None, web_search_enabled=True, web_search_service=None, workspace_root=None, location_service=None):
         self.file_service = file_service
         self.code_analyzer = code_analyzer
         self.web_search_enabled = web_search_enabled
         self.workspace_root = os.path.abspath(workspace_root) if workspace_root else os.getcwd()
         self._web_search_service = web_search_service  # Shared web search service instance
+        self._location_service = location_service  # Location service for weather/news
         try:
             self._cache_ttl_seconds = max(1, int(os.getenv("MCP_CACHE_TTL_SECONDS", "4")))
         except ValueError:
@@ -526,6 +527,79 @@ class MCPServerTools:
                 )
             )
         
+        # Add location-based tools if location service is available
+        if self._location_service:
+            tools.extend([
+                Tool(
+                    name="get_user_location",
+                    description="Detect the user's current location based on IP address geolocation. Returns city, country, coordinates, and timezone information.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "ip_address": {
+                                "type": "string",
+                                "description": "Optional IP address. If not provided, uses the current connection's IP address."
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_weather",
+                    description="Get current weather information for a location. Can use city name or coordinates. Returns temperature, conditions, humidity, wind speed, and more.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "city": {
+                                "type": "string",
+                                "description": "City name (e.g., 'London', 'New York'). Either city or coordinates must be provided."
+                            },
+                            "latitude": {
+                                "type": "number",
+                                "description": "Latitude coordinate. Required if city is not provided."
+                            },
+                            "longitude": {
+                                "type": "number",
+                                "description": "Longitude coordinate. Required if city is not provided."
+                            },
+                            "units": {
+                                "type": "string",
+                                "description": "Temperature units: 'metric' for Celsius (default), 'imperial' for Fahrenheit",
+                                "enum": ["metric", "imperial"],
+                                "default": "metric"
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_news",
+                    description="Get news articles for a location. Can filter by city, country, or search query. Returns recent news articles with titles, descriptions, and URLs.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "city": {
+                                "type": "string",
+                                "description": "City name to get news for (e.g., 'London', 'New York')"
+                            },
+                            "country": {
+                                "type": "string",
+                                "description": "Country name or code (e.g., 'US', 'GB', 'United States')"
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "Optional search query to filter news articles"
+                            },
+                            "max_results": {
+                                "type": "integer",
+                                "description": "Maximum number of news articles to return (default: 10, max: 50)",
+                                "default": 10,
+                                "minimum": 1,
+                                "maximum": 50
+                            }
+                        }
+                    }
+                ),
+            ])
+        
         return tools
     
     def get_server_info(self) -> Dict[str, Any]:
@@ -671,6 +745,22 @@ class MCPServerTools:
                     arguments.get("title", ""),
                     arguments.get("slides", []),
                     arguments.get("author")
+                )
+            elif tool_name == "get_user_location":
+                return await self._get_user_location(arguments.get("ip_address"))
+            elif tool_name == "get_weather":
+                return await self._get_weather(
+                    arguments.get("city"),
+                    arguments.get("latitude"),
+                    arguments.get("longitude"),
+                    arguments.get("units", "metric")
+                )
+            elif tool_name == "get_news":
+                return await self._get_news(
+                    arguments.get("city"),
+                    arguments.get("country"),
+                    arguments.get("query"),
+                    arguments.get("max_results", 10)
                 )
             else:
                 execution_time = time.time() - execution_start
@@ -1682,9 +1772,136 @@ class MCPServerTools:
         except Exception as e:
             logger.error(f"Error creating presentation: {e}", exc_info=True)
             return [TextContent(type="text", text=f"ERROR: Failed to create presentation: {str(e)}")]
+    
+    async def _get_user_location(self, ip_address: Optional[str] = None) -> List[TextContent]:
+        """Get user location based on IP address"""
+        if not self._location_service:
+            return [TextContent(
+                type="text",
+                text="Location service not available. Please ensure location_service is initialized."
+            )]
+        
+        try:
+            location = await self._location_service.get_user_location(ip_address)
+            
+            if "error" in location:
+                return [TextContent(
+                    type="text",
+                    text=f"Error getting location: {location.get('error', 'Unknown error')}"
+                )]
+            
+            # Format location information
+            result = "User Location Information:\n\n"
+            result += f"City: {location.get('city', 'Unknown')}\n"
+            result += f"Region: {location.get('region', 'Unknown')}\n"
+            result += f"Country: {location.get('country', 'Unknown')} ({location.get('country_code', '')})\n"
+            result += f"Coordinates: {location.get('latitude', 0):.4f}, {location.get('longitude', 0):.4f}\n"
+            result += f"Timezone: {location.get('timezone', 'Unknown')}\n"
+            result += f"IP Address: {location.get('ip', 'Unknown')}\n"
+            
+            return [TextContent(type="text", text=result)]
+        except Exception as e:
+            logger.error(f"Error getting user location: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error getting location: {str(e)}")]
+    
+    async def _get_weather(
+        self,
+        city: Optional[str],
+        latitude: Optional[float],
+        longitude: Optional[float],
+        units: str
+    ) -> List[TextContent]:
+        """Get weather for a location"""
+        if not self._location_service:
+            return [TextContent(
+                type="text",
+                text="Location service not available. Please ensure location_service is initialized."
+            )]
+        
+        try:
+            weather = await self._location_service.get_weather(city, latitude, longitude, units)
+            
+            if "error" in weather:
+                return [TextContent(
+                    type="text",
+                    text=f"Error getting weather: {weather.get('error', 'Unknown error')}"
+                )]
+            
+            # Format weather information
+            temp_unit = "°C" if units == "metric" else "°F"
+            speed_unit = "km/h" if units == "metric" else "mph"
+            
+            result = f"Weather Information for {weather.get('location', 'Unknown')}:\n\n"
+            result += f"Temperature: {weather.get('temperature', 0):.1f}{temp_unit}\n"
+            result += f"Feels Like: {weather.get('feels_like', 0):.1f}{temp_unit}\n"
+            result += f"Conditions: {weather.get('description', 'Unknown').title()}\n"
+            result += f"Humidity: {weather.get('humidity', 0)}%\n"
+            result += f"Wind Speed: {weather.get('wind_speed', 0):.1f} {speed_unit}\n"
+            result += f"Pressure: {weather.get('pressure', 0)} hPa\n"
+            if weather.get('visibility'):
+                result += f"Visibility: {weather.get('visibility', 0) / 1000:.1f} km\n"
+            result += f"\nData Source: {weather.get('source', 'Unknown')}\n"
+            
+            return [TextContent(type="text", text=result)]
+        except Exception as e:
+            logger.error(f"Error getting weather: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error getting weather: {str(e)}")]
+    
+    async def _get_news(
+        self,
+        city: Optional[str],
+        country: Optional[str],
+        query: Optional[str],
+        max_results: int
+    ) -> List[TextContent]:
+        """Get news for a location"""
+        if not self._location_service:
+            return [TextContent(
+                type="text",
+                text="Location service not available. Please ensure location_service is initialized."
+            )]
+        
+        try:
+            news = await self._location_service.get_news(city, country, query, max_results)
+            
+            if "error" in news:
+                return [TextContent(
+                    type="text",
+                    text=f"Error getting news: {news.get('error', 'Unknown error')}"
+                )]
+            
+            articles = news.get("articles", [])
+            if not articles:
+                return [TextContent(
+                    type="text",
+                    text=f"No news articles found for the specified location/query."
+                )]
+            
+            # Format news information
+            result = f"News Articles ({news.get('total_results', len(articles))} results):\n\n"
+            result += f"Query: {news.get('query', 'General news')}\n"
+            result += f"Source: {news.get('source', 'Unknown')}\n\n"
+            result += "=" * 80 + "\n\n"
+            
+            for i, article in enumerate(articles[:max_results], 1):
+                result += f"{i}. {article.get('title', 'No title')}\n"
+                if article.get('description'):
+                    result += f"   {article.get('description', '')}\n"
+                if article.get('source'):
+                    result += f"   Source: {article.get('source', '')}\n"
+                if article.get('published_at'):
+                    result += f"   Published: {article.get('published_at', '')}\n"
+                if article.get('url'):
+                    result += f"   URL: {article.get('url', '')}\n"
+                result += "\n"
+            
+            return [TextContent(type="text", text=result)]
+        except Exception as e:
+            logger.error(f"Error getting news: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"Error getting news: {str(e)}")]
 
 
-def create_mcp_server(file_service=None, code_analyzer=None, web_search_enabled=True):
+def create_mcp_server(file_service=None, code_analyzer=None, web_search_enabled=True, location_service=None):
     """
     Create and configure an MCP server instance following the Model Context Protocol
     
@@ -1710,6 +1927,7 @@ def create_mcp_server(file_service=None, code_analyzer=None, web_search_enabled=
         file_service: Service for file operations
         code_analyzer: Service for code analysis
         web_search_enabled: Whether to enable web search tool
+        location_service: Service for location detection, weather, and news
         
     Returns:
         Tuple of (Server instance, MCPServerTools instance) or (None, None) if MCP unavailable
@@ -1717,7 +1935,7 @@ def create_mcp_server(file_service=None, code_analyzer=None, web_search_enabled=
     if not MCP_AVAILABLE:
         return None
     
-    tools = MCPServerTools(file_service, code_analyzer, web_search_enabled)
+    tools = MCPServerTools(file_service, code_analyzer, web_search_enabled, location_service=location_service)
     server = Server("ai-agent-mcp")
     
     @server.list_tools()

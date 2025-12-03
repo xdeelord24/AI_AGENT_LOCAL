@@ -452,6 +452,35 @@ class ApiService {
     return this.post('/api/settings/test-connection');
   }
 
+  // Memory API
+  static async getMemorySettings() {
+    return this.get('/api/memory/settings');
+  }
+
+  static async updateMemorySettings(settings) {
+    return this.put('/api/memory/settings', settings);
+  }
+
+  static async getMemories() {
+    return this.get('/api/memory');
+  }
+
+  static async createMemory(content, metadata = null) {
+    return this.post('/api/memory', { content, metadata });
+  }
+
+  static async updateMemory(memoryId, content = null, metadata = null) {
+    return this.put(`/api/memory/${memoryId}`, { content, metadata });
+  }
+
+  static async deleteMemory(memoryId) {
+    return this.delete(`/api/memory/${memoryId}`);
+  }
+
+  static async clearAllMemories() {
+    return this.delete('/api/memory');
+  }
+
   // Terminal API
   static async ensureTerminalSession(sessionId = null, basePath = null) {
     const payload = { session_id: sessionId };

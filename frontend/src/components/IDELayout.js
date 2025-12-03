@@ -1899,11 +1899,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [chatStatus, setChatStatus] = useState(null);
   const [isLoadingStatus, setIsLoadingStatus] = useState(false);
   const [showConnectivityPanel, setShowConnectivityPanel] = useState(false);
+  const [showMemoryPanel, setShowMemoryPanel] = useState(false);
   const [thinkingAiPlan, setThinkingAiPlan] = useState(null);
   const [connectivitySettings, setConnectivitySettings] = useState(null);
   const [isConnectivityLoading, setIsConnectivityLoading] = useState(false);
   const [isConnectivitySaving, setIsConnectivitySaving] = useState(false);
   const [isTestingConnectivity, setIsTestingConnectivity] = useState(false);
+  const [memorySettings, setMemorySettings] = useState({
+    reference_saved_memories: true,
+    reference_chat_history: true
+  });
+  const [memories, setMemories] = useState([]);
+  const [isMemoryLoading, setIsMemoryLoading] = useState(false);
+  const [isMemorySaving, setIsMemorySaving] = useState(false);
   const [hfConnectivityApiKey, setHfConnectivityApiKey] = useState('');
   const [hfConnectivityApiKeyDirty, setHfConnectivityApiKeyDirty] = useState(false);
   const [openrouterConnectivityApiKey, setOpenrouterConnectivityApiKey] = useState('');
@@ -2689,6 +2697,45 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     // Preload connectivity settings so the panel opens faster
     loadConnectivitySettings();
   }, [loadConnectivitySettings]);
+
+  const loadMemorySettings = useCallback(async () => {
+    setIsMemoryLoading(true);
+    try {
+      const [settingsResponse, memoriesResponse] = await Promise.all([
+        ApiService.getMemorySettings(),
+        ApiService.getMemories()
+      ]);
+      setMemorySettings({
+        reference_saved_memories: settingsResponse.reference_saved_memories ?? true,
+        reference_chat_history: settingsResponse.reference_chat_history ?? true
+      });
+      setMemories(memoriesResponse.memories || []);
+    } catch (error) {
+      console.error('Failed to load memory settings:', error);
+      toast.error('Could not load memory settings');
+    } finally {
+      setIsMemoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // Preload memory settings
+    loadMemorySettings();
+  }, [loadMemorySettings]);
+
+  const handleSaveMemorySettings = async () => {
+    setIsMemorySaving(true);
+    try {
+      await ApiService.updateMemorySettings(memorySettings);
+      toast.success('Memory settings saved');
+      await loadMemorySettings();
+    } catch (error) {
+      console.error('Failed to save memory settings:', error);
+      toast.error(error.response?.data?.detail || 'Failed to save memory settings');
+    } finally {
+      setIsMemorySaving(false);
+    }
+  };
 
   useEffect(() => {
     if (!thinkingStart) {

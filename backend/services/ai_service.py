@@ -2989,6 +2989,21 @@ class AIService:
                 "",
             ])
         
+        # Add memory information if available
+        try:
+            from .memory_service import MemoryService
+            memory_service = MemoryService()
+            if memory_service.should_reference_chat_history() or memory_service.settings.get("reference_saved_memories", True):
+                memories_text = memory_service.get_memories_for_prompt()
+                if memories_text:
+                    prompt_parts.extend([
+                        "",
+                        memories_text,
+                    ])
+        except Exception as e:
+            # Memory service not available or error - continue without it
+            logger.debug(f"Memory service not available: {e}")
+        
         # Add MCP tools description if enabled
         if self.is_mcp_enabled():
             mcp_tools_desc = self.mcp_client.get_tools_description()
