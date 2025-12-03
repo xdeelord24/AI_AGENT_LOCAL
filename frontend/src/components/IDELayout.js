@@ -9,13 +9,14 @@ import {
   RefreshCw, Minimize2, Workflow, Trash2,
   Sparkles, Brain, ListChecks, FileSearch, Milestone, PenTool,
   Activity, ShieldCheck, Megaphone, AlertTriangle,
-  ThumbsUp, ThumbsDown, Copy, Search, Download, Package, Settings
+  ThumbsUp, ThumbsDown, Copy, Search, Download, Package, Settings, Palette
 } from 'lucide-react';
 import CommandPalette from './CommandPalette';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
 import { formatMessageContent, initializeCopyCodeListeners, copyToClipboard, highlightCodeBlocks } from '../utils/messageFormatter';
 import { detectNewScriptIntent } from '../utils/intentDetection';
+import { setMonacoInstance, loadActiveTheme } from '../utils/themeManager';
 import toast from 'react-hot-toast';
 
 const HF_DEFAULT_BASE_URL = 'https://api-inference.huggingface.co';
@@ -1019,6 +1020,15 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [installedExtensions, setInstalledExtensions] = useState([]);
   const [isLoadingExtensions, setIsLoadingExtensions] = useState(false);
   const [extensionSearchQuery, setExtensionSearchQuery] = useState('');
+  
+  // Theme state
+  const [activeThemeId, setActiveThemeId] = useState(() => {
+    try {
+      return localStorage.getItem('activeTheme') || 'vs-dark';
+    } catch {
+      return 'vs-dark';
+    }
+  });
   const [extensionInstallFilter, setExtensionInstallFilter] = useState('all'); // 'all', 'installed', 'not_installed'
   const [extensionCategory, setExtensionCategory] = useState('mcp_servers'); // 'all', 'themes', 'icon_themes', 'languages', 'grammars', 'language_servers', 'mcp_servers', 'agent_servers', 'snippets'
   const [installingExtensionId, setInstallingExtensionId] = useState(null);
@@ -1085,6 +1095,48 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   useEffect(() => {
     updatePanelCssVar('right', rightSidebarWidth);
   }, [rightSidebarWidth, updatePanelCssVar]);
+
+  // Listen for theme changes
+  useEffect(() => {
+    const handleThemeChange = async () => {
+      const savedTheme = localStorage.getItem('activeTheme');
+      if (savedTheme && savedTheme !== 'vs-dark' && savedTheme !== 'default') {
+        setActiveThemeId(savedTheme);
+        // Apply theme to Monaco if it's ready
+        if (monacoRef.current) {
+          try {
+            const { applyMonacoTheme } = await import('../utils/themeManager');
+            await applyMonacoTheme(savedTheme);
+          } catch (error) {
+            console.error('Error applying theme to Monaco:', error);
+          }
+        }
+      } else {
+        setActiveThemeId('vs-dark');
+        // Reset Monaco to default theme
+        if (monacoRef.current) {
+          try {
+            const monaco = monacoRef.current;
+            if (monaco && monaco.editor) {
+              monaco.editor.setTheme('vs-dark');
+            }
+          } catch (error) {
+            console.error('Error resetting Monaco theme:', error);
+          }
+        }
+      }
+    };
+    
+    // Listen for storage events (theme changes from other tabs/components)
+    window.addEventListener('storage', handleThemeChange);
+    // Also listen for custom theme change events
+    window.addEventListener('themeChanged', handleThemeChange);
+    
+    return () => {
+      window.removeEventListener('storage', handleThemeChange);
+      window.removeEventListener('themeChanged', handleThemeChange);
+    };
+  }, []);
 
   useEffect(() => {
     updatePanelCssVar('bottom', bottomPanelHeight);
@@ -1256,6 +1308,70 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   });
   const [isEditorReady, setIsEditorReady] = useState(false);
   
+  // Apply theme to Monaco when activeThemeId changes
+  useEffect(() => {
+    if (!monacoRef.current || !isEditorReady || !editorRef.current) {
+      console.log('Monaco not ready yet, skipping theme application', {
+        hasMonaco: !!monacoRef.current,
+        isEditorReady,
+        hasEditor: !!editorRef.current
+      });
+      return;
+    }
+    
+    const applyThemeToMonaco = async () => {
+      try {
+        const monaco = monacoRef.current;
+        const editor = editorRef.current;
+        if (!monaco || !monaco.editor || !editor) {
+          console.warn('Monaco or editor not available');
+          return;
+        }
+        
+        console.log('Applying theme to Monaco:', activeThemeId);
+        
+        // Ensure Monaco instance is set in theme manager
+        const { setMonacoInstance, getMonacoInstance, applyMonacoTheme } = await import('../utils/themeManager');
+        const monacoInstance = getMonacoInstance();
+        if (!monacoInstance) {
+          setMonacoInstance(monaco);
+        }
+        
+        if (activeThemeId && activeThemeId !== 'vs-dark' && activeThemeId !== 'default') {
+          // Load and register the theme, then apply it directly to the editor
+          const success = await applyMonacoTheme(activeThemeId);
+          if (!success) {
+            console.warn('Theme application failed, falling back to vs-dark');
+            // Fallback to vs-dark if theme application failed
+            monaco.editor.setTheme('vs-dark');
+          } else {
+            // Also set theme directly on editor instance to ensure it updates
+            // This is important because the Editor component's theme prop might not trigger a re-render
+            monaco.editor.setTheme(activeThemeId);
+            console.log('Theme applied successfully:', activeThemeId);
+          }
+        } else {
+          // Use default theme
+          console.log('Using default vs-dark theme');
+          monaco.editor.setTheme('vs-dark');
+        }
+      } catch (error) {
+        console.error('Error applying theme to Monaco:', error);
+        // Fallback to default theme on error
+        try {
+          const monaco = monacoRef.current;
+          if (monaco && monaco.editor) {
+            monaco.editor.setTheme('vs-dark');
+          }
+        } catch (fallbackError) {
+          console.error('Error setting fallback theme:', fallbackError);
+        }
+      }
+    };
+    
+    applyThemeToMonaco();
+  }, [activeThemeId, isEditorReady]);
+  
   // Chat states
   const [chatMessages, setChatMessages] = useState([]);
   const [messageFeedback, setMessageFeedback] = useState({});
@@ -1404,8 +1520,23 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           ApiService.getExtensions(extensionCategory, extensionSearchQuery),
           ApiService.getInstalledExtensions()
         ]);
-        setExtensions(extensionsData?.extensions || []);
-        setInstalledExtensions(installedData?.extensions || []);
+        const marketplaceExtensions = extensionsData?.extensions || [];
+        const installed = installedData?.extensions || [];
+        
+        // Merge installed extensions that aren't in marketplace results
+        const installedIds = new Set(marketplaceExtensions.map(e => e.id?.toLowerCase()));
+        const missingInstalled = installed.filter(inst => {
+          const instId = inst.id?.toLowerCase();
+          return instId && !installedIds.has(instId);
+        });
+        
+        // Combine marketplace extensions with missing installed extensions
+        const allExtensions = [...marketplaceExtensions, ...missingInstalled];
+        
+        console.log('Loaded extensions:', marketplaceExtensions.length, 'Installed:', installed.length, 'Missing from marketplace:', missingInstalled.length);
+        console.log('Installed extension IDs:', installed.map(e => e.id));
+        setExtensions(allExtensions);
+        setInstalledExtensions(installed);
       } catch (error) {
         console.error('Failed to load extensions:', error);
         toast.error('Failed to load extensions');
@@ -1464,6 +1595,21 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setInstallingExtensionId(null);
     }
   }, [extensions, loadExtensionConfig]);
+
+  // Handle theme extraction for already installed extensions
+  const handleExtractThemes = useCallback(async (extensionId) => {
+    try {
+      const response = await ApiService.extractThemesFromExtension(extensionId);
+      toast.success(response.message || `Extracted ${response.theme_count || 0} theme(s)`);
+      
+      // Reload extensions to refresh theme data
+      const extensionsData = await ApiService.getExtensions(extensionCategory, extensionSearchQuery);
+      setExtensions(extensionsData?.extensions || []);
+    } catch (error) {
+      console.error('Failed to extract themes:', error);
+      toast.error(error.response?.data?.detail || 'Failed to extract themes');
+    }
+  }, [extensionCategory, extensionSearchQuery]);
 
   // Handle extension uninstallation
   const handleUninstallExtension = useCallback(async (extensionId) => {
@@ -8452,7 +8598,15 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                     {extensions
                       .filter((ext) => {
                         // Filter by installation status
-                        const isInstalled = installedExtensions.some(inst => inst.id === ext.id);
+                        // Match by ID (case-insensitive) or by name if IDs don't match
+                        const isInstalled = installedExtensions.some(inst => {
+                          const instId = (inst.id || '').toLowerCase().trim();
+                          const extId = (ext.id || '').toLowerCase().trim();
+                          const instName = (inst.name || '').toLowerCase().trim();
+                          const extName = (ext.name || '').toLowerCase().trim();
+                          return instId === extId || (instId && extId && instId.includes(extId)) || (extId && instId.includes(extId)) || 
+                                 (instName === extName && instName && extName);
+                        });
                         if (extensionInstallFilter === 'installed' && !isInstalled) return false;
                         if (extensionInstallFilter === 'not_installed' && isInstalled) return false;
                         
@@ -8468,7 +8622,15 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         return true;
                       })
                       .map((extension) => {
-                        const isInstalled = installedExtensions.some(inst => inst.id === extension.id);
+                        // Match by ID (case-insensitive) or by name if IDs don't match
+                        const isInstalled = installedExtensions.some(inst => {
+                          const instId = (inst.id || '').toLowerCase().trim();
+                          const extId = (extension.id || '').toLowerCase().trim();
+                          const instName = (inst.name || '').toLowerCase().trim();
+                          const extName = (extension.name || '').toLowerCase().trim();
+                          return instId === extId || (instId && extId && instId.includes(extId)) || (extId && instId.includes(extId)) || 
+                                 (instName === extName && instName && extName);
+                        });
                         const isInstalling = installingExtensionId === extension.id;
                         
                         return (
@@ -8550,6 +8712,23 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                 )}
                               </button>
                             </div>
+                            {/* Theme extraction section for installed theme extensions */}
+                            {isInstalled && (extension.category === 'Themes' || extension.category === 'Icon Themes') && (
+                              <div className="mt-3 pt-3 border-t border-dark-700">
+                                <button
+                                  type="button"
+                                  onClick={() => handleExtractThemes(extension.id)}
+                                  className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs bg-primary-600 hover:bg-primary-700 text-white rounded transition-colors"
+                                >
+                                  <Palette className="w-3 h-3" />
+                                  <span>Extract Themes</span>
+                                </button>
+                                <p className="mt-2 text-xs text-dark-500 text-center">
+                                  Click to extract themes from this extension
+                                </p>
+                              </div>
+                            )}
+                            
                             {/* Configuration section for installed MCP servers */}
                             {isInstalled && extension.category === 'MCP Servers' && (
                               <div className="mt-3 pt-3 border-t border-dark-700">
@@ -8659,7 +8838,15 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         );
                       })}
                     {extensions.filter((ext) => {
-                      const isInstalled = installedExtensions.some(inst => inst.id === ext.id);
+                      // Match by ID (case-insensitive) or by name if IDs don't match
+                      const isInstalled = installedExtensions.some(inst => {
+                        const instId = (inst.id || '').toLowerCase().trim();
+                        const extId = (ext.id || '').toLowerCase().trim();
+                        const instName = (inst.name || '').toLowerCase().trim();
+                        const extName = (ext.name || '').toLowerCase().trim();
+                        return instId === extId || (instId && extId && instId.includes(extId)) || (extId && instId.includes(extId)) || 
+                               (instName === extName && instName && extName);
+                      });
                       if (extensionInstallFilter === 'installed' && !isInstalled) return false;
                       if (extensionInstallFilter === 'not_installed' && isInstalled) return false;
                       if (extensionSearchQuery) {
@@ -8927,10 +9114,40 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 height="100%"
                 language={editorLanguage}
                 value={editorContent}
-                onMount={(editorInstance, monacoInstance) => {
+                beforeMount={(monaco) => {
+                  // Set Monaco instance early so themes can be registered
+                  setMonacoInstance(monaco);
+                }}
+                onMount={async (editorInstance, monacoInstance) => {
                   editorRef.current = editorInstance;
                   monacoRef.current = monacoInstance;
                   setIsEditorReady(true);
+                  // Set Monaco instance for theme management (ensure it's set)
+                  setMonacoInstance(monacoInstance);
+                  
+                  // Load and apply active theme on mount
+                  try {
+                    const savedTheme = localStorage.getItem('activeTheme');
+                    if (savedTheme && savedTheme !== 'vs-dark' && savedTheme !== 'default') {
+                      // Apply the saved theme to Monaco
+                      const { applyMonacoTheme } = await import('../utils/themeManager');
+                      await applyMonacoTheme(savedTheme);
+                      setActiveThemeId(savedTheme);
+                    } else {
+                      // Load theme from backend or use default
+                      const themeId = await loadActiveTheme();
+                      if (themeId && themeId !== 'vs-dark' && themeId !== 'default') {
+                        const { applyMonacoTheme } = await import('../utils/themeManager');
+                        await applyMonacoTheme(themeId);
+                        setActiveThemeId(themeId);
+                      } else {
+                        setActiveThemeId('vs-dark');
+                      }
+                    }
+                  } catch (error) {
+                    console.error('Error loading theme on Monaco mount:', error);
+                    setActiveThemeId('vs-dark');
+                  }
                 }}
                 onChange={(value) => {
                   const newContent = value || '';
@@ -8940,7 +9157,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                     f.path === activeTab ? { ...f, content: newContent, modified: true, aiPreview: false } : f
                   ));
                 }}
-                theme="vs-dark"
+                theme={activeThemeId === 'vs-dark' || activeThemeId === 'default' || !activeThemeId ? 'vs-dark' : activeThemeId}
                 options={editorOptions}
               />
             ) : (

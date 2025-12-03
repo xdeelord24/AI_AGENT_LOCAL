@@ -243,10 +243,17 @@ async def get_extensions(
                     logger.error(f"Error fetching VSCode extensions: {e}", exc_info=True)
                     # Continue without VSCode extensions if there's an error
         
-        # Sort by downloads (if available) or name
+        # Load installed extensions to check installation status
+        installed = load_installed_extensions()
+        installed_ids = {ext["id"] for ext in installed}
+        
+        # Sort: installed first, then by downloads, then by name
+        # Also prioritize by extension type (MCP first, then VSCode) for consistency
         all_extensions.sort(key=lambda x: (
-            -x.get("downloads", 0),
-            x.get("name", "").lower()
+            -1 if x.get("id") in installed_ids else 1,  # Installed first
+            -x.get("downloads", 0),  # Then by downloads
+            0 if x.get("extension_type") == "mcp" else 1,  # MCP before VSCode
+            x.get("name", "").lower()  # Then alphabetically
         ))
         
         result = {
@@ -272,9 +279,180 @@ async def get_installed_extensions():
     """Get list of installed extensions"""
     try:
         installed = load_installed_extensions()
-        return {"extensions": installed}
+        
+        # For VSCode extensions, try to enrich with marketplace data if available
+        enriched_installed = []
+        for ext in installed:
+            if ext.get("extension_type") == "vscode" and vscode_service:
+                # Try to get latest details from marketplace
+                try:
+                    marketplace_ext = await vscode_service.get_extension_details(ext.get("id"))
+                    if marketplace_ext:
+                        # Merge marketplace data with installed data
+                        ext = {**marketplace_ext, **ext}
+                except Exception as e:
+                    logger.debug(f"Could not fetch marketplace data for {ext.get('id')}: {e}")
+                    # Continue with installed data only
+            
+            enriched_installed.append(ext)
+        
+        return {"extensions": enriched_installed}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch installed extensions: {str(e)}")
+
+# Theme routes must come before parameterized routes to avoid conflicts
+@router.get("/themes")
+async def get_available_themes():
+    """Get list of all available themes from installed extensions"""
+    try:
+        themes = []
+        
+        if extension_installer:
+            installed_themes = extension_installer.get_installed_themes()
+            themes = installed_themes
+        
+        # Also check installed extensions for theme metadata
+        installed = load_installed_extensions()
+        for ext in installed:
+            if ext.get("category") in ("Themes", "Icon Themes"):
+                installation = ext.get("installation", {})
+                ext_themes = installation.get("themes", [])
+                for theme in ext_themes:
+                    extension_id = ext.get("id", "")
+                    # theme.get("id") is already the full ID (extension_id_theme_id) from extraction
+                    # theme.get("theme_id") is the original theme ID from the theme definition
+                    full_theme_id = theme.get("id", "")
+                    original_theme_id = theme.get("theme_id", "")
+                    
+                    # If full_theme_id exists and looks like it already contains extension_id, use it directly
+                    # Otherwise, construct it from extension_id and original_theme_id
+                    if full_theme_id and (full_theme_id.startswith(f"{extension_id}_") or "_" in full_theme_id):
+                        # Already a full ID, use as-is
+                        theme_filename = f"{full_theme_id}.json"
+                        actual_theme_id = original_theme_id or full_theme_id.rsplit("_", 1)[-1] if "_" in full_theme_id else full_theme_id
+                    elif original_theme_id:
+                        # Construct from extension_id and original_theme_id
+                        theme_filename = f"{extension_id}_{original_theme_id}.json"
+                        actual_theme_id = original_theme_id
+                    else:
+                        # Fallback: use whatever id we have
+                        theme_id = full_theme_id or extension_id
+                        theme_filename = f"{extension_id}_{theme_id}.json"
+                        actual_theme_id = theme_id
+                    
+                    # Avoid duplicates by checking if theme already exists
+                    if not any(t.get("id") == theme_filename or 
+                              (t.get("theme_id") == actual_theme_id and t.get("extension_id") == extension_id) 
+                              for t in themes):
+                        # Ensure theme has all required fields
+                        theme_data = {
+                            "id": theme_filename,
+                            "theme_id": actual_theme_id,
+                            "label": theme.get("label", theme.get("name", actual_theme_id)),
+                            "path": theme.get("path", ""),
+                            "colors": theme.get("colors", {}),
+                            "tokenColors": theme.get("tokenColors", []),
+                            "extension_id": extension_id,
+                            "extension_name": ext.get("name", extension_id)
+                        }
+                        themes.append(theme_data)
+        
+        logger.info(f"Found {len(themes)} themes total")
+        return {"themes": themes, "count": len(themes)}
+    except Exception as e:
+        logger.error(f"Error getting themes: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get themes: {str(e)}")
+
+@router.get("/themes/active")
+async def get_active_theme():
+    """Get currently active theme"""
+    try:
+        theme_pref_file = EXTENSIONS_CONFIG_DIR / "active_theme.json"
+        if theme_pref_file.exists():
+            with open(theme_pref_file, 'r') as f:
+                return json.load(f)
+        return {"theme_id": None, "message": "No theme applied"}
+    except Exception as e:
+        logger.error(f"Error getting active theme: {e}", exc_info=True)
+        return {"theme_id": None, "error": str(e)}
+
+@router.get("/themes/{theme_id}")
+async def get_theme_data(theme_id: str):
+    """Get theme data for a specific theme"""
+    try:
+        if not extension_installer:
+            raise HTTPException(status_code=503, detail="Extension installer not available")
+        
+        logger.info(f"Fetching theme data for theme_id: {theme_id}")
+        theme_data = extension_installer.get_theme_data(theme_id)
+        
+        if not theme_data:
+            logger.warning(f"Theme '{theme_id}' not found in themes directory")
+            
+            # Try to extract extension_id from theme_id (format: extension_id_theme_id)
+            # and attempt to re-extract themes from the extension
+            if "_" in theme_id:
+                extension_id = theme_id.rsplit("_", 1)[0]
+                logger.info(f"Attempting to re-extract themes from extension: {extension_id}")
+                
+                # Check if extension is installed
+                installed = load_installed_extensions()
+                extension = next((ext for ext in installed if ext.get("id") == extension_id), None)
+                
+                if extension and extension.get("category") in ("Themes", "Icon Themes"):
+                    try:
+                        # Re-extract themes from the extension
+                        ext_dir = extension_installer.extensions_dir / extension_id
+                        extracted_dir = ext_dir / "extracted"
+                        
+                        if extracted_dir.exists():
+                            theme_result = await extension_installer._extract_theme(
+                                extension_id=extension_id,
+                                extract_dir=extracted_dir,
+                                extension_data=extension
+                            )
+                            logger.info(f"Re-extracted {theme_result.get('theme_count', 0)} theme(s) from {extension_id}")
+                            
+                            # Try to get theme data again
+                            theme_data = extension_installer.get_theme_data(theme_id)
+                        else:
+                            logger.warning(f"Extension extracted directory not found: {extracted_dir}")
+                    except Exception as e:
+                        logger.warning(f"Failed to re-extract themes: {e}", exc_info=True)
+            
+            if not theme_data:
+                # Try to list available theme files for debugging
+                themes_dir = extension_installer.themes_dir
+                available_files = list(themes_dir.glob("*.json")) if themes_dir.exists() else []
+                logger.info(f"Available theme files: {[f.name for f in available_files]}")
+                raise HTTPException(status_code=404, detail=f"Theme '{theme_id}' not found")
+        
+        # Check if theme has color data
+        if not theme_data.get("colors"):
+            logger.warning(f"Theme '{theme_id}' has no color data. Theme keys: {list(theme_data.keys())}")
+            # Return theme data anyway, but log a warning
+            # The frontend will handle this gracefully
+        
+        return {"theme": theme_data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting theme data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get theme data: {str(e)}")
+
+@router.post("/themes/{theme_id}/apply")
+async def apply_theme(theme_id: str):
+    """Apply a theme (store preference)"""
+    try:
+        # Store theme preference
+        theme_pref_file = EXTENSIONS_CONFIG_DIR / "active_theme.json"
+        with open(theme_pref_file, 'w') as f:
+            json.dump({"theme_id": theme_id, "applied_at": str(Path(__file__).stat().st_mtime)}, f, indent=2)
+        
+        return {"message": f"Theme '{theme_id}' applied successfully", "theme_id": theme_id}
+    except Exception as e:
+        logger.error(f"Error applying theme: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to apply theme: {str(e)}")
 
 @router.get("/{extension_id}")
 async def get_extension_details(extension_id: str):
@@ -748,93 +926,59 @@ async def get_extension_config(extension_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get extension configuration: {str(e)}")
 
-@router.get("/themes")
-async def get_available_themes():
-    """Get list of all available themes from installed extensions"""
-    try:
-        themes = []
-        
-        if extension_installer:
-            installed_themes = extension_installer.get_installed_themes()
-            themes = installed_themes
-        
-        # Also check installed extensions for theme metadata
-        installed = load_installed_extensions()
-        for ext in installed:
-            if ext.get("category") in ("Themes", "Icon Themes"):
-                installation = ext.get("installation", {})
-                ext_themes = installation.get("themes", [])
-                for theme in ext_themes:
-                    # Use theme filename as ID for lookup
-                    theme_id = theme.get("id", "")
-                    extension_id = ext.get("id", "")
-                    theme_filename = f"{extension_id}_{theme_id}.json"
-                    
-                    # Avoid duplicates by checking if theme already exists
-                    if not any(t.get("id") == theme_filename or 
-                              (t.get("theme_id") == theme_id and t.get("extension_id") == extension_id) 
-                              for t in themes):
-                        # Ensure theme has all required fields
-                        theme_data = {
-                            "id": theme_filename,
-                            "theme_id": theme_id,
-                            "label": theme.get("label", theme.get("name", theme_id)),
-                            "path": theme.get("path", ""),
-                            "colors": theme.get("colors", {}),
-                            "tokenColors": theme.get("tokenColors", []),
-                            "extension_id": extension_id,
-                            "extension_name": ext.get("name", extension_id)
-                        }
-                        themes.append(theme_data)
-        
-        logger.info(f"Found {len(themes)} themes total")
-        return {"themes": themes, "count": len(themes)}
-    except Exception as e:
-        logger.error(f"Error getting themes: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to get themes: {str(e)}")
-
-@router.get("/themes/{theme_id}")
-async def get_theme_data(theme_id: str):
-    """Get theme data for a specific theme"""
+@router.post("/{extension_id}/extract-themes")
+async def extract_themes_from_installed(extension_id: str):
+    """Re-extract themes from an already installed extension"""
     try:
         if not extension_installer:
             raise HTTPException(status_code=503, detail="Extension installer not available")
         
-        theme_data = extension_installer.get_theme_data(theme_id)
-        if not theme_data:
-            raise HTTPException(status_code=404, detail=f"Theme '{theme_id}' not found")
+        # Check if extension is installed
+        installed = load_installed_extensions()
+        extension = next((ext for ext in installed if ext.get("id") == extension_id), None)
         
-        return {"theme": theme_data}
+        if not extension:
+            raise HTTPException(status_code=404, detail=f"Extension '{extension_id}' is not installed")
+        
+        # Check if it's a theme extension
+        if extension.get("category") not in ("Themes", "Icon Themes"):
+            raise HTTPException(status_code=400, detail=f"Extension '{extension_id}' is not a theme extension")
+        
+        # Get extension directory
+        ext_dir = extension_installer.extensions_dir / extension_id
+        extracted_dir = ext_dir / "extracted"
+        
+        if not extracted_dir.exists():
+            raise HTTPException(status_code=404, detail=f"Extension files not found for '{extension_id}'")
+        
+        # Re-extract themes
+        theme_result = await extension_installer._extract_theme(
+            extension_id=extension_id,
+            extract_dir=extracted_dir,
+            extension_data=extension
+        )
+        
+        # Update installation record with theme data
+        extension["installation"] = extension.get("installation", {})
+        extension["installation"]["themes"] = theme_result.get("themes", [])
+        extension["installation"]["theme_count"] = theme_result.get("theme_count", 0)
+        
+        # Save updated installation record
+        installed = load_installed_extensions()
+        for i, ext in enumerate(installed):
+            if ext.get("id") == extension_id:
+                installed[i] = extension
+                break
+        save_installed_extensions(installed)
+        
+        return {
+            "message": f"Successfully extracted {theme_result.get('theme_count', 0)} theme(s) from {extension_id}",
+            "themes": theme_result.get("themes", []),
+            "theme_count": theme_result.get("theme_count", 0)
+        }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting theme data: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to get theme data: {str(e)}")
-
-@router.post("/themes/{theme_id}/apply")
-async def apply_theme(theme_id: str):
-    """Apply a theme (store preference)"""
-    try:
-        # Store theme preference
-        theme_pref_file = EXTENSIONS_CONFIG_DIR / "active_theme.json"
-        with open(theme_pref_file, 'w') as f:
-            json.dump({"theme_id": theme_id, "applied_at": str(Path(__file__).stat().st_mtime)}, f, indent=2)
-        
-        return {"message": f"Theme '{theme_id}' applied successfully", "theme_id": theme_id}
-    except Exception as e:
-        logger.error(f"Error applying theme: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to apply theme: {str(e)}")
-
-@router.get("/themes/active")
-async def get_active_theme():
-    """Get currently active theme"""
-    try:
-        theme_pref_file = EXTENSIONS_CONFIG_DIR / "active_theme.json"
-        if theme_pref_file.exists():
-            with open(theme_pref_file, 'r') as f:
-                return json.load(f)
-        return {"theme_id": None, "message": "No theme applied"}
-    except Exception as e:
-        logger.error(f"Error getting active theme: {e}", exc_info=True)
-        return {"theme_id": None, "error": str(e)}
+        logger.error(f"Error extracting themes from {extension_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to extract themes: {str(e)}")
 

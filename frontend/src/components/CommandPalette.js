@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, Palette, Settings, FileText, Code, Terminal, Folder } from 'lucide-react';
-import { getAvailableThemes, applyTheme } from '../utils/themeManager';
+import { getAvailableThemes, applyTheme, applyDefaultTheme } from '../utils/themeManager';
 import { ApiService } from '../services/api';
 import toast from 'react-hot-toast';
 
@@ -16,6 +16,7 @@ const CommandPalette = ({ isOpen, onClose, onNavigate }) => {
   // Load themes when palette opens
   useEffect(() => {
     if (isOpen) {
+      // Always reload themes when opening to get latest installed themes
       loadThemes();
       setQuery('');
       setSelectedIndex(0);
@@ -33,6 +34,7 @@ const CommandPalette = ({ isOpen, onClose, onNavigate }) => {
     try {
       const response = await ApiService.getAvailableThemes();
       const themes = response.themes || [];
+      console.log('Loaded themes:', themes.length, themes);
       setAvailableThemes(themes);
       
       const activeTheme = await ApiService.getActiveTheme();
@@ -46,6 +48,8 @@ const CommandPalette = ({ isOpen, onClose, onNavigate }) => {
       }
     } catch (error) {
       console.error('Error loading themes:', error);
+      // Set empty array on error so UI shows appropriate message
+      setAvailableThemes([]);
     }
   };
 
@@ -111,32 +115,60 @@ const CommandPalette = ({ isOpen, onClose, onNavigate }) => {
 
   // Filter commands based on query
   const filteredCommands = showThemePicker
-    ? availableThemes
-        .filter(theme => {
-          if (!query) return true;
-          const q = query.toLowerCase();
-          const themeName = (theme.label || theme.extension_name || theme.id || '').toLowerCase();
-          return themeName.includes(q);
-        })
-        .map((theme, index) => ({
-          id: `theme-${theme.id}`,
-          label: theme.label || theme.extension_name || theme.id,
+    ? [
+        // Default theme option
+        {
+          id: 'theme-default',
+          label: 'Default (VS Dark)',
           icon: Palette,
           category: 'Theme',
           isTheme: true,
-          themeId: theme.id,
-          isActive: theme.id === activeThemeId,
+          themeId: 'default',
+          isActive: !activeThemeId || activeThemeId === 'vs-dark' || activeThemeId === 'default',
           action: async () => {
-            const success = await applyTheme(theme.id);
+            const success = await applyDefaultTheme();
             if (success) {
-              setActiveThemeId(theme.id);
-              toast.success('Theme applied successfully');
+              setActiveThemeId('default');
+              toast.success('Default theme applied');
+              // Dispatch custom event for theme change
+              window.dispatchEvent(new Event('themeChanged'));
               onClose();
             } else {
-              toast.error('Failed to apply theme');
+              toast.error('Failed to apply default theme');
             }
           }
-        }))
+        },
+        // Available themes
+        ...availableThemes
+          .filter(theme => {
+            if (!query) return true;
+            const q = query.toLowerCase();
+            const themeName = (theme.label || theme.extension_name || theme.id || '').toLowerCase();
+            return themeName.includes(q);
+          })
+          .map((theme, index) => ({
+            id: `theme-${theme.id}`,
+            label: theme.label || theme.extension_name || theme.id,
+            icon: Palette,
+            category: 'Theme',
+            isTheme: true,
+            themeId: theme.id,
+            isActive: theme.id === activeThemeId,
+            action: async () => {
+              // Pass extension_id if available to help with automatic theme extraction
+              const success = await applyTheme(theme.id, theme.extension_id);
+              if (success) {
+                setActiveThemeId(theme.id);
+                toast.success('Theme applied successfully');
+                // Dispatch custom event for theme change
+                window.dispatchEvent(new Event('themeChanged'));
+                onClose();
+              } else {
+                toast.error('Failed to apply theme. Make sure themes are extracted from the extension.');
+              }
+            }
+          }))
+      ]
     : allCommands.filter(cmd => {
         if (!query) return true;
         const q = query.toLowerCase();

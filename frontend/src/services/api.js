@@ -633,6 +633,10 @@ class ApiService {
   static async getActiveTheme() {
     return this.get('/api/extensions/themes/active');
   }
+
+  static async extractThemesFromExtension(extensionId) {
+    return this.post(`/api/extensions/${extensionId}/extract-themes`);
+  }
 }
 
 export { ApiService };

@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import shutil
+from pathlib import Path as PathLib
 
 logger = logging.getLogger(__name__)
 
@@ -101,17 +102,31 @@ class ExtensionInstaller:
         try:
             # Look for package.json to find theme contributions
             package_json_path = extract_dir / "package.json"
+            extension_root = extract_dir  # Track the root directory for theme file resolution
+            
             if not package_json_path.exists():
-                # Try extension subdirectory
+                # Try extension subdirectory (VSIX files often have extension folder inside)
                 for subdir in extract_dir.iterdir():
                     if subdir.is_dir():
                         potential_package = subdir / "package.json"
                         if potential_package.exists():
                             package_json_path = potential_package
+                            extension_root = subdir  # Update extension_root to subdirectory
+                            logger.info(f"Found package.json in subdirectory: {subdir.name}")
                             break
             
+            # If still not found, search recursively
             if not package_json_path.exists():
-                logger.warning(f"No package.json found for {extension_id}")
+                logger.info(f"Searching recursively for package.json in {extract_dir}")
+                for root, dirs, files in os.walk(extract_dir):
+                    if "package.json" in files:
+                        package_json_path = Path(root) / "package.json"
+                        extension_root = Path(root)  # Update extension_root to found directory
+                        logger.info(f"Found package.json at: {package_json_path}")
+                        break
+            
+            if not package_json_path.exists():
+                logger.warning(f"No package.json found for {extension_id} in {extract_dir}")
                 return {"themes": []}
             
             # Read package.json
@@ -126,6 +141,8 @@ class ExtensionInstaller:
                 logger.info(f"No themes found in {extension_id}")
                 return {"themes": []}
             
+            logger.info(f"Found {len(themes)} theme(s) in {extension_id}")
+            
             # Extract each theme
             extracted_themes = []
             for theme_def in themes:
@@ -135,16 +152,21 @@ class ExtensionInstaller:
                 ui_theme = theme_def.get("uiTheme", "vs-dark")  # vs-dark, vs-light, hc-dark, hc-light
                 
                 if theme_path:
-                    # Resolve theme file path
-                    full_theme_path = extract_dir / theme_path
+                    # Resolve theme file path relative to extension_root (where package.json is)
+                    full_theme_path = extension_root / theme_path.lstrip("/")
                     if not full_theme_path.exists():
-                        # Try relative to extension root
+                        # Try relative to package.json directory
+                        full_theme_path = package_json_path.parent / theme_path.lstrip("/")
+                    
+                    if not full_theme_path.exists():
+                        # Try absolute path from extract_dir
                         full_theme_path = extract_dir / theme_path.lstrip("/")
                     
                     if full_theme_path.exists():
                         # Copy theme file to themes directory
                         theme_storage_path = self.themes_dir / f"{extension_id}_{theme_id}.json"
                         shutil.copy2(full_theme_path, theme_storage_path)
+                        logger.info(f"Copied theme file from {full_theme_path} to {theme_storage_path}")
                         
                         # Read and parse theme
                         with open(full_theme_path, 'r', encoding='utf-8') as f:
@@ -162,7 +184,9 @@ class ExtensionInstaller:
                             "extension_name": extension_data.get("name", extension_id)
                         })
                         
-                        logger.info(f"Extracted theme '{theme_label}' from {extension_id}")
+                        logger.info(f"Extracted theme '{theme_label}' (ID: {theme_id}) from {extension_id}")
+                    else:
+                        logger.warning(f"Theme file not found: {theme_path} (tried: {full_theme_path})")
             
             return {
                 "themes": extracted_themes,
@@ -297,16 +321,42 @@ class ExtensionInstaller:
             matching_files = list(self.themes_dir.glob(f"*_{theme_id}.json"))
             if matching_files:
                 theme_file = matching_files[0]
+                logger.info(f"Found theme file by partial match: {theme_file.name}")
         
         if theme_file.exists():
             try:
                 with open(theme_file, 'r', encoding='utf-8') as f:
                     theme_data = json.load(f)
-                    # Add metadata
-                    theme_data["id"] = theme_file.stem
-                    theme_data["path"] = str(theme_file)
-                    return theme_data
+                    
+                # VSCode themes can have colors at root level or nested
+                # Ensure colors are at root level for easier access
+                if "colors" not in theme_data:
+                    # Check if colors are nested (some themes structure differently)
+                    if "$schema" in theme_data and "colors" in theme_data.get("$schema", ""):
+                        # This is unusual but handle it
+                        pass
+                    
+                    # Some themes might have empty colors dict - that's valid but warn
+                    if not theme_data.get("colors"):
+                        logger.warning(f"Theme {theme_id} has no 'colors' property. Available keys: {list(theme_data.keys())}")
+                        # Create empty colors dict to prevent errors
+                        theme_data["colors"] = {}
+                
+                # Add metadata
+                theme_data["id"] = theme_file.stem
+                theme_data["path"] = str(theme_file)
+                
+                logger.info(f"Successfully loaded theme {theme_id} with {len(theme_data.get('colors', {}))} color definitions")
+                return theme_data
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in theme file {theme_file}: {e}")
             except Exception as e:
-                logger.error(f"Error reading theme {theme_id}: {e}")
+                logger.error(f"Error reading theme {theme_id}: {e}", exc_info=True)
+        else:
+            logger.warning(f"Theme file not found: {theme_file}. Theme ID: {theme_id}")
+            # List available theme files for debugging
+            if self.themes_dir.exists():
+                available_files = list(self.themes_dir.glob("*.json"))
+                logger.info(f"Available theme files: {[f.name for f in available_files]}")
         return None
 
