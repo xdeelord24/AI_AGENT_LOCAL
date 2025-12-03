@@ -183,7 +183,11 @@ class ApiService {
           buffer = buffer.slice(newlineIndex + 2);
           
           if (chunk.startsWith('data: ')) {
-            const data = chunk.slice(6); // Remove 'data: ' prefix
+            const data = chunk.slice(6).trim(); // Remove 'data: ' prefix and trim
+            if (!data) {
+              // Skip empty data chunks
+              continue;
+            }
             try {
               const payload = JSON.parse(data);
               // DEBUG: Log all received chunks to track web_search flow
@@ -205,9 +209,16 @@ class ApiService {
                 }
                 console.log('[DEBUG API] Received chunk:', JSON.stringify(apiDebug, null, 2));
               }
+              // Handle error chunks specially - they might have empty content
+              if (payload.type === 'error') {
+                console.warn('[Stream Error Chunk]', payload);
+              }
               await Promise.resolve(onChunk(payload));
             } catch (error) {
-              console.warn('Skipping malformed stream chunk', data, error);
+              // Only warn about malformed chunks if they're not empty
+              if (data && data !== '{}' && data !== 'null') {
+                console.warn('Skipping malformed stream chunk', data, error);
+              }
             }
           }
         }
@@ -218,7 +229,11 @@ class ApiService {
         const lines = buffer.split('\n');
         for (const line of lines) {
           if (line.startsWith('data: ')) {
-            const data = line.slice(6);
+            const data = line.slice(6).trim(); // Remove 'data: ' prefix and trim
+            if (!data) {
+              // Skip empty data chunks
+              continue;
+            }
             try {
               const payload = JSON.parse(data);
               // DEBUG: Log all received chunks to track web_search flow
@@ -231,9 +246,16 @@ class ApiService {
                   timestamp: new Date().toISOString()
                 });
               }
+              // Handle error chunks specially - they might have empty content
+              if (payload.type === 'error') {
+                console.warn('[Stream Error Chunk]', payload);
+              }
               await Promise.resolve(onChunk(payload));
             } catch (error) {
-              console.warn('Skipping malformed stream chunk', data, error);
+              // Only warn about malformed chunks if they're not empty
+              if (data && data !== '{}' && data !== 'null') {
+                console.warn('Skipping malformed stream chunk', data, error);
+              }
             }
           }
         }
@@ -566,6 +588,25 @@ class ApiService {
       session_id: sessionId,
       cursor_position: cursorPosition,
     });
+  }
+
+  // Extensions API
+  static async getExtensions(category = 'all', search = '') {
+    return this.get('/api/extensions', {
+      params: { category, search }
+    });
+  }
+
+  static async getInstalledExtensions() {
+    return this.get('/api/extensions/installed');
+  }
+
+  static async installExtension(extensionId) {
+    return this.post(`/api/extensions/${extensionId}/install`);
+  }
+
+  static async uninstallExtension(extensionId) {
+    return this.delete(`/api/extensions/${extensionId}/install`);
   }
 }
 

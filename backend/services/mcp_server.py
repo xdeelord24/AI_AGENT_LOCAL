@@ -36,7 +36,7 @@ import time
 import logging
 import aiofiles
 import aiohttp
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlparse
@@ -103,6 +103,13 @@ class MCPServerTools:
         self._dir_cache: Dict[str, Dict[str, Any]] = {}
         self._tree_cache: Dict[str, Dict[str, Any]] = {}
         
+        # Command execution loop prevention
+        # Track recent commands to prevent infinite loops
+        self._command_history: List[Dict[str, Any]] = []  # List of {command, timestamp} dicts
+        self._max_command_history = 20  # Keep last 20 commands
+        self._loop_detection_window = 30  # Seconds to look back for loops
+        self._max_repeats = 3  # Maximum times same command can run in window
+        
         # Tool metadata
         self.server_version = "1.0.0"
         self.server_capabilities = {
@@ -131,6 +138,56 @@ class MCPServerTools:
     def _invalidate_structure_caches(self) -> None:
         self._dir_cache.clear()
         self._tree_cache.clear()
+    
+    def _check_command_loop(self, command: str) -> Tuple[bool, Optional[str]]:
+        """
+        Check if a command would create a loop by running the same command too many times.
+        
+        Returns:
+            Tuple of (is_loop, error_message)
+            - is_loop: True if this command would create a loop
+            - error_message: Error message if loop detected, None otherwise
+        """
+        current_time = time.time()
+        normalized_command = command.strip()
+        
+        # Clean old entries outside the detection window
+        self._command_history = [
+            entry for entry in self._command_history
+            if (current_time - entry.get("timestamp", 0)) <= self._loop_detection_window
+        ]
+        
+        # Count how many times this exact command was run recently
+        recent_count = sum(
+            1 for entry in self._command_history
+            if entry.get("command", "").strip() == normalized_command
+        )
+        
+        # Check if this would exceed the maximum repeats
+        if recent_count >= self._max_repeats:
+            return True, (
+                f"LOOP PREVENTION: Command '{normalized_command}' has been executed "
+                f"{recent_count} times in the last {self._loop_detection_window} seconds. "
+                f"Maximum allowed repeats: {self._max_repeats}. "
+                f"This prevents infinite loops. Please wait a moment or modify the command."
+            )
+        
+        return False, None
+    
+    def _record_command_execution(self, command: str) -> None:
+        """Record a command execution in the history for loop detection."""
+        current_time = time.time()
+        normalized_command = command.strip()
+        
+        # Add to history
+        self._command_history.append({
+            "command": normalized_command,
+            "timestamp": current_time
+        })
+        
+        # Keep only the most recent entries
+        if len(self._command_history) > self._max_command_history:
+            self._command_history = self._command_history[-self._max_command_history:]
     
     def set_workspace_root(self, workspace_path: str) -> None:
         """
@@ -303,13 +360,13 @@ class MCPServerTools:
             ),
             Tool(
                 name="execute_command",
-                description="Execute a shell command in the workspace directory. Use with caution in production.",
+                description="Execute a shell command in the workspace directory and return the output. Useful for investigating issues, testing code temporarily, checking file contents, running tests, or debugging. The command output (stdout and stderr) will be visible in the chat. Loop prevention is enabled to prevent infinite command execution.",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "command": {
                             "type": "string",
-                            "description": "Shell command to execute"
+                            "description": "Shell command to execute (e.g., 'ls -la', 'python test.py', 'npm test', 'git status')"
                         },
                         "timeout": {
                             "type": "integer",
@@ -685,10 +742,39 @@ class MCPServerTools:
             return [TextContent(type="text", text=f"Error grepping code: {str(e)}")]
     
     async def _execute_command(self, command: str, timeout: int) -> List[TextContent]:
-        """Execute a shell command"""
+        """
+        Execute a shell command with loop prevention.
+        
+        This method:
+        1. Checks for command loops to prevent infinite execution
+        2. Executes the command in the workspace directory
+        3. Returns formatted output (stdout and stderr) that will be visible in chat
+        4. Records the command execution for loop detection
+        """
         try:
+            # Normalize command for loop detection
+            normalized_command = command.strip()
+            
+            if not normalized_command:
+                return [TextContent(
+                    type="text",
+                    text="ERROR: Command cannot be empty"
+                )]
+            
+            # Check for loops before executing
+            is_loop, loop_error = self._check_command_loop(normalized_command)
+            if is_loop:
+                return [TextContent(
+                    type="text",
+                    text=loop_error or "LOOP PREVENTION: Command execution blocked to prevent infinite loops"
+                )]
+            
+            # Record command execution (before running, so we track attempts)
+            self._record_command_execution(normalized_command)
+            
+            # Execute the command
             process = await asyncio.create_subprocess_shell(
-                command,
+                normalized_command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.workspace_root
@@ -703,12 +789,19 @@ class MCPServerTools:
                 output = stdout.decode('utf-8', errors='ignore') if stdout else ""
                 error = stderr.decode('utf-8', errors='ignore') if stderr else ""
                 
-                result = f"Command: {command}\n"
+                # Format result for visibility in chat
+                result = f"Command executed: {normalized_command}\n"
+                result += f"Working directory: {self.workspace_root}\n"
                 result += f"Exit code: {process.returncode}\n\n"
+                
                 if output:
                     result += f"STDOUT:\n{output}\n"
                 if error:
                     result += f"STDERR:\n{error}\n"
+                
+                # If no output and no error, indicate success
+                if not output and not error:
+                    result += "Command completed successfully (no output).\n"
                 
                 self._invalidate_structure_caches()
                 return [TextContent(type="text", text=result)]
@@ -716,10 +809,14 @@ class MCPServerTools:
                 process.kill()
                 return [TextContent(
                     type="text",
-                    text=f"Command timed out after {timeout} seconds: {command}"
+                    text=f"Command timed out after {timeout} seconds: {normalized_command}"
                 )]
         except Exception as e:
-            return [TextContent(type="text", text=f"Error executing command: {str(e)}")]
+            logger.exception(f"Error executing command: {command}")
+            return [TextContent(
+                type="text",
+                text=f"Error executing command: {str(e)}"
+            )]
     
     async def _download_file(self, url: str, path: Optional[str] = None, timeout: int = 60) -> List[TextContent]:
         """Download a file from a URL and save it to the workspace"""

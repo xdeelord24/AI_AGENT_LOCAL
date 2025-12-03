@@ -9,7 +9,7 @@ import {
   RefreshCw, Minimize2, Workflow, Trash2,
   Sparkles, Brain, ListChecks, FileSearch, Milestone, PenTool,
   Activity, ShieldCheck, Megaphone, AlertTriangle,
-  ThumbsUp, ThumbsDown, Copy
+  ThumbsUp, ThumbsDown, Copy, Search, Download, Package, Settings
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
@@ -790,6 +790,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [compareSource, setCompareSource] = useState(null);
   const [comparisonState, setComparisonState] = useState(null);
   const [folderSearchResults, setFolderSearchResults] = useState(null);
+  
+  // Left sidebar tab state
+  const [leftSidebarTab, setLeftSidebarTab] = useState('explorer'); // 'explorer' or 'extensions'
+  
+  // Extensions marketplace states
+  const [extensions, setExtensions] = useState([]);
+  const [installedExtensions, setInstalledExtensions] = useState([]);
+  const [isLoadingExtensions, setIsLoadingExtensions] = useState(false);
+  const [extensionSearchQuery, setExtensionSearchQuery] = useState('');
+  const [extensionInstallFilter, setExtensionInstallFilter] = useState('all'); // 'all', 'installed', 'not_installed'
+  const [extensionCategory, setExtensionCategory] = useState('mcp_servers'); // 'all', 'themes', 'icon_themes', 'languages', 'grammars', 'language_servers', 'mcp_servers', 'agent_servers', 'snippets'
+  const [installingExtensionId, setInstallingExtensionId] = useState(null);
+  
   const isWindowsPlatform = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent || '');
   const mainLayoutRef = useRef(null);
   const pendingResizeRef = useRef({ left: null, right: null, bottom: null });
@@ -1151,6 +1164,64 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       console.warn('Failed to save terminal panel visibility to localStorage:', error);
     }
   }, [bottomPanelVisible]);
+
+  // Load extensions
+  useEffect(() => {
+    const loadExtensions = async () => {
+      if (leftSidebarTab !== 'extensions' || !isConnected) return;
+      
+      setIsLoadingExtensions(true);
+      try {
+        const [extensionsData, installedData] = await Promise.all([
+          ApiService.getExtensions(extensionCategory, extensionSearchQuery),
+          ApiService.getInstalledExtensions()
+        ]);
+        setExtensions(extensionsData?.extensions || []);
+        setInstalledExtensions(installedData?.extensions || []);
+      } catch (error) {
+        console.error('Failed to load extensions:', error);
+        toast.error('Failed to load extensions');
+      } finally {
+        setIsLoadingExtensions(false);
+      }
+    };
+
+    loadExtensions();
+  }, [leftSidebarTab, extensionCategory, extensionSearchQuery, isConnected]);
+
+  // Handle extension installation
+  const handleInstallExtension = useCallback(async (extensionId) => {
+    setInstallingExtensionId(extensionId);
+    try {
+      await ApiService.installExtension(extensionId);
+      toast.success('Extension installed successfully');
+      // Reload installed extensions
+      const installedData = await ApiService.getInstalledExtensions();
+      setInstalledExtensions(installedData?.extensions || []);
+    } catch (error) {
+      console.error('Failed to install extension:', error);
+      toast.error(error.response?.data?.detail || 'Failed to install extension');
+    } finally {
+      setInstallingExtensionId(null);
+    }
+  }, []);
+
+  // Handle extension uninstallation
+  const handleUninstallExtension = useCallback(async (extensionId) => {
+    setInstallingExtensionId(extensionId);
+    try {
+      await ApiService.uninstallExtension(extensionId);
+      toast.success('Extension uninstalled successfully');
+      // Reload installed extensions
+      const installedData = await ApiService.getInstalledExtensions();
+      setInstalledExtensions(installedData?.extensions || []);
+    } catch (error) {
+      console.error('Failed to uninstall extension:', error);
+      toast.error(error.response?.data?.detail || 'Failed to uninstall extension');
+    } finally {
+      setInstallingExtensionId(null);
+    }
+  }, []);
 
   const normalizeOperationContent = useCallback((value) => {
     if (typeof value !== 'string' || value.length === 0) {
@@ -4926,13 +4997,8 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       return null;
     }
     
-    // Log plan structure for debugging (only in development, and only once per plan)
-    if (process.env.NODE_ENV === 'development') {
-      // Only log if plan has meaningful content
-      if (plan.summary || (plan.tasks && plan.tasks.length > 0)) {
-        console.log('[AI Plan] Rendering plan:', { summary: plan.summary, taskCount: plan.tasks?.length || 0 });
-      }
-    }
+    // Removed verbose logging - renderAiPlan is called frequently during renders
+    // Use console.debug if you need to debug plan rendering
     
     const summary = normalizeChatInput(
       plan.summary || plan.thoughts || plan.description || ''
@@ -4941,7 +5007,6 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     
     // If plan has no summary and no tasks, don't render
     if (!summary && tasks.length === 0) {
-      console.log('[AI Plan] Plan has no summary and no tasks, skipping render');
       return null;
     }
 
@@ -5707,7 +5772,76 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 console.debug('[File Operations] Done chunk has no file_operations (this is normal if AI didn\'t propose changes)');
               }
             } else if (chunk.type === 'error') {
-              throw new Error(chunk.content || 'Streaming error');
+              // Check multiple possible error message fields
+              const errorMessage = chunk.content || 
+                                   chunk.message || 
+                                   chunk.detail || 
+                                   chunk.error || 
+                                   chunk.error_message ||
+                                   chunk.error_detail ||
+                                   (typeof chunk === 'string' ? chunk : null) ||
+                                   'An error occurred while processing your request';
+              
+              // Only show toast if we have a meaningful error message (not just the default)
+              const hasMeaningfulError = chunk.content || chunk.message || chunk.detail || chunk.error || chunk.error_message;
+              
+              // Log error details for debugging (using console.debug to reduce noise)
+              if (process.env.NODE_ENV === 'development') {
+                console.debug('[Stream Error]', {
+                  errorMessage,
+                  hasContent: !!chunk.content,
+                  hasMessage: !!chunk.message,
+                  hasDetail: !!chunk.detail,
+                  hasError: !!chunk.error,
+                  fullChunk: chunk
+                });
+              }
+              
+              if (hasMeaningfulError) {
+                toast.error(errorMessage);
+              } else {
+                // If error is empty, just log it at debug level - might be a signal that something went wrong
+                // but we should wait for more information or the stream to complete
+                if (process.env.NODE_ENV === 'development') {
+                  console.debug('[Stream Error] Empty error chunk received - this might be a signal that processing failed');
+                }
+              }
+              
+              // Update the assistant message with error information only if we have content or existing message
+              setChatMessages(prev => {
+                const updated = prev.map(msg => {
+                  if (msg.id === assistantMessageId) {
+                    const currentContent = msg.content || '';
+                    const hasExistingContent = currentContent.trim().length > 0;
+                    
+                    // Only append error if we have meaningful error or existing content
+                    if (hasMeaningfulError || hasExistingContent) {
+                      return {
+                        ...msg,
+                        content: hasExistingContent 
+                          ? `${currentContent}\n\n**Error:** ${errorMessage}`
+                          : `**Error:** ${errorMessage}`,
+                        error: errorMessage
+                      };
+                    }
+                    // If no content and no meaningful error, just mark it as having an error
+                    return {
+                      ...msg,
+                      error: errorMessage
+                    };
+                  }
+                  return msg;
+                });
+                return updated;
+              });
+              
+              // Stop loading but don't throw - let the stream complete gracefully
+              setIsLoadingChat(false);
+              setThinkingAiPlan(null);
+              clearAgentStatuses();
+              
+              // Don't throw - this allows the stream to complete if there's more data
+              // The error has been logged and shown to the user (if meaningful)
             }
           }
         });
@@ -7641,6 +7775,38 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 maxWidth: '600px',
               }}
             >
+            {/* Left Sidebar Tabs */}
+            <div className="flex border-b border-dark-700">
+              <button
+                onClick={() => setLeftSidebarTab('explorer')}
+                className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                  leftSidebarTab === 'explorer'
+                    ? 'bg-dark-900 text-dark-100 border-b-2 border-primary-500'
+                    : 'text-dark-400 hover:text-dark-200 hover:bg-dark-700/50'
+                }`}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <Folder className="w-4 h-4" />
+                  <span>Explorer</span>
+                </div>
+              </button>
+              <button
+                onClick={() => setLeftSidebarTab('extensions')}
+                className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                  leftSidebarTab === 'extensions'
+                    ? 'bg-dark-900 text-dark-100 border-b-2 border-primary-500'
+                    : 'text-dark-400 hover:text-dark-200 hover:bg-dark-700/50'
+                }`}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <Package className="w-4 h-4" />
+                  <span>Extensions</span>
+                </div>
+              </button>
+            </div>
+
+            {leftSidebarTab === 'explorer' ? (
+            <>
             <div className="p-3 border-b border-dark-700">
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -7840,6 +8006,194 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 <div>0 changes</div>
               </div>
             </div>
+            </>
+            ) : (
+            <>
+            {/* Extensions Marketplace */}
+            <div className="flex-1 flex flex-col overflow-hidden">
+              <div className="p-3 border-b border-dark-700">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-dark-200">Extensions</h3>
+                  <button
+                    onClick={() => setLeftSidebarVisible(false)}
+                    className="p-1 hover:bg-dark-700 rounded transition-colors"
+                    title="Hide sidebar (Ctrl+B)"
+                  >
+                    <X className="w-4 h-4 text-dark-400" />
+                  </button>
+                </div>
+                
+                {/* Search Bar */}
+                <div className="relative mb-3">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-dark-400" />
+                  <input
+                    type="text"
+                    value={extensionSearchQuery}
+                    onChange={(e) => setExtensionSearchQuery(e.target.value)}
+                    placeholder="Search extensions..."
+                    className="w-full pl-10 pr-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm"
+                  />
+                </div>
+
+                {/* Installation Status Filter */}
+                <div className="flex gap-1 mb-3">
+                  {['all', 'installed', 'not_installed'].map((filter) => (
+                    <button
+                      key={filter}
+                      onClick={() => setExtensionInstallFilter(filter)}
+                      className={`px-3 py-1 text-xs rounded transition-colors ${
+                        extensionInstallFilter === filter
+                          ? 'bg-primary-600 text-white'
+                          : 'bg-dark-700 text-dark-300 hover:bg-dark-600'
+                      }`}
+                    >
+                      {filter === 'all' ? 'All' : filter === 'installed' ? 'Installed' : 'Not Installed'}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Category Filter */}
+                <div className="flex gap-1 overflow-x-auto pb-2 mb-3">
+                  {[
+                    { id: 'all', label: 'All' },
+                    { id: 'themes', label: 'Themes' },
+                    { id: 'icon_themes', label: 'Icon Themes' },
+                    { id: 'languages', label: 'Languages' },
+                    { id: 'grammars', label: 'Grammars' },
+                    { id: 'language_servers', label: 'Language Servers' },
+                    { id: 'mcp_servers', label: 'MCP Servers' },
+                    { id: 'agent_servers', label: 'Agent Servers' },
+                    { id: 'snippets', label: 'Snippets' }
+                  ].map((category) => (
+                    <button
+                      key={category.id}
+                      onClick={() => setExtensionCategory(category.id)}
+                      className={`px-3 py-1 text-xs rounded whitespace-nowrap transition-colors ${
+                        extensionCategory === category.id
+                          ? 'bg-dark-700 text-dark-100 border border-primary-500'
+                          : 'bg-dark-800 text-dark-400 hover:bg-dark-700 hover:text-dark-200'
+                      }`}
+                    >
+                      {category.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Extensions List */}
+              <div className="flex-1 overflow-y-auto p-3">
+                {isLoadingExtensions ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-6 h-6 animate-spin text-dark-400" />
+                    <span className="ml-2 text-sm text-dark-400">Loading extensions...</span>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {extensions
+                      .filter((ext) => {
+                        // Filter by installation status
+                        const isInstalled = installedExtensions.some(inst => inst.id === ext.id);
+                        if (extensionInstallFilter === 'installed' && !isInstalled) return false;
+                        if (extensionInstallFilter === 'not_installed' && isInstalled) return false;
+                        
+                        // Filter by search query
+                        if (extensionSearchQuery) {
+                          const query = extensionSearchQuery.toLowerCase();
+                          return (
+                            ext.name?.toLowerCase().includes(query) ||
+                            ext.description?.toLowerCase().includes(query) ||
+                            ext.author?.toLowerCase().includes(query)
+                          );
+                        }
+                        return true;
+                      })
+                      .map((extension) => {
+                        const isInstalled = installedExtensions.some(inst => inst.id === extension.id);
+                        const isInstalling = installingExtensionId === extension.id;
+                        
+                        return (
+                          <div
+                            key={extension.id}
+                            className="bg-dark-900 border border-dark-700 rounded-lg p-4 hover:border-dark-600 transition-colors"
+                          >
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <h4 className="text-sm font-semibold text-dark-100">
+                                    {extension.name || 'Unnamed Extension'}
+                                  </h4>
+                                  <span className="text-xs text-dark-500">
+                                    {extension.version || 'v0.0.0'}
+                                  </span>
+                                  <span className="px-2 py-0.5 bg-dark-800 text-dark-400 text-[10px] rounded-full">
+                                    {extension.category || 'MCP Servers'}
+                                  </span>
+                                </div>
+                                <p className="text-xs text-dark-400 mb-2 line-clamp-2">
+                                  {extension.description || 'No description available'}
+                                </p>
+                                <div className="flex items-center gap-4 text-xs text-dark-500">
+                                  <span>{extension.author || 'Unknown'}</span>
+                                  {extension.downloads && (
+                                    <span>{extension.downloads.toLocaleString()} downloads</span>
+                                  )}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => isInstalled ? handleUninstallExtension(extension.id) : handleInstallExtension(extension.id)}
+                                disabled={isInstalling}
+                                className={`ml-3 px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1 ${
+                                  isInstalled
+                                    ? 'bg-dark-700 text-dark-300 hover:bg-dark-600'
+                                    : 'bg-primary-600 text-white hover:bg-primary-700'
+                                } disabled:opacity-50 disabled:cursor-not-allowed`}
+                              >
+                                {isInstalling ? (
+                                  <>
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    <span>Installing...</span>
+                                  </>
+                                ) : isInstalled ? (
+                                  <>
+                                    <CheckCircle className="w-3 h-3" />
+                                    <span>Installed</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Download className="w-3 h-3" />
+                                    <span>Install</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    {extensions.filter((ext) => {
+                      const isInstalled = installedExtensions.some(inst => inst.id === ext.id);
+                      if (extensionInstallFilter === 'installed' && !isInstalled) return false;
+                      if (extensionInstallFilter === 'not_installed' && isInstalled) return false;
+                      if (extensionSearchQuery) {
+                        const query = extensionSearchQuery.toLowerCase();
+                        return (
+                          ext.name?.toLowerCase().includes(query) ||
+                          ext.description?.toLowerCase().includes(query) ||
+                          ext.author?.toLowerCase().includes(query)
+                        );
+                      }
+                      return true;
+                    }).length === 0 && (
+                      <div className="text-center py-8 text-dark-400 text-sm">
+                        No extensions found
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+            </>
+            )}
             </div>
             {/* Left Resize Handle */}
             <div
