@@ -6,6 +6,10 @@ from pathlib import Path
 
 router = APIRouter()
 
+# Path to MCP configuration file
+MCP_CONFIG_DIR = Path(os.getenv("AI_AGENT_CONFIG_DIR", os.path.expanduser("~/.ai_agent")))
+MCP_CONFIG_FILE = MCP_CONFIG_DIR / "mcp_config.json"
+
 # Mock data for MCP server extensions (in a real implementation, this would come from a registry/API)
 MOCK_EXTENSIONS = [
     {
@@ -57,6 +61,16 @@ MOCK_EXTENSIONS = [
         "author": "Zed Industries <support@zed.dev>",
         "downloads": 30021,
         "repository": "https://github.com/zed-industries/brave-search-mcp-server"
+    },
+    {
+        "id": "document-slide-creator-mcp-server",
+        "name": "Document & Slide Creator MCP Server",
+        "version": "v1.0.0",
+        "category": "MCP Servers",
+        "description": "Create Microsoft Word documents (.docx) and PowerPoint presentations (.pptx) - similar to Google Docs and Google Slides",
+        "author": "AI Agent Local",
+        "downloads": 0,
+        "repository": "https://github.com/ai-agent-local/document-slide-creator"
     }
 ]
 
@@ -227,6 +241,19 @@ def generate_usage_instructions(extension: Dict[str, Any]) -> Dict[str, Any]:
                     "BRAVE_API_KEY": "your_api_key_here"
                 }
             }
+        elif "document" in extension_id.lower() or "slide" in extension_id.lower():
+            instructions["example_config"] = {
+                "type": "builtin",
+                "description": "This MCP server is built into the AI Agent. No additional configuration needed.",
+                "tools": [
+                    "create_document - Create Word documents (.docx)",
+                    "create_slide - Create PowerPoint slides (.pptx)",
+                    "create_presentation - Create full presentations (.pptx)"
+                ],
+                "requirements": [
+                    "pip install python-docx python-pptx"
+                ]
+            }
         
         instructions["notes"] = [
             "MCP servers run as separate processes and communicate via stdio or HTTP",
@@ -301,4 +328,127 @@ async def uninstall_extension(extension_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to uninstall extension: {str(e)}")
+
+@router.get("/mcp/config")
+async def get_mcp_config():
+    """Get MCP server configuration"""
+    try:
+        # Ensure config directory exists
+        MCP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Check if config file exists
+        if not MCP_CONFIG_FILE.exists():
+            return {
+                "config_file_path": str(MCP_CONFIG_FILE),
+                "exists": False,
+                "config": None,
+                "message": "MCP configuration file does not exist. Create it to configure MCP servers."
+            }
+        
+        # Read config file
+        try:
+            with open(MCP_CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+            
+            return {
+                "config_file_path": str(MCP_CONFIG_FILE),
+                "exists": True,
+                "config": config,
+                "message": "MCP configuration loaded successfully"
+            }
+        except json.JSONDecodeError as e:
+            return {
+                "config_file_path": str(MCP_CONFIG_FILE),
+                "exists": True,
+                "config": None,
+                "error": f"Invalid JSON in config file: {str(e)}",
+                "message": "MCP configuration file exists but contains invalid JSON"
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read MCP configuration: {str(e)}")
+
+@router.get("/{extension_id}/config")
+async def get_extension_config(extension_id: str):
+    """Get configuration for a specific installed MCP server extension"""
+    try:
+        # Check if extension is installed
+        installed = load_installed_extensions()
+        extension = next((ext for ext in installed if ext["id"] == extension_id), None)
+        
+        if not extension:
+            raise HTTPException(status_code=404, detail=f"Extension '{extension_id}' is not installed")
+        
+        # Check if it's an MCP server
+        if extension.get("category") != "MCP Servers":
+            return {
+                "extension_id": extension_id,
+                "has_config": False,
+                "message": "This extension is not an MCP server and does not require configuration"
+            }
+        
+        # Read MCP config
+        MCP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        
+        if not MCP_CONFIG_FILE.exists():
+            return {
+                "extension_id": extension_id,
+                "extension_name": extension.get("name"),
+                "has_config": False,
+                "config_file_path": str(MCP_CONFIG_FILE),
+                "config": None,
+                "message": "MCP configuration file does not exist. You need to add this server to the MCP config file.",
+                "example_config": generate_usage_instructions(extension).get("example_config")
+            }
+        
+        # Read and find this extension's config
+        try:
+            with open(MCP_CONFIG_FILE, 'r') as f:
+                mcp_config = json.load(f)
+            
+            # Look for this extension in the config
+            # MCP config format: {"mcpServers": {"server_name": {...}}}
+            servers = mcp_config.get("mcpServers", {})
+            extension_config = None
+            
+            # Try to find by extension ID or name
+            for server_name, server_config in servers.items():
+                if extension_id in server_name.lower() or extension.get("name", "").lower() in server_name.lower():
+                    extension_config = {
+                        "server_name": server_name,
+                        "config": server_config
+                    }
+                    break
+            
+            if extension_config:
+                return {
+                    "extension_id": extension_id,
+                    "extension_name": extension.get("name"),
+                    "has_config": True,
+                    "config_file_path": str(MCP_CONFIG_FILE),
+                    "config": extension_config,
+                    "message": "Configuration found for this MCP server"
+                }
+            else:
+                return {
+                    "extension_id": extension_id,
+                    "extension_name": extension.get("name"),
+                    "has_config": False,
+                    "config_file_path": str(MCP_CONFIG_FILE),
+                    "config": None,
+                    "message": "Extension is installed but not configured in MCP config file",
+                    "example_config": generate_usage_instructions(extension).get("example_config")
+                }
+        except json.JSONDecodeError as e:
+            return {
+                "extension_id": extension_id,
+                "extension_name": extension.get("name"),
+                "has_config": False,
+                "config_file_path": str(MCP_CONFIG_FILE),
+                "error": f"Invalid JSON in config file: {str(e)}",
+                "message": "MCP configuration file contains invalid JSON"
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get extension configuration: {str(e)}")
 

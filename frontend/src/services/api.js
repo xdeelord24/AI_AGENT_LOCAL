@@ -601,6 +601,14 @@ class ApiService {
     return this.get('/api/extensions/installed');
   }
 
+  static async getExtensionConfig(extensionId) {
+    return this.get(`/api/extensions/${extensionId}/config`);
+  }
+
+  static async getMCPConfig() {
+    return this.get('/api/extensions/mcp/config');
+  }
+
   static async installExtension(extensionId) {
     return this.post(`/api/extensions/${extensionId}/install`);
   }

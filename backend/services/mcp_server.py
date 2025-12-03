@@ -400,6 +400,99 @@ class MCPServerTools:
                     "required": ["url"]
                 }
             ),
+            Tool(
+                name="create_document",
+                description="Create a Microsoft Word-like document (.docx) with formatted text, headings, paragraphs, lists, and tables. Similar to Google Docs or Microsoft Word.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path where to save the document (relative to workspace or absolute). Should end with .docx"
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Document title"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Document content. Can include markdown-style formatting: # for headings, * for lists, ** for bold, etc."
+                        },
+                        "author": {
+                            "type": "string",
+                            "description": "Document author (optional)"
+                        }
+                    },
+                    "required": ["path", "content"]
+                }
+            ),
+            Tool(
+                name="create_slide",
+                description="Create a single PowerPoint slide (.pptx) with title, content, and optional images. Can be used to create individual slides or add to presentations.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path where to save the slide presentation (relative to workspace or absolute). Should end with .pptx"
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Slide title"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Slide content (text, bullet points, etc.)"
+                        },
+                        "layout": {
+                            "type": "string",
+                            "description": "Slide layout: 'title_only', 'title_content', 'blank', 'title_slide' (default: 'title_content')",
+                            "enum": ["title_only", "title_content", "blank", "title_slide"],
+                            "default": "title_content"
+                        }
+                    },
+                    "required": ["path", "title"]
+                }
+            ),
+            Tool(
+                name="create_presentation",
+                description="Create a full PowerPoint presentation (.pptx) with multiple slides. Similar to Google Slides or Microsoft PowerPoint.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path where to save the presentation (relative to workspace or absolute). Should end with .pptx"
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Presentation title"
+                        },
+                        "slides": {
+                            "type": "array",
+                            "description": "Array of slide objects, each with 'title' and 'content' fields",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {"type": "string"},
+                                    "content": {"type": "string"},
+                                    "layout": {
+                                        "type": "string",
+                                        "enum": ["title_only", "title_content", "blank", "title_slide"],
+                                        "default": "title_content"
+                                    }
+                                },
+                                "required": ["title"]
+                            }
+                        },
+                        "author": {
+                            "type": "string",
+                            "description": "Presentation author (optional)"
+                        }
+                    },
+                    "required": ["path", "title", "slides"]
+                }
+            ),
         ]
         
         if self.web_search_enabled:
@@ -542,6 +635,42 @@ class MCPServerTools:
                     arguments.get("url", ""),
                     arguments.get("path"),
                     arguments.get("timeout", 60)
+                )
+            elif tool_name == "create_document":
+                if not allow_write:
+                    return [TextContent(
+                        type="text",
+                        text="ERROR: Document creation is disabled in ASK mode. Switch to Agent mode to create documents."
+                    )]
+                return await self._create_document(
+                    arguments.get("path", ""),
+                    arguments.get("content", ""),
+                    arguments.get("title", ""),
+                    arguments.get("author")
+                )
+            elif tool_name == "create_slide":
+                if not allow_write:
+                    return [TextContent(
+                        type="text",
+                        text="ERROR: Slide creation is disabled in ASK mode. Switch to Agent mode to create slides."
+                    )]
+                return await self._create_slide(
+                    arguments.get("path", ""),
+                    arguments.get("title", ""),
+                    arguments.get("content", ""),
+                    arguments.get("layout", "title_content")
+                )
+            elif tool_name == "create_presentation":
+                if not allow_write:
+                    return [TextContent(
+                        type="text",
+                        text="ERROR: Presentation creation is disabled in ASK mode. Switch to Agent mode to create presentations."
+                    )]
+                return await self._create_presentation(
+                    arguments.get("path", ""),
+                    arguments.get("title", ""),
+                    arguments.get("slides", []),
+                    arguments.get("author")
                 )
             else:
                 execution_time = time.time() - execution_start
@@ -1012,6 +1141,272 @@ class MCPServerTools:
             return [TextContent(type="text", text="Web search not available. Install the 'ddgs' package.")]
         except Exception as e:
             return [TextContent(type="text", text=f"Error performing web search: {str(e)}")]
+    
+    async def _create_document(self, path: str, content: str, title: str = "", author: Optional[str] = None) -> List[TextContent]:
+        """Create a Word document (.docx)"""
+        try:
+            try:
+                from docx import Document
+                from docx.shared import Inches, Pt
+                from docx.enum.text import WD_ALIGN_PARAGRAPH
+            except ImportError:
+                return [TextContent(
+                    type="text",
+                    text="ERROR: python-docx package not installed. Install it with: pip install python-docx"
+                )]
+            
+            # Normalize path
+            if not os.path.isabs(path):
+                path = os.path.join(self.workspace_root, path)
+            
+            # Ensure .docx extension
+            if not path.lower().endswith('.docx'):
+                path += '.docx'
+            
+            # Create directory if needed
+            directory = os.path.dirname(path)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+            
+            # Create document
+            doc = Document()
+            
+            # Set document properties
+            if title:
+                doc.core_properties.title = title
+            if author:
+                doc.core_properties.author = author or "AI Agent"
+            
+            # Add title if provided
+            if title:
+                title_para = doc.add_heading(title, 0)
+                title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            # Parse content and add to document
+            lines = content.split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    doc.add_paragraph()  # Empty paragraph for spacing
+                    continue
+                
+                # Handle markdown-style formatting
+                if line.startswith('# '):
+                    # Heading 1
+                    doc.add_heading(line[2:], level=1)
+                elif line.startswith('## '):
+                    # Heading 2
+                    doc.add_heading(line[3:], level=2)
+                elif line.startswith('### '):
+                    # Heading 3
+                    doc.add_heading(line[4:], level=3)
+                elif line.startswith('- ') or line.startswith('* '):
+                    # Bullet list
+                    para = doc.add_paragraph(line[2:], style='List Bullet')
+                elif line.startswith('1. ') or line.startswith('1) '):
+                    # Numbered list
+                    para = doc.add_paragraph(line[3:], style='List Number')
+                else:
+                    # Regular paragraph
+                    para = doc.add_paragraph()
+                    # Handle bold and italic
+                    text = line
+                    # Simple bold/italic handling
+                    parts = text.split('**')
+                    for i, part in enumerate(parts):
+                        if i % 2 == 0:
+                            # Regular text
+                            para.add_run(part)
+                        else:
+                            # Bold text
+                            para.add_run(part).bold = True
+                    
+                    # If no bold markers, check for italic
+                    if '**' not in text:
+                        parts = text.split('*')
+                        for i, part in enumerate(parts):
+                            if i % 2 == 0:
+                                para.add_run(part)
+                            else:
+                                para.add_run(part).italic = True
+            
+            # Save document
+            doc.save(path)
+            self._invalidate_structure_caches()
+            
+            return [TextContent(
+                type="text",
+                text=f"Successfully created document: {path}\nTitle: {title or 'Untitled'}\nContent length: {len(content)} characters"
+            )]
+        except Exception as e:
+            logger.error(f"Error creating document: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"ERROR: Failed to create document: {str(e)}")]
+    
+    async def _create_slide(self, path: str, title: str, content: str = "", layout: str = "title_content") -> List[TextContent]:
+        """Create a PowerPoint slide"""
+        try:
+            try:
+                from pptx import Presentation
+                from pptx.util import Inches, Pt
+            except ImportError:
+                return [TextContent(
+                    type="text",
+                    text="ERROR: python-pptx package not installed. Install it with: pip install python-pptx"
+                )]
+            
+            # Normalize path
+            if not os.path.isabs(path):
+                path = os.path.join(self.workspace_root, path)
+            
+            # Ensure .pptx extension
+            if not path.lower().endswith('.pptx'):
+                path += '.pptx'
+            
+            # Create directory if needed
+            directory = os.path.dirname(path)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+            
+            # Create or load presentation
+            if os.path.exists(path):
+                prs = Presentation(path)
+            else:
+                prs = Presentation()
+            
+            # Map layout names to slide layout indices
+            layout_map = {
+                "title_slide": 0,
+                "title_content": 1,
+                "title_only": 5,
+                "blank": 6
+            }
+            layout_idx = layout_map.get(layout, 1)  # Default to title_content
+            
+            # Add slide
+            slide_layout = prs.slide_layouts[layout_idx]
+            slide = prs.slides.add_slide(slide_layout)
+            
+            # Set title
+            if slide.shapes.title:
+                slide.shapes.title.text = title
+            
+            # Set content if available
+            if content and hasattr(slide_layout, 'placeholders'):
+                # Try to find content placeholder
+                for shape in slide.placeholders:
+                    if shape.placeholder_format.idx == 1 and shape != slide.shapes.title:
+                        shape.text = content
+                        break
+                else:
+                    # If no content placeholder, add text box
+                    left = Inches(0.5)
+                    top = Inches(2)
+                    width = Inches(9)
+                    height = Inches(4.5)
+                    text_box = slide.shapes.add_textbox(left, top, width, height)
+                    text_frame = text_box.text_frame
+                    text_frame.text = content
+            
+            # Save presentation
+            prs.save(path)
+            self._invalidate_structure_caches()
+            
+            return [TextContent(
+                type="text",
+                text=f"Successfully created/updated slide: {path}\nTitle: {title}\nLayout: {layout}"
+            )]
+        except Exception as e:
+            logger.error(f"Error creating slide: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"ERROR: Failed to create slide: {str(e)}")]
+    
+    async def _create_presentation(self, path: str, title: str, slides: List[Dict[str, Any]], author: Optional[str] = None) -> List[TextContent]:
+        """Create a full PowerPoint presentation"""
+        try:
+            try:
+                from pptx import Presentation
+                from pptx.util import Inches, Pt
+            except ImportError:
+                return [TextContent(
+                    type="text",
+                    text="ERROR: python-pptx package not installed. Install it with: pip install python-pptx"
+                )]
+            
+            # Normalize path
+            if not os.path.isabs(path):
+                path = os.path.join(self.workspace_root, path)
+            
+            # Ensure .pptx extension
+            if not path.lower().endswith('.pptx'):
+                path += '.pptx'
+            
+            # Create directory if needed
+            directory = os.path.dirname(path)
+            if directory and not os.path.exists(directory):
+                os.makedirs(directory, exist_ok=True)
+            
+            # Create presentation
+            prs = Presentation()
+            
+            # Set presentation properties
+            if title:
+                prs.core_properties.title = title
+            if author:
+                prs.core_properties.author = author or "AI Agent"
+            
+            # Add title slide
+            title_slide_layout = prs.slide_layouts[0]
+            title_slide = prs.slides.add_slide(title_slide_layout)
+            if title_slide.shapes.title:
+                title_slide.shapes.title.text = title
+            
+            # Add content slides
+            layout_map = {
+                "title_slide": 0,
+                "title_content": 1,
+                "title_only": 5,
+                "blank": 6
+            }
+            
+            for slide_data in slides:
+                slide_title = slide_data.get("title", "")
+                slide_content = slide_data.get("content", "")
+                slide_layout_name = slide_data.get("layout", "title_content")
+                layout_idx = layout_map.get(slide_layout_name, 1)
+                
+                slide_layout = prs.slide_layouts[layout_idx]
+                slide = prs.slides.add_slide(slide_layout)
+                
+                # Set title
+                if slide.shapes.title:
+                    slide.shapes.title.text = slide_title
+                
+                # Set content
+                if slide_content:
+                    for shape in slide.placeholders:
+                        if shape.placeholder_format.idx == 1 and shape != slide.shapes.title:
+                            shape.text = slide_content
+                            break
+                    else:
+                        # Add text box if no content placeholder
+                        left = Inches(0.5)
+                        top = Inches(2)
+                        width = Inches(9)
+                        height = Inches(4.5)
+                        text_box = slide.shapes.add_textbox(left, top, width, height)
+                        text_frame = text_box.text_frame
+                        text_frame.text = slide_content
+            
+            # Save presentation
+            prs.save(path)
+            self._invalidate_structure_caches()
+            
+            return [TextContent(
+                type="text",
+                text=f"Successfully created presentation: {path}\nTitle: {title}\nSlides: {len(slides) + 1} (including title slide)"
+            )]
+        except Exception as e:
+            logger.error(f"Error creating presentation: {e}", exc_info=True)
+            return [TextContent(type="text", text=f"ERROR: Failed to create presentation: {str(e)}")]
 
 
 def create_mcp_server(file_service=None, code_analyzer=None, web_search_enabled=True):

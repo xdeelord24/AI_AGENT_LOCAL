@@ -802,6 +802,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [extensionInstallFilter, setExtensionInstallFilter] = useState('all'); // 'all', 'installed', 'not_installed'
   const [extensionCategory, setExtensionCategory] = useState('mcp_servers'); // 'all', 'themes', 'icon_themes', 'languages', 'grammars', 'language_servers', 'mcp_servers', 'agent_servers', 'snippets'
   const [installingExtensionId, setInstallingExtensionId] = useState(null);
+  const [extensionConfigs, setExtensionConfigs] = useState({}); // Map of extensionId -> config data
+  const [loadingConfigs, setLoadingConfigs] = useState({}); // Map of extensionId -> loading state
+  const [expandedConfigs, setExpandedConfigs] = useState({}); // Map of extensionId -> expanded state
   
   const isWindowsPlatform = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent || '');
   const mainLayoutRef = useRef(null);
@@ -1189,6 +1192,22 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     loadExtensions();
   }, [leftSidebarTab, extensionCategory, extensionSearchQuery, isConnected]);
 
+  // Load extension configuration
+  const loadExtensionConfig = useCallback(async (extensionId) => {
+    if (loadingConfigs[extensionId]) return; // Already loading
+    
+    setLoadingConfigs(prev => ({ ...prev, [extensionId]: true }));
+    try {
+      const config = await ApiService.getExtensionConfig(extensionId);
+      setExtensionConfigs(prev => ({ ...prev, [extensionId]: config }));
+    } catch (error) {
+      console.error(`Failed to load config for extension ${extensionId}:`, error);
+      setExtensionConfigs(prev => ({ ...prev, [extensionId]: { error: error.message } }));
+    } finally {
+      setLoadingConfigs(prev => ({ ...prev, [extensionId]: false }));
+    }
+  }, [loadingConfigs]);
+
   // Handle extension installation
   const handleInstallExtension = useCallback(async (extensionId) => {
     setInstallingExtensionId(extensionId);
@@ -1198,13 +1217,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       // Reload installed extensions
       const installedData = await ApiService.getInstalledExtensions();
       setInstalledExtensions(installedData?.extensions || []);
+      
+      // Load config if it's an MCP server
+      const extension = extensions.find(ext => ext.id === extensionId);
+      if (extension?.category === 'MCP Servers') {
+        await loadExtensionConfig(extensionId);
+      }
     } catch (error) {
       console.error('Failed to install extension:', error);
       toast.error(error.response?.data?.detail || 'Failed to install extension');
     } finally {
       setInstallingExtensionId(null);
     }
-  }, []);
+  }, [extensions, loadExtensionConfig]);
 
   // Handle extension uninstallation
   const handleUninstallExtension = useCallback(async (extensionId) => {
@@ -1215,6 +1240,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       // Reload installed extensions
       const installedData = await ApiService.getInstalledExtensions();
       setInstalledExtensions(installedData?.extensions || []);
+      
+      // Clear config
+      setExtensionConfigs(prev => {
+        const newConfigs = { ...prev };
+        delete newConfigs[extensionId];
+        return newConfigs;
+      });
     } catch (error) {
       console.error('Failed to uninstall extension:', error);
       toast.error(error.response?.data?.detail || 'Failed to uninstall extension');
@@ -1222,6 +1254,15 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       setInstallingExtensionId(null);
     }
   }, []);
+
+  // Load configs for installed MCP servers
+  useEffect(() => {
+    installedExtensions.forEach(ext => {
+      if (ext.category === 'MCP Servers' && !extensionConfigs[ext.id] && !loadingConfigs[ext.id]) {
+        loadExtensionConfig(ext.id);
+      }
+    });
+  }, [installedExtensions, extensionConfigs, loadingConfigs, loadExtensionConfig]);
 
   const normalizeOperationContent = useCallback((value) => {
     if (typeof value !== 'string' || value.length === 0) {
@@ -8167,6 +8208,111 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                 )}
                               </button>
                             </div>
+                            {/* Configuration section for installed MCP servers */}
+                            {isInstalled && extension.category === 'MCP Servers' && (
+                              <div className="mt-3 pt-3 border-t border-dark-700">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setExpandedConfigs(prev => ({
+                                      ...prev,
+                                      [extension.id]: !prev[extension.id]
+                                    }));
+                                    if (!expandedConfigs[extension.id] && !extensionConfigs[extension.id]) {
+                                      loadExtensionConfig(extension.id);
+                                    }
+                                  }}
+                                  className="w-full flex items-center justify-between text-xs text-dark-300 hover:text-dark-100 transition-colors"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <Settings className="w-3 h-3" />
+                                    <span>Configuration Settings</span>
+                                  </div>
+                                  {expandedConfigs[extension.id] ? (
+                                    <ChevronUp className="w-3 h-3" />
+                                  ) : (
+                                    <ChevronDown className="w-3 h-3" />
+                                  )}
+                                </button>
+                                {expandedConfigs[extension.id] && (
+                                  <div className="mt-2 p-3 bg-dark-800 rounded border border-dark-700">
+                                    {loadingConfigs[extension.id] ? (
+                                      <div className="flex items-center gap-2 text-xs text-dark-400">
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                        <span>Loading configuration...</span>
+                                      </div>
+                                    ) : extensionConfigs[extension.id]?.error ? (
+                                      <div className="text-xs text-red-400">
+                                        Error: {extensionConfigs[extension.id].error}
+                                      </div>
+                                    ) : extensionConfigs[extension.id] ? (
+                                      <div className="space-y-2 text-xs">
+                                        <div className="text-dark-300 font-medium">
+                                          {extensionConfigs[extension.id].extension_name || extension.name}
+                                        </div>
+                                        {extensionConfigs[extension.id].has_config ? (
+                                          <div className="space-y-1">
+                                            <div className="text-dark-400">
+                                              <span className="text-dark-500">Status:</span>{' '}
+                                              <span className="text-green-400">Configured</span>
+                                            </div>
+                                            <div className="text-dark-400">
+                                              <span className="text-dark-500">Config File:</span>{' '}
+                                              <code className="text-primary-400 text-[10px]">
+                                                {extensionConfigs[extension.id].config_file_path}
+                                              </code>
+                                            </div>
+                                            {extensionConfigs[extension.id].config?.server_name && (
+                                              <div className="text-dark-400">
+                                                <span className="text-dark-500">Server Name:</span>{' '}
+                                                <code className="text-primary-400 text-[10px]">
+                                                  {extensionConfigs[extension.id].config.server_name}
+                                                </code>
+                                              </div>
+                                            )}
+                                            {extensionConfigs[extension.id].config?.config && (
+                                              <div className="mt-2 p-2 bg-dark-900 rounded border border-dark-600">
+                                                <div className="text-dark-500 mb-1">Configuration:</div>
+                                                <pre className="text-[10px] text-dark-300 overflow-x-auto">
+                                                  {JSON.stringify(extensionConfigs[extension.id].config.config, null, 2)}
+                                                </pre>
+                                              </div>
+                                            )}
+                                          </div>
+                                        ) : (
+                                          <div className="space-y-2">
+                                            <div className="text-yellow-400">
+                                              ⚠️ Not configured in MCP config file
+                                            </div>
+                                            <div className="text-dark-400">
+                                              <span className="text-dark-500">Config File:</span>{' '}
+                                              <code className="text-primary-400 text-[10px]">
+                                                {extensionConfigs[extension.id].config_file_path}
+                                              </code>
+                                            </div>
+                                            {extensionConfigs[extension.id].example_config && (
+                                              <div className="mt-2 p-2 bg-dark-900 rounded border border-dark-600">
+                                                <div className="text-dark-500 mb-1">Example Configuration:</div>
+                                                <pre className="text-[10px] text-dark-300 overflow-x-auto">
+                                                  {JSON.stringify(extensionConfigs[extension.id].example_config, null, 2)}
+                                                </pre>
+                                              </div>
+                                            )}
+                                            <div className="text-dark-400 text-[10px] mt-2">
+                                              Add this server to your MCP configuration file to enable it.
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="text-xs text-dark-400">
+                                        Click to load configuration
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
