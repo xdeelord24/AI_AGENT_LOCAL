@@ -8774,6 +8774,15 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           >
             Connectivity Settings
           </button>
+          <button
+            onClick={() => {
+              setShowMemoryPanel(true);
+              loadMemorySettings();
+            }}
+            className="px-3 py-1 rounded-full border border-dark-600 text-dark-200 hover:bg-dark-700 text-[11px]"
+          >
+            Memory Settings
+          </button>
         </div>
       </div>
 
@@ -11219,6 +11228,133 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   {isConnectivitySaving ? 'Saving…' : 'Save'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Memory Settings Panel */}
+      {showMemoryPanel && (
+        <div className="fixed inset-0 z-[999] bg-black/60 flex items-center justify-center px-4">
+          <div className="bg-dark-900 border border-dark-700 rounded-2xl w-full max-w-2xl shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700">
+              <div>
+                <h3 className="text-lg font-semibold text-white">Memory</h3>
+                <p className="text-xs text-dark-400">Control how ChatGPT uses memories and chat history</p>
+              </div>
+              <button
+                onClick={() => setShowMemoryPanel(false)}
+                className="p-2 rounded hover:bg-dark-800 transition-colors"
+              >
+                <X className="w-4 h-4 text-dark-300" />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-6">
+              {isMemoryLoading ? (
+                <div className="flex items-center justify-center py-10 text-dark-400">
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  Loading memory settings...
+                </div>
+              ) : (
+                <>
+                  {/* Memory Settings */}
+                  <div className="space-y-4">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h4 className="text-sm font-medium text-white">Reference saved memories</h4>
+                        </div>
+                        <p className="text-xs text-dark-400">
+                          Let ChatGPT save and use memories when responding.
+                        </p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={memorySettings.reference_saved_memories}
+                          onChange={(e) => setMemorySettings(prev => ({
+                            ...prev,
+                            reference_saved_memories: e.target.checked
+                          }))}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-dark-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+                      </label>
+                    </div>
+
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h4 className="text-sm font-medium text-white">Reference chat history</h4>
+                        </div>
+                        <p className="text-xs text-dark-400">
+                          Let ChatGPT reference all previous conversations when responding.
+                        </p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={memorySettings.reference_chat_history}
+                          onChange={(e) => setMemorySettings(prev => ({
+                            ...prev,
+                            reference_chat_history: e.target.checked
+                          }))}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-dark-700 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600"></div>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-dark-700">
+                    <p className="text-xs text-dark-500">
+                      ChatGPT may use Memory to personalize queries to search providers, such as Bing.{' '}
+                      <a href="#" className="text-primary-400 hover:text-primary-300 underline">Learn more</a>
+                    </p>
+                  </div>
+
+                  {/* Saved Memories List */}
+                  {memorySettings.reference_saved_memories && (
+                    <div className="pt-4 border-t border-dark-700">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="text-sm font-medium text-white">Saved Memories</h4>
+                        <button
+                          onClick={() => {
+                            toast.info('Memory management coming soon');
+                          }}
+                          className="text-xs text-primary-400 hover:text-primary-300"
+                        >
+                          Manage
+                        </button>
+                      </div>
+                      {memories.length === 0 ? (
+                        <p className="text-xs text-dark-400">No saved memories yet.</p>
+                      ) : (
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {memories.slice(0, 5).map((memory) => (
+                            <div key={memory.id} className="text-xs text-dark-300 bg-dark-800 rounded p-2">
+                              {memory.content}
+                            </div>
+                          ))}
+                          {memories.length > 5 && (
+                            <p className="text-xs text-dark-400">... and {memories.length - 5} more</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t border-dark-700 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={handleSaveMemorySettings}
+                disabled={isMemorySaving || isMemoryLoading}
+                className="px-4 py-2 rounded-lg bg-primary-600 hover:bg-primary-700 text-white text-sm disabled:opacity-50"
+              >
+                {isMemorySaving ? 'Saving…' : 'Save'}
+              </button>
             </div>
           </div>
         </div>
