@@ -8,9 +8,11 @@ import {
   WifiOff,
   RefreshCw,
   Check,
-  X
+  X,
+  Palette
 } from 'lucide-react';
 import { ApiService } from '../services/api';
+import { getAvailableThemes, applyTheme } from '../utils/themeManager';
 import toast from 'react-hot-toast';
 
 const HF_DEFAULT_BASE_URL = 'https://api-inference.huggingface.co';
@@ -60,11 +62,53 @@ const Settings = () => {
   
   const [isLoading, setIsLoading] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [availableThemes, setAvailableThemes] = useState([]);
+  const [activeThemeId, setActiveThemeId] = useState(null);
+  const [isLoadingThemes, setIsLoadingThemes] = useState(false);
 
   useEffect(() => {
     loadSettings();
     checkConnections();
+    loadThemes();
   }, []);
+
+  const loadThemes = async () => {
+    setIsLoadingThemes(true);
+    try {
+      const themes = await getAvailableThemes();
+      setAvailableThemes(themes);
+      
+      // Get active theme
+      const activeTheme = await ApiService.getActiveTheme();
+      if (activeTheme && activeTheme.theme_id) {
+        setActiveThemeId(activeTheme.theme_id);
+      } else {
+        const savedTheme = localStorage.getItem('activeTheme');
+        if (savedTheme) {
+          setActiveThemeId(savedTheme);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading themes:', error);
+    } finally {
+      setIsLoadingThemes(false);
+    }
+  };
+
+  const handleThemeChange = async (themeId) => {
+    try {
+      const success = await applyTheme(themeId);
+      if (success) {
+        setActiveThemeId(themeId);
+        toast.success('Theme applied successfully');
+      } else {
+        toast.error('Failed to apply theme');
+      }
+    } catch (error) {
+      console.error('Error applying theme:', error);
+      toast.error('Failed to apply theme');
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -707,6 +751,50 @@ const Settings = () => {
                   ))}
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Theme Settings */}
+          <div className="bg-dark-800 border border-dark-700 rounded-lg p-6">
+            <h2 className="text-xl font-semibold text-dark-50 mb-4 flex items-center space-x-2">
+              <Palette className="w-5 h-5" />
+              <span>Themes</span>
+            </h2>
+            
+            <div className="space-y-4">
+              {isLoadingThemes ? (
+                <div className="text-sm text-dark-400">Loading themes...</div>
+              ) : availableThemes.length === 0 ? (
+                <div className="text-sm text-dark-400">
+                  No themes installed. Install theme extensions from the Extensions panel.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {availableThemes.map((theme) => (
+                    <button
+                      key={theme.id}
+                      onClick={() => handleThemeChange(theme.id)}
+                      className={`p-4 rounded-lg border transition-colors text-left ${
+                        activeThemeId === theme.id
+                          ? 'bg-primary-600 border-primary-500 text-white'
+                          : 'bg-dark-700 border-dark-600 text-dark-300 hover:border-dark-500'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-medium">{theme.label || theme.extension_name || theme.id}</div>
+                          {theme.extension_name && (
+                            <div className="text-xs opacity-75 mt-1">{theme.extension_name}</div>
+                          )}
+                        </div>
+                        {activeThemeId === theme.id && (
+                          <Check className="w-5 h-5" />
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 

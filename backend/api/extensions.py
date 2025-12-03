@@ -17,16 +17,21 @@ try:
         sys.path.insert(0, str(backend_path))
     
     from services.vscode_extension_service import VSCodeExtensionService
+    from services.extension_installer import ExtensionInstaller
     VSCODE_SERVICE_AVAILABLE = True
+    EXTENSION_INSTALLER_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"VSCode extension service not available: {e}")
     VSCODE_SERVICE_AVAILABLE = False
     VSCodeExtensionService = None
+    ExtensionInstaller = None
+    EXTENSION_INSTALLER_AVAILABLE = False
 
 router = APIRouter()
 
 # Initialize VSCode extension service if available
 vscode_service = None
+extension_installer = None
 if VSCODE_SERVICE_AVAILABLE and VSCodeExtensionService:
     try:
         vscode_service = VSCodeExtensionService()
@@ -34,6 +39,14 @@ if VSCODE_SERVICE_AVAILABLE and VSCodeExtensionService:
     except Exception as e:
         logger.error(f"Failed to initialize VSCode extension service: {e}", exc_info=True)
         vscode_service = None
+
+if EXTENSION_INSTALLER_AVAILABLE and ExtensionInstaller:
+    try:
+        extension_installer = ExtensionInstaller()
+        logger.info("Extension installer initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize extension installer: {e}", exc_info=True)
+        extension_installer = None
 else:
     logger.warning(f"VSCode service not available. VSCODE_SERVICE_AVAILABLE={VSCODE_SERVICE_AVAILABLE}, VSCodeExtensionService={VSCodeExtensionService}")
 
@@ -533,8 +546,29 @@ async def install_extension(extension_id: str):
             "installed_at": str(Path(__file__).stat().st_mtime)
         }
         
-        # For VSCode extensions, add installation metadata
-        if extension_type == "vscode":
+        # For VSCode extensions, download and extract VSIX file
+        installation_result = None
+        if extension_type == "vscode" and extension_installer:
+            vsix_url = extension.get("vsix_url")
+            if vsix_url:
+                try:
+                    installation_result = await extension_installer.install_extension(
+                        extension_id=extension_id,
+                        vsix_url=vsix_url,
+                        extension_data=extension
+                    )
+                    # Add installation details to extension data
+                    extension_data["installation"] = installation_result
+                    extension_data["vsix_url"] = vsix_url
+                    extension_data["marketplace_url"] = extension.get("marketplace_url")
+                    extension_data["is_compatible"] = extension.get("is_compatible", True)
+                except Exception as e:
+                    logger.error(f"Error installing VSIX for {extension_id}: {e}", exc_info=True)
+                    # Continue with registration even if VSIX installation fails
+                    extension_data["installation_error"] = str(e)
+            else:
+                logger.warning(f"No VSIX URL for extension {extension_id}")
+        elif extension_type == "vscode":
             extension_data["vsix_url"] = extension.get("vsix_url")
             extension_data["marketplace_url"] = extension.get("marketplace_url")
             extension_data["is_compatible"] = extension.get("is_compatible", True)
@@ -545,20 +579,18 @@ async def install_extension(extension_id: str):
         # Save to config file
         save_installed_extensions(installed)
         
-        # For VSCode extensions, we would download and extract the VSIX file here
-        # For MCP extensions, we would configure them in the MCP config
-        # This is a simplified implementation - in production, you'd want to:
-        # 1. Download VSIX file for VSCode extensions
-        # 2. Extract and install to extensions directory
-        # 3. For MCP extensions, add to MCP config file
-        # 4. Register with the system
-        
-        return {
+        response = {
             "message": "Extension installed successfully",
             "extension": extension_data,
             "type": extension_type,
-            "note": "Extension has been registered. Some extensions may require a restart to take effect."
         }
+        
+        # Add theme information if themes were extracted
+        if installation_result and installation_result.get("themes"):
+            response["themes"] = installation_result["themes"]
+            response["message"] = f"Extension installed successfully. {len(installation_result['themes'])} theme(s) available."
+        
+        return response
     except HTTPException:
         raise
     except Exception as e:
@@ -715,4 +747,75 @@ async def get_extension_config(extension_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get extension configuration: {str(e)}")
+
+@router.get("/themes")
+async def get_available_themes():
+    """Get list of all available themes from installed extensions"""
+    try:
+        themes = []
+        
+        if extension_installer:
+            installed_themes = extension_installer.get_installed_themes()
+            themes = installed_themes
+        
+        # Also check installed extensions for theme metadata
+        installed = load_installed_extensions()
+        for ext in installed:
+            if ext.get("category") in ("Themes", "Icon Themes"):
+                installation = ext.get("installation", {})
+                ext_themes = installation.get("themes", [])
+                for theme in ext_themes:
+                    # Avoid duplicates
+                    if not any(t.get("id") == theme.get("id") for t in themes):
+                        themes.append(theme)
+        
+        return {"themes": themes, "count": len(themes)}
+    except Exception as e:
+        logger.error(f"Error getting themes: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get themes: {str(e)}")
+
+@router.get("/themes/{theme_id}")
+async def get_theme_data(theme_id: str):
+    """Get theme data for a specific theme"""
+    try:
+        if not extension_installer:
+            raise HTTPException(status_code=503, detail="Extension installer not available")
+        
+        theme_data = extension_installer.get_theme_data(theme_id)
+        if not theme_data:
+            raise HTTPException(status_code=404, detail=f"Theme '{theme_id}' not found")
+        
+        return {"theme": theme_data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting theme data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get theme data: {str(e)}")
+
+@router.post("/themes/{theme_id}/apply")
+async def apply_theme(theme_id: str):
+    """Apply a theme (store preference)"""
+    try:
+        # Store theme preference
+        theme_pref_file = EXTENSIONS_CONFIG_DIR / "active_theme.json"
+        with open(theme_pref_file, 'w') as f:
+            json.dump({"theme_id": theme_id, "applied_at": str(Path(__file__).stat().st_mtime)}, f, indent=2)
+        
+        return {"message": f"Theme '{theme_id}' applied successfully", "theme_id": theme_id}
+    except Exception as e:
+        logger.error(f"Error applying theme: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to apply theme: {str(e)}")
+
+@router.get("/themes/active")
+async def get_active_theme():
+    """Get currently active theme"""
+    try:
+        theme_pref_file = EXTENSIONS_CONFIG_DIR / "active_theme.json"
+        if theme_pref_file.exists():
+            with open(theme_pref_file, 'r') as f:
+                return json.load(f)
+        return {"theme_id": None, "message": "No theme applied"}
+    except Exception as e:
+        logger.error(f"Error getting active theme: {e}", exc_info=True)
+        return {"theme_id": None, "error": str(e)}
 

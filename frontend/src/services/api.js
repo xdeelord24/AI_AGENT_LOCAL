@@ -616,6 +616,23 @@ class ApiService {
   static async uninstallExtension(extensionId) {
     return this.delete(`/api/extensions/${extensionId}/install`);
   }
+
+  // Themes API
+  static async getAvailableThemes() {
+    return this.get('/api/extensions/themes');
+  }
+
+  static async getThemeData(themeId) {
+    return this.get(`/api/extensions/themes/${themeId}`);
+  }
+
+  static async applyTheme(themeId) {
+    return this.post(`/api/extensions/themes/${themeId}/apply`);
+  }
+
+  static async getActiveTheme() {
+    return this.get('/api/extensions/themes/active');
+  }
 }
 
 export { ApiService };

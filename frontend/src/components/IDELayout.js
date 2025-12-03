@@ -11,6 +11,7 @@ import {
   Activity, ShieldCheck, Megaphone, AlertTriangle,
   ThumbsUp, ThumbsDown, Copy, Search, Download, Package, Settings
 } from 'lucide-react';
+import CommandPalette from './CommandPalette';
 import Editor from '@monaco-editor/react';
 import { ApiService } from '../services/api';
 import { formatMessageContent, initializeCopyCodeListeners, copyToClipboard, highlightCodeBlocks } from '../utils/messageFormatter';
@@ -1025,6 +1026,9 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [loadingConfigs, setLoadingConfigs] = useState({}); // Map of extensionId -> loading state
   const [expandedConfigs, setExpandedConfigs] = useState({}); // Map of extensionId -> expanded state
   
+  // Command palette state
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
+  
   const isWindowsPlatform = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent || '');
   const mainLayoutRef = useRef(null);
   const pendingResizeRef = useRef({ left: null, right: null, bottom: null });
@@ -1433,8 +1437,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const handleInstallExtension = useCallback(async (extensionId) => {
     setInstallingExtensionId(extensionId);
     try {
-      await ApiService.installExtension(extensionId);
-      toast.success('Extension installed successfully');
+      const response = await ApiService.installExtension(extensionId);
+      const message = response.message || 'Extension installed successfully';
+      toast.success(message);
+      
+      // Check if themes were installed
+      if (response.themes && response.themes.length > 0) {
+        toast.success(`${response.themes.length} theme(s) available! Go to Settings > Themes to apply.`, {
+          duration: 6000
+        });
+      }
+      
       // Reload installed extensions
       const installedData = await ApiService.getInstalledExtensions();
       setInstalledExtensions(installedData?.extensions || []);
@@ -3758,10 +3771,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         return;
       }
 
+      // Ctrl+Shift+P: Open command palette
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        setShowCommandPalette(true);
+        return;
+      }
+      
       // Don't trigger shortcuts when typing in inputs/textarea
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
-        // Allow Ctrl+S and Ctrl+P in inputs
-        if (!(e.ctrlKey && (e.key === 's' || e.key === 'p'))) {
+        // Allow Ctrl+S, Ctrl+P, and Ctrl+Shift+P in inputs
+        if (!(e.ctrlKey && (e.key === 's' || e.key === 'p' || (e.shiftKey && e.key.toLowerCase() === 'p')))) {
           return;
         }
       }
@@ -3792,8 +3812,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         }
       }
 
-      // Ctrl+P: Focus search
-      if (e.ctrlKey && e.key === 'p') {
+      // Ctrl+P: Focus search (only if not Shift+P)
+      if (e.ctrlKey && e.key === 'p' && !e.shiftKey) {
         e.preventDefault();
         focusSearchInput();
       }
@@ -3823,7 +3843,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeTab, saveFile, focusSearchInput, ensureTerminalVisible, handleStopChat, selectedFiles, getAllTreeItems, findItemInTree, fileTree, handleDeletePath]);
+  }, [activeTab, saveFile, focusSearchInput, ensureTerminalVisible, handleStopChat, selectedFiles, getAllTreeItems, findItemInTree, fileTree, handleDeletePath, setShowCommandPalette]);
 
   const resolvePathInput = (inputPath) => {
     if (!inputPath) return null;
@@ -8034,8 +8054,23 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     );
   };
 
+  const handleNavigate = useCallback((page) => {
+    if (page === 'settings') {
+      // Open settings - you can implement navigation to settings page here
+      // For now, we'll just show a toast
+      toast.success('Navigate to Settings page');
+      setShowCommandPalette(false);
+    }
+  }, []);
+
   return (
     <div ref={mainLayoutRef} className="flex flex-col h-screen bg-dark-900 text-dark-100 overflow-hidden">
+      {/* Command Palette */}
+      <CommandPalette
+        isOpen={showCommandPalette}
+        onClose={() => setShowCommandPalette(false)}
+        onNavigate={handleNavigate}
+      />
       {/* Top Menu Bar */}
       <div className="h-10 bg-dark-800 border-b border-dark-700 flex items-center px-4 text-sm">
         <div className="flex items-center space-x-4">

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Toaster } from 'react-hot-toast';
 import IDELayout from './components/IDELayout';
 import { ApiService } from './services/api';
+import { loadActiveTheme } from './utils/themeManager';
 
 const CONNECTION_CHECK_INTERVAL_MS = 5000;
 
@@ -64,6 +65,7 @@ function App() {
     if (isConnected) {
       loadModels();
       loadChatStatus();
+      loadActiveTheme(); // Load active theme on startup
     }
   }, [isConnected, loadChatStatus, loadModels]);
 
