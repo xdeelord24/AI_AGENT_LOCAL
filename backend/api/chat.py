@@ -30,6 +30,7 @@ class ChatRequest(BaseModel):
     context: Optional[Dict[str, Any]] = None
     conversation_history: Optional[List[ChatMessage]] = None
     images: Optional[List[str]] = None  # List of base64-encoded images (data URLs)
+    files: Optional[List[Dict[str, Any]]] = None  # List of file attachments with name, content, type
 
 
 class ChatResponse(BaseModel):

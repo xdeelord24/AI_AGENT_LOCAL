@@ -120,6 +120,7 @@ class ApiService {
     signal,
     onChunk,
     images = null,
+    files = null,
   }) {
     if (typeof onChunk !== 'function') {
       throw new Error('sendMessageStream requires an onChunk callback');
@@ -134,6 +135,11 @@ class ApiService {
     // Add images if provided
     if (images && Array.isArray(images) && images.length > 0) {
       payload.images = images;
+    }
+
+    // Add files if provided
+    if (files && Array.isArray(files) && files.length > 0) {
+      payload.files = files;
     }
 
     const response = await fetch(`${API_BASE_URL}/api/chat/send/stream`, {

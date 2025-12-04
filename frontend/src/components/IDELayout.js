@@ -1600,6 +1600,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setTabContextMenu({ visible: false, x: 0, y: 0, target: null });
   }, []);
 
+  const closePickerContextMenu = useCallback(() => {
+    setPickerContextMenu({ visible: false, x: 0, y: 0, target: null });
+  }, []);
+
   // Editor states
   const [editorContent, setEditorContent] = useState('');
   const [editorLanguage, setEditorLanguage] = useState('python');
@@ -1832,7 +1836,8 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [chatInput, setChatInput] = useState('');
   const [composerInput, setComposerInput] = useState('');
   const [followUpInput, setFollowUpInput] = useState('');
-  const [attachedImages, setAttachedImages] = useState([]); // Array of {id, dataUrl, file}
+  const [attachedImages, setAttachedImages] = useState([]); // Array of {id, dataUrl, file, type: 'image'|'file', content?: string}
+  const [attachedFiles, setAttachedFiles] = useState([]); // Array of {id, file, content, type}
   const imageInputRef = useRef(null);
   const [queuedFollowUps, setQueuedFollowUps] = useState([]);
   const [isChatPinnedToBottom, setIsChatPinnedToBottom] = useState(true);
@@ -2500,6 +2505,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerSelectedPath, setPickerSelectedPath] = useState('');
   const [pickerMode, setPickerMode] = useState('folder'); // 'folder' or 'file'
+  const [pickerContextMenu, setPickerContextMenu] = useState({ visible: false, x: 0, y: 0, target: null });
   
   // Inline editing for new file/folder creation
   const [creatingItem, setCreatingItem] = useState(null); // { parentPath, type: 'file' | 'folder', tempId }
@@ -4699,6 +4705,65 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
   }, [creatingItem, creatingItemName, joinPaths, getLanguageFromPath, upsertOpenFile, setActiveTab, setEditorContent, setEditorLanguage, refreshFileTree]);
 
+  // Handlers for picker context menu
+  const handlePickerCreateFile = useCallback(async (targetPath) => {
+    const basePath = targetPath || pickerPath;
+    const name = window.prompt('Enter file name:', '');
+    if (!name || !name.trim()) {
+      closePickerContextMenu();
+      return;
+    }
+    
+    // Validate name
+    if (/[<>:"|?*]/.test(name.trim())) {
+      toast.error('Invalid characters in name. Cannot contain: < > : " | ? *');
+      closePickerContextMenu();
+      return;
+    }
+
+    const fullPath = joinPaths(basePath, name.trim());
+    
+    try {
+      await ApiService.writeFile(fullPath, '');
+      toast.success(`Created ${name.trim()}`);
+      await loadPickerTree(pickerPath);
+      closePickerContextMenu();
+    } catch (error) {
+      console.error('Error creating file:', error);
+      toast.error(`Failed to create file: ${error.response?.data?.detail || error.message}`);
+      closePickerContextMenu();
+    }
+  }, [pickerPath, loadPickerTree, closePickerContextMenu, joinPaths]);
+
+  const handlePickerCreateFolder = useCallback(async (targetPath) => {
+    const basePath = targetPath || pickerPath;
+    const name = window.prompt('Enter folder name:', '');
+    if (!name || !name.trim()) {
+      closePickerContextMenu();
+      return;
+    }
+    
+    // Validate name
+    if (/[<>:"|?*]/.test(name.trim())) {
+      toast.error('Invalid characters in name. Cannot contain: < > : " | ? *');
+      closePickerContextMenu();
+      return;
+    }
+
+    const fullPath = joinPaths(basePath, name.trim());
+    
+    try {
+      await ApiService.createDirectory(fullPath);
+      toast.success(`Created folder ${name.trim()}`);
+      await loadPickerTree(pickerPath);
+      closePickerContextMenu();
+    } catch (error) {
+      console.error('Error creating folder:', error);
+      toast.error(`Failed to create folder: ${error.response?.data?.detail || error.message}`);
+      closePickerContextMenu();
+    }
+  }, [pickerPath, loadPickerTree, closePickerContextMenu, joinPaths]);
+
   // Focus input when creating item
   useEffect(() => {
     if (creatingItem && creatingItemInputRef.current) {
@@ -4765,6 +4830,31 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       document.removeEventListener('keydown', handleKey);
     };
   }, [closeTabContextMenu, tabContextMenu.visible]);
+
+  useEffect(() => {
+    if (!pickerContextMenu.visible) {
+      return;
+    }
+    const handleClick = (event) => {
+      if (!(event.target.closest && event.target.closest('.picker-context-menu'))) {
+        closePickerContextMenu();
+      }
+    };
+    const handleScroll = () => closePickerContextMenu();
+    const handleKey = (event) => {
+      if (event.key === 'Escape') {
+        closePickerContextMenu();
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('scroll', handleScroll, true);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('scroll', handleScroll, true);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [closePickerContextMenu, pickerContextMenu.visible]);
 
   const handleCopyPathValue = useCallback(async (path, options = {}) => {
     if (!path || !navigator?.clipboard?.writeText) {
@@ -5505,6 +5595,24 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     const x = Math.min(event?.clientX ?? 0, window.innerWidth - MENU_WIDTH);
     const y = Math.min(event?.clientY ?? 0, window.innerHeight - MENU_HEIGHT);
     setFileContextMenu({
+      visible: true,
+      x: Math.max(8, x),
+      y: Math.max(8, y),
+      target,
+    });
+  }, []);
+
+  const handlePickerContextMenu = useCallback((event, target = null) => {
+    if (event?.button === 0 && event?.ctrlKey && typeof event?.metaKey === 'boolean') {
+      return;
+    }
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    const MENU_WIDTH = 200;
+    const MENU_HEIGHT = 150;
+    const x = Math.min(event?.clientX ?? 0, window.innerWidth - MENU_WIDTH);
+    const y = Math.min(event?.clientY ?? 0, window.innerHeight - MENU_HEIGHT);
+    setPickerContextMenu({
       visible: true,
       x: Math.max(8, x),
       y: Math.max(8, y),
@@ -6267,14 +6375,15 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     await new Promise((resolve) => setTimeout(resolve, PLAN_PREVIEW_DELAY_MS));
   }, [setThinkingAiPlan]);
 
-  const handleSendChat = useCallback(async (message, isComposer = false, imagesToInclude = null) => {
+  const handleSendChat = useCallback(async (message, isComposer = false, imagesToInclude = null, filesToInclude = null) => {
     const originalMessage = message;
     const normalizedMessage = normalizeChatInput(message);
     const safeRawContent =
       typeof originalMessage === 'string' ? originalMessage : normalizedMessage;
-    // Allow sending if there's either a message or images
+    // Allow sending if there's either a message, images, or files
     const hasImages = imagesToInclude && Array.isArray(imagesToInclude) && imagesToInclude.length > 0;
-    if ((!normalizedMessage.trim() && !hasImages) || isLoadingChat) return;
+    const hasFiles = filesToInclude && Array.isArray(filesToInclude) && filesToInclude.length > 0;
+    if ((!normalizedMessage.trim() && !hasImages && !hasFiles) || isLoadingChat) return;
 
     const sanitizedHistory = chatMessages
       .filter(msg => msg.role === 'user' || msg.role === 'assistant')
@@ -6289,7 +6398,18 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     const shouldEnableComposerMode = isComposer || isAgentLikeMode;
 
     let finalMessage = normalizedMessage || "";
-    // Allow empty message when images are present
+    // Allow empty message when images or files are present
+    
+    // Add file contents to the message if files are attached
+    const filesToUse = filesToInclude || attachedFiles;
+    if (filesToUse && filesToUse.length > 0) {
+      const fileContents = filesToUse.map(f => {
+        const fileName = f.name || f.file?.name || 'attached file';
+        const content = typeof f.content === 'string' ? f.content : '';
+        return `\n\n--- Content of ${fileName} ---\n${content}\n--- End of ${fileName} ---`;
+      }).join('\n\n');
+      finalMessage = finalMessage + fileContents;
+    }
     if (activeTab) {
       const activeTag = `@${activeTab}`;
       finalMessage = finalMessage
@@ -6480,12 +6600,21 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           return typeof img === 'string' ? img : (img.dataUrl || img);
         }).filter(Boolean);
         
+        // Prepare files for sending
+        const filesToUse = filesToInclude || attachedFiles;
+        const filesToSend = filesToUse && filesToUse.length > 0 ? filesToUse.map(f => ({
+          name: f.name || f.file?.name || 'file',
+          content: typeof f.content === 'string' ? f.content : '',
+          type: f.type || 'text/plain'
+        })) : null;
+        
         await ApiService.sendMessageStream({
           message: finalMessage,
           context: context,
           conversationHistory: sanitizedHistory,
           signal: abortController.signal,
           images: imageDataUrls.length > 0 ? imageDataUrls : null,
+          files: filesToSend,
           onChunk: async (chunk) => {
             // DEBUG: Log all chunks to track web_search flow
             const debugInfo = {
@@ -7033,42 +7162,79 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     if (!send) {
       return;
     }
-    send(next.content, next.isComposer, next.images || null).catch((error) => {
+    send(next.content, next.isComposer, next.images || null, next.files || null).catch((error) => {
       console.error('Failed to send queued follow-up:', error);
       toast.error('Failed to send queued follow-up');
     });
   }, [isLoadingChat, queuedFollowUps]);
 
   // Image handling functions
-  const handleImageUpload = useCallback((e) => {
+  const handleImageUpload = useCallback(async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
     
-    files.forEach(file => {
-      if (!file.type.startsWith('image/')) {
-        toast.error(`${file.name} is not an image file`);
-        return;
-      }
-      
+    for (const file of files) {
       if (file.size > 10 * 1024 * 1024) { // 10MB limit
         toast.error(`${file.name} is too large. Maximum size is 10MB.`);
-        return;
+        continue;
       }
       
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const dataUrl = event.target.result;
-        setAttachedImages(prev => [...prev, {
-          id: Date.now() + Math.random(),
-          dataUrl,
-          file
-        }]);
-      };
-      reader.onerror = () => {
-        toast.error(`Failed to read ${file.name}`);
-      };
-      reader.readAsDataURL(file);
-    });
+      if (file.type.startsWith('image/')) {
+        // Handle image files
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const dataUrl = event.target.result;
+          setAttachedImages(prev => [...prev, {
+            id: Date.now() + Math.random(),
+            dataUrl,
+            file,
+            type: 'image'
+          }]);
+        };
+        reader.onerror = () => {
+          toast.error(`Failed to read ${file.name}`);
+        };
+        reader.readAsDataURL(file);
+      } else {
+        // Handle non-image files (text files, code files, etc.)
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          try {
+            const content = event.target.result;
+            setAttachedFiles(prev => [...prev, {
+              id: Date.now() + Math.random(),
+              file,
+              content,
+              type: file.type || 'text/plain',
+              name: file.name
+            }]);
+            toast.success(`Added ${file.name}`);
+          } catch (error) {
+            toast.error(`Failed to read ${file.name}`);
+          }
+        };
+        reader.onerror = () => {
+          toast.error(`Failed to read ${file.name}`);
+        };
+        // Read as text for text-based files, otherwise as data URL
+        if (file.type.startsWith('text/') || 
+            file.name.endsWith('.txt') || 
+            file.name.endsWith('.md') || 
+            file.name.endsWith('.json') || 
+            file.name.endsWith('.js') || 
+            file.name.endsWith('.ts') || 
+            file.name.endsWith('.py') || 
+            file.name.endsWith('.html') || 
+            file.name.endsWith('.css') ||
+            file.name.endsWith('.xml') ||
+            file.name.endsWith('.yaml') ||
+            file.name.endsWith('.yml')) {
+          reader.readAsText(file);
+        } else {
+          reader.readAsDataURL(file);
+        }
+      }
+    }
     
     // Reset input
     if (imageInputRef.current) {
@@ -7113,17 +7279,23 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     setAttachedImages(prev => prev.filter(img => img.id !== imageId));
   }, []);
 
+  const removeFile = useCallback((fileId) => {
+    setAttachedFiles(prev => prev.filter(f => f.id !== fileId));
+  }, []);
+
   const handleFollowUpSubmit = async (e) => {
     e.preventDefault();
     const trimmed = followUpInput.trim();
-    if (!trimmed && attachedImages.length === 0) {
+    if (!trimmed && attachedImages.length === 0 && attachedFiles.length === 0) {
       return;
     }
     const shouldUseComposer = agentMode !== 'ask';
-    // Capture images before clearing
+    // Capture images and files before clearing
     const imagesToSend = [...attachedImages];
+    const filesToSend = [...attachedFiles];
     setFollowUpInput('');
     setAttachedImages([]);
+    setAttachedFiles([]);
     if (isLoadingChat) {
       setQueuedFollowUps((prev) => [
         ...prev,
@@ -7132,12 +7304,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           content: trimmed,
           isComposer: shouldUseComposer,
           images: imagesToSend.length > 0 ? imagesToSend : null,
+          files: filesToSend.length > 0 ? filesToSend : null,
         },
       ]);
       toast.success('Follow-up queued and will send once the current reply finishes.');
       return;
     }
-    await handleSendChat(trimmed, shouldUseComposer, imagesToSend.length > 0 ? imagesToSend : null);
+    await handleSendChat(trimmed, shouldUseComposer, imagesToSend.length > 0 ? imagesToSend : null, filesToSend.length > 0 ? filesToSend : null);
   };
 
   const removeQueuedFollowUp = useCallback((queuedId) => {
@@ -7437,13 +7610,17 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
   const handleComposerSubmit = async (e) => {
     e.preventDefault();
     setShowFileSuggestions(false);
-    if (!composerInput.trim() && attachedImages.length === 0) {
+    if (!composerInput.trim() && attachedImages.length === 0 && attachedFiles.length === 0) {
       return;
     }
-    // Capture images before clearing
+    // Capture images and files before clearing
     const imagesToSend = [...attachedImages];
+    const filesToSend = [...attachedFiles];
+    const inputToSend = composerInput;
+    setComposerInput('');
     setAttachedImages([]);
-    await handleSendChat(composerInput, true, imagesToSend.length > 0 ? imagesToSend : null);
+    setAttachedFiles([]);
+    await handleSendChat(inputToSend, true, imagesToSend.length > 0 ? imagesToSend : null, filesToSend.length > 0 ? filesToSend : null);
   };
 
   const openOperationPreview = useCallback(
@@ -9889,26 +10066,50 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             {/* Main Composer Input Area */}
             <div className="p-3 border-b border-dark-700 bg-dark-800">
               <form onSubmit={handleComposerSubmit} className="relative">
-                {/* Attached Images Preview for Composer */}
-                {attachedImages.length > 0 && (
-                  <div className="mb-2 flex flex-wrap gap-2">
-                    {attachedImages.map((img) => (
-                      <div key={img.id} className="relative group">
-                        <img
-                          src={img.dataUrl}
-                          alt="Attached"
-                          className="w-16 h-16 object-cover rounded-lg border border-dark-600"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removeImage(img.id)}
-                          className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                          title="Remove image"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
+                {/* Attached Images and Files Preview for Composer */}
+                {(attachedImages.length > 0 || attachedFiles.length > 0) && (
+                  <div className="mb-2 space-y-2">
+                    {attachedImages.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {attachedImages.map((img) => (
+                          <div key={img.id} className="relative group">
+                            <img
+                              src={img.dataUrl}
+                              alt="Attached"
+                              className="w-16 h-16 object-cover rounded-lg border border-dark-600"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeImage(img.id)}
+                              className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Remove image"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
+                    {attachedFiles.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {attachedFiles.map((file) => (
+                          <div key={file.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
+                            <File className="w-4 h-4 text-dark-400" />
+                            <span className="text-xs text-dark-200 truncate max-w-[120px]" title={file.name || file.file?.name}>
+                              {file.name || file.file?.name || 'file'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => removeFile(file.id)}
+                              className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Remove file"
+                            >
+                              <X className="w-2.5 h-2.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
                 <div className="flex items-start gap-2 mb-3">
@@ -10581,25 +10782,49 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             {chatMessages.length > 0 && (
               <div className="border-t border-dark-700 bg-dark-800 p-3 flex-shrink-0">
                 {/* Attached Images Preview for Follow-up */}
-                {attachedImages.length > 0 && (
-                  <div className="mb-2 flex flex-wrap gap-2">
-                    {attachedImages.map((img) => (
-                      <div key={img.id} className="relative group">
-                        <img
-                          src={img.dataUrl}
-                          alt="Attached"
-                          className="w-16 h-16 object-cover rounded-lg border border-dark-600"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removeImage(img.id)}
-                          className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                          title="Remove image"
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
+                {(attachedImages.length > 0 || attachedFiles.length > 0) && (
+                  <div className="mb-2 space-y-2">
+                    {attachedImages.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {attachedImages.map((img) => (
+                          <div key={img.id} className="relative group">
+                            <img
+                              src={img.dataUrl}
+                              alt="Attached"
+                              className="w-16 h-16 object-cover rounded-lg border border-dark-600"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeImage(img.id)}
+                              className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Remove image"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
+                    {attachedFiles.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {attachedFiles.map((file) => (
+                          <div key={file.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
+                            <File className="w-4 h-4 text-dark-400" />
+                            <span className="text-xs text-dark-200 truncate max-w-[120px]" title={file.name || file.file?.name}>
+                              {file.name || file.file?.name || 'file'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => removeFile(file.id)}
+                              className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Remove file"
+                            >
+                              <X className="w-2.5 h-2.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
                 <form onSubmit={handleFollowUpSubmit} className="flex items-center gap-2">
@@ -10627,7 +10852,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   <input
                     ref={imageInputRef}
                     type="file"
-                    accept="image/*"
+                    accept="*/*"
                     multiple
                     onChange={handleImageUpload}
                     className="hidden"
@@ -11647,7 +11872,15 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             {/* Content Area */}
             <div className="flex-1 overflow-hidden flex">
               {/* Left Pane - File Tree */}
-              <div className="w-64 border-r border-dark-700 overflow-y-auto bg-dark-800">
+              <div 
+                className="w-64 border-r border-dark-700 overflow-y-auto bg-dark-800"
+                onContextMenu={(e) => {
+                  // Right-click on empty space
+                  if (e.target === e.currentTarget || e.target.closest('.picker-tree-item') === null) {
+                    handlePickerContextMenu(e, null);
+                  }
+                }}
+              >
                 <div className="p-2">
                   {pickerLoading ? (
                     <div className="flex items-center justify-center py-8 text-dark-400">
@@ -11665,7 +11898,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                             }
                             setPickerSelectedPath(item.path);
                           }}
-                          className={`flex items-center px-2 py-1.5 rounded cursor-pointer text-sm ${
+                          onContextMenu={(e) => {
+                            handlePickerContextMenu(e, item);
+                          }}
+                          className={`picker-tree-item flex items-center px-2 py-1.5 rounded cursor-pointer text-sm ${
                             pickerSelectedPath === item.path
                               ? 'bg-primary-600 text-white'
                               : 'text-dark-300 hover:bg-dark-700'
@@ -11680,7 +11916,12 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         </div>
                       ))}
                       {pickerTree.length === 0 && (
-                        <div className="text-xs text-dark-400 py-4 text-center">No items</div>
+                        <div 
+                          className="text-xs text-dark-400 py-4 text-center"
+                          onContextMenu={(e) => handlePickerContextMenu(e, null)}
+                        >
+                          No items
+                        </div>
                       )}
                     </div>
                   )}
@@ -11742,6 +11983,54 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 {showFolderPicker ? 'Select Folder' : pickerMode === 'folder' ? 'Create' : activeTab ? 'Save' : 'Create'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Picker Context Menu */}
+      {pickerContextMenu.visible && (showFolderPicker || showFilePicker) && (
+        <div className="fixed inset-0 z-[1000]" onClick={closePickerContextMenu}>
+          <div
+            className="picker-context-menu absolute bg-dark-800 border border-dark-600 rounded-lg shadow-2xl min-w-[200px] py-2 text-sm text-dark-50"
+            style={{ top: pickerContextMenu.y, left: pickerContextMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                let targetPath = pickerPath;
+                if (pickerContextMenu.target) {
+                  if (pickerContextMenu.target.is_directory) {
+                    targetPath = pickerContextMenu.target.path;
+                  } else {
+                    targetPath = getParentDirectory(pickerContextMenu.target.path);
+                  }
+                }
+                handlePickerCreateFile(targetPath);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-dark-100 hover:bg-dark-700 text-left"
+            >
+              <File className="w-4 h-4 text-dark-400" />
+              New File
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                let targetPath = pickerPath;
+                if (pickerContextMenu.target) {
+                  if (pickerContextMenu.target.is_directory) {
+                    targetPath = pickerContextMenu.target.path;
+                  } else {
+                    targetPath = getParentDirectory(pickerContextMenu.target.path);
+                  }
+                }
+                handlePickerCreateFolder(targetPath);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-dark-100 hover:bg-dark-700 text-left"
+            >
+              <Folder className="w-4 h-4 text-dark-400" />
+              New Folder
+            </button>
           </div>
         </div>
       )}
