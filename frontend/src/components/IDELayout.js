@@ -1664,6 +1664,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     });
   }, [setOpenFiles]);
   const [activeTab, setActiveTab] = useState(null);
+  const activeTabRef = useRef(null);
+  
+  // Keep ref in sync with state
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
   const applyOpenFilesAfterChange = useCallback(
     (nextFiles, options = {}) => {
       if (!Array.isArray(nextFiles)) {
@@ -1836,8 +1842,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [chatInput, setChatInput] = useState('');
   const [composerInput, setComposerInput] = useState('');
   const [followUpInput, setFollowUpInput] = useState('');
+  const [topPinnedInput, setTopPinnedInput] = useState('');
+  const [topVisibleUserMessageId, setTopVisibleUserMessageId] = useState(null);
+  const topPinnedInputRef = useRef(null);
+  const messageRefs = useRef({});
   const [attachedImages, setAttachedImages] = useState([]); // Array of {id, dataUrl, file, type: 'image'|'file', content?: string}
   const [attachedFiles, setAttachedFiles] = useState([]); // Array of {id, file, content, type}
+  const [attachedCodeSelections, setAttachedCodeSelections] = useState([]); // Array of {id, filePath, fileName, startLine, endLine, relativePath}
   const imageInputRef = useRef(null);
   const [queuedFollowUps, setQueuedFollowUps] = useState([]);
   const [isChatPinnedToBottom, setIsChatPinnedToBottom] = useState(true);
@@ -1932,6 +1943,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [agentStatuses, setAgentStatuses] = useState([]);
   const [thinkingStart, setThinkingStart] = useState(null);
   const [thinkingElapsed, setThinkingElapsed] = useState(0);
+  const [editorSelection, setEditorSelection] = useState(null); // { filePath, startLine, endLine }
   const composerInputRef = useRef(null);
   const chatInputRef = useRef(null);
   const editorRef = useRef(null);
@@ -1947,6 +1959,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const editorDiffDecorationsRef = useRef([]);
   const editorDiffViewZonesRef = useRef([]);
   const editorContentWidgetsRef = useRef([]);
+  const addToChatWidgetRef = useRef(null);
   const completionProviderRef = useRef(null);
   const completionDebounceTimerRef = useRef(null);
   const lastCompletionRequestRef = useRef({ line: -1, column: -1, content: '' });
@@ -3329,14 +3342,109 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   const handleChatScroll = useCallback(() => {
     const container = chatContainerRef.current;
-    if (!container) {
+    if (!container || chatMessages.length === 0) {
       return;
     }
+    
     const distanceFromBottom =
       container.scrollHeight - container.scrollTop - container.clientHeight;
     const threshold = 48;
-    setIsChatPinnedToBottom(distanceFromBottom <= threshold);
-  }, []);
+    const isPinned = distanceFromBottom <= threshold;
+    setIsChatPinnedToBottom(isPinned);
+
+    const containerRect = container.getBoundingClientRect();
+    const viewportTop = containerRect.top;
+    const viewportBottom = containerRect.bottom;
+    
+    // Find the user message that's currently visible and closest to the top of viewport
+    let visibleUserMessageId = null;
+    let closestToTop = Infinity;
+    
+    // Check all user messages to find the one visible and closest to top
+    for (let i = 0; i < chatMessages.length; i++) {
+      const message = chatMessages[i];
+      if (message.role === 'user') {
+        const messageElement = messageRefs.current[message.id];
+        if (messageElement) {
+          const rect = messageElement.getBoundingClientRect();
+          const messageTop = rect.top;
+          const messageBottom = rect.bottom;
+          
+          // Check if message is visible in viewport (at least partially)
+          const isVisible = messageBottom > viewportTop && messageTop < viewportBottom;
+          
+          if (isVisible) {
+            // Calculate distance from top of viewport (prefer messages at or above the top)
+            const distanceFromTop = messageTop >= viewportTop 
+              ? messageTop - viewportTop  // Message is below top, use positive distance
+              : viewportTop - messageTop + 1000; // Message is above top, heavily penalize
+            
+            // Find the message closest to the top of viewport
+            if (distanceFromTop < closestToTop) {
+              closestToTop = distanceFromTop;
+              visibleUserMessageId = message.id;
+            }
+          }
+        }
+      }
+    }
+    
+    // If pinned to bottom, always show the last user message
+    if (isPinned) {
+      let lastUserMessage = null;
+      for (let i = chatMessages.length - 1; i >= 0; i--) {
+        if (chatMessages[i].role === 'user') {
+          lastUserMessage = chatMessages[i];
+          break;
+        }
+      }
+      if (lastUserMessage) {
+        visibleUserMessageId = lastUserMessage.id;
+      }
+    }
+    
+    // If no visible message found when scrolled up, find the last user message before scroll position
+    if (!visibleUserMessageId && !isPinned) {
+      const scrollTop = container.scrollTop;
+      let lastUserMessageBeforeScroll = null;
+      
+      for (let i = chatMessages.length - 1; i >= 0; i--) {
+        const message = chatMessages[i];
+        if (message.role === 'user') {
+          const messageElement = messageRefs.current[message.id];
+          if (messageElement) {
+            const rect = messageElement.getBoundingClientRect();
+            const elementTop = rect.top - containerRect.top + scrollTop;
+            
+            // Find the last user message that's at or above current scroll position
+            if (elementTop <= scrollTop + 150) {
+              lastUserMessageBeforeScroll = message;
+              break;
+            }
+          }
+        }
+      }
+      
+      if (lastUserMessageBeforeScroll) {
+        visibleUserMessageId = lastUserMessageBeforeScroll.id;
+      }
+    }
+    
+    // Update pinned input with the found message
+    if (visibleUserMessageId) {
+      const targetMessage = chatMessages.find(m => m.id === visibleUserMessageId);
+      if (targetMessage) {
+        setTopVisibleUserMessageId(prevId => {
+          if (prevId !== visibleUserMessageId) {
+            const content = normalizeChatInput(targetMessage.rawContent ?? targetMessage.content);
+            setTopPinnedInput(content);
+            return visibleUserMessageId;
+          }
+          return prevId;
+        });
+      }
+    }
+  }, [chatMessages]);
 
   // Normalize activeTab whenever it changes
   useEffect(() => {
@@ -3356,10 +3464,31 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     scrollChatToBottom('auto');
   }, [chatMessages, agentStatuses, isLoadingChat, isChatPinnedToBottom, scrollChatToBottom]);
 
-  // Keep pinned state fresh when message count changes (e.g., thinking updates)
+  // Initialize pinned message when messages change or on mount
   useEffect(() => {
+    if (chatMessages.length === 0) {
+      // Clear top pinned input if no messages
+      if (topVisibleUserMessageId) {
+        setTopVisibleUserMessageId(null);
+        setTopPinnedInput('');
+      }
+      return;
+    }
+
+    // Trigger scroll handler to update pinned message based on current scroll position
     handleChatScroll();
   }, [chatMessages.length, handleChatScroll]);
+
+  // Clean up message refs when messages change
+  useEffect(() => {
+    // Clean up refs for messages that no longer exist
+    const currentMessageIds = new Set(chatMessages.map(m => m.id));
+    Object.keys(messageRefs.current).forEach(messageId => {
+      if (!currentMessageIds.has(messageId)) {
+        delete messageRefs.current[messageId];
+      }
+    });
+  }, [chatMessages]);
 
   // Load past chats on mount
   const loadPastChats = useCallback(async () => {
@@ -3534,6 +3663,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     setComposerInput('');
     setFollowUpInput('');
     setAttachedImages([]);
+    setAttachedCodeSelections([]);
     setPendingFileOperations(null);
     setThinkingAiPlan(null);
     // Clear the save ref map to allow new saves for new conversations
@@ -4938,6 +5068,157 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     toast.success('Path added to chat input');
     closeFileContextMenu();
   }, [chatTabs, closeFileContextMenu, composerInputRef, getRelativePath, startNewChat]);
+
+  const handleAddSelectionToChat = useCallback(() => {
+    if (!editorSelection || !activeTab) return;
+    
+    const { startLine, endLine } = editorSelection;
+    const relativePath = getRelativePath(activeTab);
+    const fileName = relativePath.split('/').pop() || relativePath;
+    
+    // Add as a chip instead of text
+    const codeSelection = {
+      id: Date.now() + Math.random(),
+      filePath: activeTab,
+      fileName: fileName,
+      startLine: startLine,
+      endLine: endLine,
+      relativePath: relativePath
+    };
+    
+    setAttachedCodeSelections(prev => [...prev, codeSelection]);
+    requestAnimationFrame(() => composerInputRef.current?.focus());
+    setEditorSelection(null);
+    toast.success('Code selection added to chat');
+  }, [editorSelection, activeTab, getRelativePath, composerInputRef]);
+
+  // Create/update "Add to chat" widget when selection changes
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    
+    if (!editor || !monaco || !isEditorReady || !activeTab) {
+      // Remove widget if editor is not ready
+      if (addToChatWidgetRef.current) {
+        try {
+          editor?.removeContentWidget(addToChatWidgetRef.current);
+        } catch (e) {
+          // Ignore errors
+        }
+        addToChatWidgetRef.current = null;
+      }
+      return;
+    }
+
+    // Remove existing widget before creating a new one
+    if (addToChatWidgetRef.current) {
+      try {
+        editor.removeContentWidget(addToChatWidgetRef.current);
+      } catch (e) {
+        // Ignore errors
+      }
+      addToChatWidgetRef.current = null;
+    }
+
+    // Create widget if there's a selection and activeTab exists
+    // Since we set filePath to activeTab in the selection listener, they should match
+    if (editorSelection && activeTab) {
+      const { startLine, endLine } = editorSelection;
+      const relativePath = getRelativePath(activeTab);
+      const fileName = relativePath.split('/').pop() || relativePath;
+      const lineRange = startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`;
+      
+      // Use a consistent widget ID based on selection to prevent duplicates
+      const widgetId = `add-to-chat-widget-${activeTab}-${startLine}-${endLine}`;
+      const domNode = document.createElement('div');
+      domNode.className = 'add-to-chat-widget';
+      domNode.style.cssText = `
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        background: rgba(59, 130, 246, 0.95);
+        border: 1px solid rgba(96, 165, 250, 0.8);
+        border-radius: 6px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        cursor: pointer;
+        user-select: none;
+        font-size: 12px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        color: white;
+        white-space: nowrap;
+        z-index: 1000;
+        transition: all 0.2s ease;
+        pointer-events: auto;
+      `;
+      
+      // Create icon (using a simple code icon representation)
+      const iconSpan = document.createElement('span');
+      iconSpan.innerHTML = '📄';
+      iconSpan.style.cssText = 'font-size: 14px; line-height: 1; display: flex; align-items: center;';
+      
+      // Create text span with "Add to chat" button text
+      const textSpan = document.createElement('span');
+      textSpan.textContent = 'Add to chat';
+      textSpan.style.cssText = 'font-weight: 500;';
+      
+      // domNode.appendChild(iconSpan);
+      domNode.appendChild(textSpan);
+      
+      // Add hover effect
+      domNode.addEventListener('mouseenter', () => {
+        domNode.style.background = 'rgba(37, 99, 235, 0.95)';
+        domNode.style.transform = 'scale(1.05)';
+      });
+      domNode.addEventListener('mouseleave', () => {
+        domNode.style.background = 'rgba(59, 130, 246, 0.95)';
+        domNode.style.transform = 'scale(1)';
+      });
+      
+      // Add click handler
+      domNode.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleAddSelectionToChat();
+      });
+      
+      const widget = {
+        getId: () => widgetId,
+        getDomNode: () => domNode,
+        getPosition: () => {
+          const model = editor.getModel();
+          if (!model) return null;
+          
+          // Position widget at the start of the selection (or above if at line 1)
+          const lineNumber = startLine > 1 ? startLine - 1 : startLine;
+          return {
+            position: {
+              lineNumber: lineNumber,
+              column: 1
+            },
+            preference: [
+              monaco.editor.ContentWidgetPositionPreference.ABOVE,
+              monaco.editor.ContentWidgetPositionPreference.BELOW
+            ]
+          };
+        }
+      };
+      
+      editor.addContentWidget(widget);
+      addToChatWidgetRef.current = widget;
+    }
+    
+    return () => {
+      // Cleanup on unmount
+      if (addToChatWidgetRef.current && editor) {
+        try {
+          editor.removeContentWidget(addToChatWidgetRef.current);
+        } catch (e) {
+          // Ignore errors
+        }
+        addToChatWidgetRef.current = null;
+      }
+    };
+  }, [editorSelection, isEditorReady, activeTab, getRelativePath, handleAddSelectionToChat]);
 
   const handleFindInFolder = useCallback(async (target) => {
     if (!target) return;
@@ -7287,6 +7568,41 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     setAttachedFiles(prev => prev.filter(f => f.id !== fileId));
   }, []);
 
+  const removeCodeSelection = useCallback((selectionId) => {
+    setAttachedCodeSelections(prev => prev.filter(s => s.id !== selectionId));
+  }, []);
+
+  const handleTopPinnedSubmit = async (e) => {
+    e.preventDefault();
+    const trimmed = topPinnedInput.trim();
+    if (!trimmed && attachedImages.length === 0 && attachedFiles.length === 0) {
+      return;
+    }
+    const shouldUseComposer = agentMode !== 'ask';
+    // Capture images and files before clearing
+    const imagesToSend = [...attachedImages];
+    const filesToSend = [...attachedFiles];
+    setTopPinnedInput('');
+    setAttachedImages([]);
+    setAttachedFiles([]);
+    setTopVisibleUserMessageId(null);
+    if (isLoadingChat) {
+      setQueuedFollowUps((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          content: trimmed,
+          isComposer: shouldUseComposer,
+          images: imagesToSend.length > 0 ? imagesToSend : null,
+          files: filesToSend.length > 0 ? filesToSend : null,
+        },
+      ]);
+      toast.success('Message queued and will send once the current reply finishes.');
+      return;
+    }
+    await handleSendChat(trimmed, shouldUseComposer, imagesToSend.length > 0 ? imagesToSend : null, filesToSend.length > 0 ? filesToSend : null);
+  };
+
   const handleFollowUpSubmit = async (e) => {
     e.preventDefault();
     const trimmed = followUpInput.trim();
@@ -7614,16 +7930,30 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
   const handleComposerSubmit = async (e) => {
     e.preventDefault();
     setShowFileSuggestions(false);
-    if (!composerInput.trim() && attachedImages.length === 0 && attachedFiles.length === 0) {
+    if (!composerInput.trim() && attachedImages.length === 0 && attachedFiles.length === 0 && attachedCodeSelections.length === 0) {
       return;
     }
-    // Capture images and files before clearing
+    // Capture images, files, and code selections before clearing
     const imagesToSend = [...attachedImages];
     const filesToSend = [...attachedFiles];
-    const inputToSend = composerInput;
+    const codeSelectionsToSend = [...attachedCodeSelections];
+    
+    // Convert code selections to mentions and add to input
+    let inputToSend = composerInput;
+    if (codeSelectionsToSend.length > 0) {
+      const mentions = codeSelectionsToSend.map(selection => {
+        const mention = selection.startLine === selection.endLine 
+          ? `@${selection.relativePath}:${selection.startLine}`
+          : `@${selection.relativePath}:${selection.startLine}-${selection.endLine}`;
+        return mention;
+      }).join(' ');
+      inputToSend = inputToSend.trim() ? `${inputToSend.trim()} ${mentions}` : mentions;
+    }
+    
     setComposerInput('');
     setAttachedImages([]);
     setAttachedFiles([]);
+    setAttachedCodeSelections([]);
     await handleSendChat(inputToSend, true, imagesToSend.length > 0 ? imagesToSend : null, filesToSend.length > 0 ? filesToSend : null);
   };
 
@@ -9882,6 +10212,32 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                     console.error('Error loading theme on Monaco mount:', error);
                     setActiveThemeId('vs-dark');
                   }
+
+                  // Add selection change listener to show "Add to chat" button
+                  const selectionDisposable = editorInstance.onDidChangeCursorSelection((e) => {
+                    const selection = e.selection;
+                    const hasSelection = !selection.isEmpty();
+                    
+                    // Get current activeTab from ref to avoid stale closure
+                    const currentActiveTab = activeTabRef.current;
+                    
+                    if (hasSelection && currentActiveTab) {
+                      const startLine = selection.startLineNumber;
+                      const endLine = selection.endLineNumber;
+                      setEditorSelection({
+                        filePath: currentActiveTab,
+                        startLine,
+                        endLine
+                      });
+                    } else {
+                      setEditorSelection(null);
+                    }
+                  });
+                  
+                  // Store disposable for cleanup
+                  editorInstance.onDidDispose(() => {
+                    selectionDisposable.dispose();
+                  });
                 }}
                 onChange={(value) => {
                   const newContent = value || '';
@@ -10067,312 +10423,116 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               )}
             </div>
             
-            {/* Main Composer Input Area */}
-            <div className="p-3 border-b border-dark-700 bg-dark-800">
-              <form onSubmit={handleComposerSubmit} className="relative">
-                {/* Attached Images and Files Preview for Composer */}
-                {(attachedImages.length > 0 || attachedFiles.length > 0) && (
-                  <div className="mb-2 space-y-2">
-                    {attachedImages.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {attachedImages.map((img) => (
-                          <div key={img.id} className="relative group">
-                            <img
-                              src={img.dataUrl}
-                              alt="Attached"
-                              className="w-16 h-16 object-cover rounded-lg border border-dark-600"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => removeImage(img.id)}
-                              className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                              title="Remove image"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {attachedFiles.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {attachedFiles.map((file) => (
-                          <div key={file.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
-                            <File className="w-4 h-4 text-dark-400" />
-                            <span className="text-xs text-dark-200 truncate max-w-[120px]" title={file.name || file.file?.name}>
-                              {file.name || file.file?.name || 'file'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => removeFile(file.id)}
-                              className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                              title="Remove file"
-                            >
-                              <X className="w-2.5 h-2.5" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div className="flex items-start gap-2 mb-3">
-                  <textarea
-                    ref={composerInputRef}
-                    value={composerInput}
-                    onChange={handleComposerInputChange}
-                    onPaste={handleImagePaste}
-                    placeholder="Plan, @ for context, / for commands"
-                    rows={1}
-                    className="flex-1 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] max-h-32 overflow-y-auto"
-                    disabled={isLoadingChat}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleComposerSubmit(e);
-                      } else if (e.key === 'Escape') {
-                        setShowFileSuggestions(false);
-                      } else if (e.key === 'ArrowDown' && showFileSuggestions && fileSuggestions.length > 0) {
-                        e.preventDefault();
-                      }
-                    }}
-                    onInput={(e) => {
-                      // Auto-resize textarea based on content
-                      e.target.style.height = 'auto';
-                      e.target.style.height = Math.min(e.target.scrollHeight, 128) + 'px';
-                    }}
-                  />
-                </div>
-                {showFileSuggestions && fileSuggestions.length > 0 && suggestionInputType === 'composer' && (
-                  <div className="file-suggestions-container absolute top-full left-0 right-0 mt-2 w-full bg-dark-800 border border-dark-600 rounded-lg shadow-lg z-50 max-h-60 overflow-y-auto">
-                    {fileSuggestions.map((file, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => insertFileMention(file)}
-                        className="w-full text-left px-3 py-2 text-sm text-dark-300 hover:bg-dark-700 flex items-center space-x-2"
-                      >
-                        <File className="w-4 h-4 text-dark-400" />
-                        <div className="flex-1">
-                          <div className="font-medium">{file.name}</div>
-                          <div className="text-xs text-dark-500 truncate">{file.displayPath}</div>
-                        </div>
-                        {file.isOpen && (
-                          <span className="text-xs text-primary-500">Open</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                
-                {/* Dropdown Menus */}
-                <div className="flex flex-wrap items-center gap-2 mt-3">
-                <div className="relative" ref={agentModeMenuRef}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAgentModeMenu(prev => !prev);
-                      setShowAutoDropdown(false);
-                      setShowWebSearchMenu(false);
-                    }}
-                    className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
-                  >
-                    <Infinity className="w-3 h-3" />
-                    <span>{selectedChatMode.label}</span>
-                    <ChevronDown className={`w-3 h-3 transition-transform ${showAgentModeMenu ? 'rotate-180' : ''}`} />
-                  </button>
-                  {showAgentModeMenu && (
-                    <div className="absolute top-full left-0 mt-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[180px]">
-                      {chatModeOptions.map(mode => (
-                        <button
-                          key={mode.id}
-                          type="button"
-                          onClick={() => {
-                            setAgentMode(mode.id);
-                            // Persist to localStorage
-                            try {
-                              window.localStorage.setItem('aiAgentMode', mode.id);
-                            } catch (error) {
-                              console.warn('Failed to save agent mode to localStorage:', error);
-                            }
-                            setShowAgentModeMenu(false);
-                          }}
-                          className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                            agentMode === mode.id
-                              ? 'bg-primary-600 text-white'
-                              : 'text-dark-300 hover:bg-dark-700'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span>{mode.label}</span>
-                            {agentMode === mode.id && <CheckCircle className="w-3 h-3" />}
-                          </div>
-                          <p className="text-[10px] text-dark-500 mt-1">{mode.description}</p>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 rounded-lg border border-dark-600 bg-dark-700/40 px-2 py-1 text-dark-400">
-                  <button 
-                    type="button"
-                    onClick={() => {
-                      setComposerInput(prev => prev + '@');
-                      if (composerInputRef.current) {
-                        composerInputRef.current.focus();
-                      }
-                      setShowWebSearchMenu(false);
-                    }}
-                    className="hover:text-dark-200 transition-colors"
-                    title="Mention"
-                  >
-                    <AtSign className="w-4 h-4" />
-                  </button>
-                  <div className="relative" ref={webSearchMenuRef}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowWebSearchMenu(prev => !prev);
-                        setShowAgentModeMenu(false);
-                        setShowAutoDropdown(false);
-                      }}
-                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors ${
-                        showWebSearchMenu ? 'bg-dark-600 text-dark-100' : 'hover:text-dark-200'
-                      }`}
-                      title={`Web Search (${selectedWebSearchMode.label})`}
-                    >
-                      <Globe className="w-4 h-4" />
-                      <span className="text-[10px] uppercase tracking-wide">{selectedWebSearchMode.label}</span>
-                      <ChevronDown className="w-3 h-3" />
-                    </button>
-                    {showWebSearchMenu && (
-                      <div className="absolute top-full left-0 mt-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[200px]">
-                        {webSearchOptions.map((option) => (
-                          <button
-                            key={option.id}
-                            type="button"
-                            onClick={() => {
-                              setWebSearchMode(option.id);
-                              // Persist to localStorage
-                              try {
-                                window.localStorage.setItem('aiWebSearchMode', option.id);
-                              } catch (error) {
-                                console.warn('Failed to save web search mode to localStorage:', error);
-                              }
-                              setShowWebSearchMenu(false);
-                            }}
-                            className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                              webSearchMode === option.id
-                                ? 'bg-primary-600 text-white'
-                                : 'text-dark-300 hover:bg-dark-700'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span>{option.label}</span>
-                              {webSearchMode === option.id && <CheckCircle className="w-3 h-3" />}
-                            </div>
-                            <p className="text-[10px] text-dark-500 mt-1">{option.description}</p>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => imageInputRef.current?.click()}
-                    className="hover:text-dark-200 transition-colors"
-                    title="Upload Image"
-                  >
-                    <Image className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    className="hover:text-dark-200 transition-colors"
-                    title="Voice Input"
-                  >
-                    <Mic className="w-4 h-4" />
-                  </button>
-                </div>
-                <div className="relative group" data-auto-dropdown>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAutoDropdown(!showAutoDropdown);
-                      if (!showAutoDropdown && ollamaModels.length === 0) {
-                        loadAvailableModels();
-                      }
-                      setShowAgentModeMenu(false);
-                      setShowWebSearchMenu(false);
-                    }}
-                    className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
-                  >
-                    <span>{currentModel || 'Auto'}</span>
-                    <ChevronDown className={`w-3 h-3 transition-transform ${showAutoDropdown ? 'rotate-180' : ''}`} />
-                  </button>
-                  {showAutoDropdown && (
-                    <div className="absolute top-full left-0 mt-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[200px] max-h-64 overflow-y-auto" data-auto-dropdown>
-                      {isLoadingModels ? (
-                        <div className="px-3 py-2 text-xs text-dark-400 flex items-center gap-2">
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          Loading models...
-                        </div>
-                      ) : ollamaModels.length === 0 ? (
-                        <div className="px-3 py-2 text-xs text-dark-400">
-                          No models available
-                        </div>
-                      ) : (
-                        ollamaModels.map((model) => (
-                          <button
-                            key={model}
-                            type="button"
-                            onClick={() => handleSelectModel(model)}
-                            className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                              currentModel === model
-                                ? 'bg-primary-600 text-white'
-                                : 'text-dark-300 hover:bg-dark-700'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between">
-                              <span>{model}</span>
-                              {currentModel === model && (
-                                <CheckCircle className="w-3 h-3" />
-                              )}
-                            </div>
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
-                <div className="relative group">
-                  <button
-                    type="button"
-                    className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
-                  >
-                    <Folder className="w-3 h-3" />
-                    <span>Local</span>
-                    <ChevronDown className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-              </form>
-            </div>
-
-            {/* Chat Messages */}
+            {/* Chat Messages - Scrollable Area */}
             <div
               ref={chatContainerRef}
               onScroll={handleChatScroll}
               className="relative flex-1 overflow-y-auto bg-dark-900 chat-messages-container min-h-0"
             >
-              {chatMessages.length === 0 ? (
-                <div className="flex items-center justify-center h-full">
-                  <p className="text-sm text-dark-400">Start a conversation with AI</p>
+              {/* Top Pinned Input - Shows the user message based on scroll position (last message when at bottom, visible message when scrolled up) */}
+              {topVisibleUserMessageId && chatMessages.length > 0 && (
+                <div 
+                  className="sticky top-0 z-50 border-b border-dark-700 bg-dark-800 shadow-lg"
+                  style={{ 
+                    position: '-webkit-sticky',
+                    position: 'sticky',
+                    top: 0,
+                    backgroundColor: 'rgb(30, 41, 59)'
+                  }}
+                >
+                  <form onSubmit={handleTopPinnedSubmit} className="flex flex-col flex-1 min-h-0 relative">
+                    {/* Scrollable Textarea Area */}
+                    <div className="flex-1 min-h-0 px-3 py-2 flex flex-col overflow-hidden">
+                      <div className="flex items-start gap-2 flex-1 min-h-0 overflow-hidden">
+                        <textarea
+                          ref={topPinnedInputRef}
+                          value={topPinnedInput}
+                          onChange={(e) => setTopPinnedInput(e.target.value)}
+                          onPaste={handleImagePaste}
+                          placeholder="Edit or continue from this message..."
+                          rows={1}
+                          className="flex-1 w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] overflow-y-auto"
+                          disabled={isLoadingChat}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleTopPinnedSubmit(e);
+                            } else if (e.key === 'Escape') {
+                              setTopVisibleUserMessageId(null);
+                              setTopPinnedInput('');
+                            }
+                          }}
+                          onInput={(e) => {
+                            const textarea = e.target;
+                            textarea.style.height = 'auto';
+                            const scrollHeight = textarea.scrollHeight;
+                            const maxHeight = 300;
+                            if (scrollHeight > maxHeight) {
+                              textarea.style.height = maxHeight + 'px';
+                              textarea.style.overflowY = 'auto';
+                            } else {
+                              textarea.style.height = scrollHeight + 'px';
+                              textarea.style.overflowY = 'hidden';
+                            }
+                          }}
+                        />
+                        <input
+                          ref={imageInputRef}
+                          type="file"
+                          accept="*/*"
+                          multiple
+                          onChange={handleImageUpload}
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => imageInputRef.current?.click()}
+                          className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0"
+                          title="Attach image"
+                        >
+                          <Image className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={!topPinnedInput.trim() && attachedImages.length === 0}
+                          className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                          title={isLoadingChat ? 'Queue message for later' : 'Send message now'}
+                        >
+                          <Send className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTopVisibleUserMessageId(null);
+                            setTopPinnedInput('');
+                          }}
+                          className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0"
+                          title="Close"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </form>
                 </div>
-              ) : (
-                <div className="p-3 space-y-3">
-                  {chatMessages.map((message) => (
+              )}
+              <div>
+                {chatMessages.length === 0 ? (
+                  <div className="flex flex-col h-full">
+                    <div className="flex items-center justify-center flex-1 p-3">
+                      <p className="text-sm text-dark-400">Start a conversation with AI</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 space-y-3">
+                    {chatMessages.map((message) => (
                     <div
                       key={message.id}
+                      ref={(el) => {
+                        if (message.role === 'user' && el) {
+                          messageRefs.current[message.id] = el;
+                        }
+                      }}
                       className={`flex space-x-2 ${
                         message.role === 'user' ? 'justify-end' : 'justify-start'
                       }`}
@@ -10444,6 +10604,46 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                               return next;
                             });
                           };
+                          
+                          // Render user messages as editable textfields
+                          if (message.role === 'user') {
+                            const userMessageContent = normalizeChatInput(message.rawContent ?? message.content);
+                            return (
+                              <div className="w-full flex justify-end">
+                                <div className="max-w-[80%] w-full">
+                                  <textarea
+                                    value={userMessageContent}
+                                    onChange={(e) => {
+                                      setChatMessages(prev => prev.map(msg => 
+                                        msg.id === message.id 
+                                          ? { ...msg, content: e.target.value, rawContent: e.target.value }
+                                          : msg
+                                      ));
+                                    }}
+                                    className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] overflow-y-auto"
+                                    style={{ 
+                                      minHeight: '38px',
+                                      maxHeight: '300px'
+                                    }}
+                                    onInput={(e) => {
+                                      const textarea = e.target;
+                                      textarea.style.height = 'auto';
+                                      const scrollHeight = textarea.scrollHeight;
+                                      const maxHeight = 300;
+                                      if (scrollHeight > maxHeight) {
+                                        textarea.style.height = maxHeight + 'px';
+                                        textarea.style.overflowY = 'auto';
+                                      } else {
+                                        textarea.style.height = scrollHeight + 'px';
+                                        textarea.style.overflowY = 'hidden';
+                                      }
+                                    }}
+                                    placeholder="Your message..."
+                                  />
+                                </div>
+                              </div>
+                            );
+                          }
                           
                           return (
                             <div
@@ -10769,6 +10969,362 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                     })()}
                   </div>
                 )}
+              </div>
+              
+              {/* Composer Input Area - Show when no messages */}
+              {chatMessages.length === 0 && (
+                <div className="border-t border-dark-700 bg-dark-800 flex flex-col flex-shrink-0">
+                  <form onSubmit={handleComposerSubmit} className="flex flex-col flex-1 min-h-0 relative">
+                    {/* Attached Images, Files, and Code Selections Preview for Composer */}
+                    {(attachedImages.length > 0 || attachedFiles.length > 0 || attachedCodeSelections.length > 0) && (
+                      <div className="p-3 pb-2 space-y-2 flex-shrink-0">
+                        {attachedImages.length > 0 && (
+                          <div className="flex flex-wrap gap-2">
+                            {attachedImages.map((img) => (
+                              <div key={img.id} className="relative group">
+                                <img
+                                  src={img.dataUrl}
+                                  alt="Attached"
+                                  className="w-16 h-16 object-cover rounded-lg border border-dark-600"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeImage(img.id)}
+                                  className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                  title="Remove image"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {attachedFiles.length > 0 && (
+                          <div className="flex flex-wrap gap-2">
+                            {attachedFiles.map((file) => (
+                              <div key={file.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
+                                <File className="w-4 h-4 text-dark-400" />
+                                <span className="text-xs text-dark-200 truncate max-w-[120px]" title={file.name || file.file?.name}>
+                                  {file.name || file.file?.name || 'file'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => removeFile(file.id)}
+                                  className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                  title="Remove file"
+                                >
+                                  <X className="w-2.5 h-2.5" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {attachedCodeSelections.length > 0 && (
+                          <div className="flex flex-wrap gap-2">
+                            {attachedCodeSelections.map((selection) => {
+                              const lineRange = selection.startLine === selection.endLine 
+                                ? `${selection.startLine}` 
+                                : `${selection.startLine}-${selection.endLine}`;
+                              return (
+                                <div key={selection.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
+                                  <File className="w-4 h-4 text-dark-400" />
+                                  <span className="text-xs text-dark-200 truncate max-w-[200px]" title={`${selection.fileName} (${lineRange})`}>
+                                    {selection.fileName} ({lineRange})
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeCodeSelection(selection.id)}
+                                    className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                    title="Remove code selection"
+                                  >
+                                    <X className="w-2.5 h-2.5" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
+                    {/* Scrollable Textarea Area */}
+                    <div className="flex-1 min-h-0 px-3 py-2 flex flex-col overflow-hidden">
+                      <div className="flex items-start gap-2 flex-1 min-h-0 overflow-hidden">
+                        <textarea
+                          ref={composerInputRef}
+                          value={composerInput}
+                          onChange={handleComposerInputChange}
+                          onPaste={handleImagePaste}
+                          placeholder="Plan, @ for context, / for commands"
+                          rows={1}
+                          className="flex-1 w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] overflow-y-auto"
+                          disabled={isLoadingChat}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleComposerSubmit(e);
+                            } else if (e.key === 'Escape') {
+                              setShowFileSuggestions(false);
+                            } else if (e.key === 'ArrowDown' && showFileSuggestions && fileSuggestions.length > 0) {
+                              e.preventDefault();
+                            }
+                          }}
+                          onInput={(e) => {
+                            // Auto-resize textarea based on content - allow scrolling for long content
+                            const textarea = e.target;
+                            textarea.style.height = 'auto';
+                            const scrollHeight = textarea.scrollHeight;
+                            // Set a reasonable max height (e.g., 300px) and allow scrolling beyond that
+                            const maxHeight = 300;
+                            if (scrollHeight > maxHeight) {
+                              textarea.style.height = maxHeight + 'px';
+                              textarea.style.overflowY = 'auto';
+                            } else {
+                              textarea.style.height = scrollHeight + 'px';
+                              textarea.style.overflowY = 'hidden';
+                            }
+                          }}
+                        />
+                        <input
+                          ref={imageInputRef}
+                          type="file"
+                          accept="*/*"
+                          multiple
+                          onChange={handleImageUpload}
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => imageInputRef.current?.click()}
+                          className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0"
+                          title="Attach image"
+                        >
+                          <Image className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={!composerInput.trim() && attachedImages.length === 0}
+                          className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                          title={isLoadingChat ? 'Queue message for later' : 'Send message now'}
+                        >
+                          <Send className="w-4 h-4" />
+                        </button>
+                      </div>
+                      {showFileSuggestions && fileSuggestions.length > 0 && suggestionInputType === 'composer' && (
+                        <div className="file-suggestions-container absolute top-full left-0 right-0 mt-2 mx-3 bg-dark-800 border border-dark-600 rounded-lg shadow-lg z-50 max-h-60 overflow-y-auto">
+                          {fileSuggestions.map((file, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => insertFileMention(file)}
+                              className="w-full text-left px-3 py-2 text-sm text-dark-300 hover:bg-dark-700 flex items-center space-x-2"
+                            >
+                              <File className="w-4 h-4 text-dark-400" />
+                              <div className="flex-1">
+                                <div className="font-medium">{file.name}</div>
+                                <div className="text-xs text-dark-500 truncate">{file.displayPath}</div>
+                              </div>
+                              {file.isOpen && (
+                                <span className="text-xs text-primary-500">Open</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    
+                    {/* Dropdown Menus - Always at Bottom */}
+                    <div className="flex flex-wrap items-center gap-2 p-3 pt-2 flex-shrink-0 border-t border-dark-700/50">
+                      <div className="relative" ref={agentModeMenuRef}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAgentModeMenu(prev => !prev);
+                            setShowAutoDropdown(false);
+                            setShowWebSearchMenu(false);
+                          }}
+                          className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
+                        >
+                          <Infinity className="w-3 h-3" />
+                          <span>{selectedChatMode.label}</span>
+                          <ChevronDown className={`w-3 h-3 transition-transform ${showAgentModeMenu ? 'rotate-180' : ''}`} />
+                        </button>
+                        {showAgentModeMenu && (
+                          <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[180px]">
+                            {chatModeOptions.map(mode => (
+                              <button
+                                key={mode.id}
+                                type="button"
+                                onClick={() => {
+                                  setAgentMode(mode.id);
+                                  try {
+                                    window.localStorage.setItem('aiAgentMode', mode.id);
+                                  } catch (error) {
+                                    console.warn('Failed to save agent mode to localStorage:', error);
+                                  }
+                                  setShowAgentModeMenu(false);
+                                }}
+                                className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                                  agentMode === mode.id
+                                    ? 'bg-primary-600 text-white'
+                                    : 'text-dark-300 hover:bg-dark-700'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span>{mode.label}</span>
+                                  {agentMode === mode.id && <CheckCircle className="w-3 h-3" />}
+                                </div>
+                                <p className="text-[10px] text-dark-500 mt-1">{mode.description}</p>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 rounded-lg border border-dark-600 bg-dark-700/40 px-2 py-1 text-dark-400">
+                        <button 
+                          type="button"
+                          onClick={() => {
+                            setComposerInput(prev => prev + '@');
+                            if (composerInputRef.current) {
+                              composerInputRef.current.focus();
+                            }
+                            setShowWebSearchMenu(false);
+                          }}
+                          className="hover:text-dark-200 transition-colors"
+                          title="Mention"
+                        >
+                          <AtSign className="w-4 h-4" />
+                        </button>
+                        <div className="relative" ref={webSearchMenuRef}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowWebSearchMenu(prev => !prev);
+                              setShowAgentModeMenu(false);
+                              setShowAutoDropdown(false);
+                            }}
+                            className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors ${
+                              showWebSearchMenu ? 'bg-dark-600 text-dark-100' : 'hover:text-dark-200'
+                            }`}
+                            title={`Web Search (${selectedWebSearchMode.label})`}
+                          >
+                            <Globe className="w-4 h-4" />
+                            <span className="text-[10px] uppercase tracking-wide">{selectedWebSearchMode.label}</span>
+                            <ChevronDown className="w-3 h-3" />
+                          </button>
+                          {showWebSearchMenu && (
+                            <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[200px]">
+                              {webSearchOptions.map((option) => (
+                                <button
+                                  key={option.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setWebSearchMode(option.id);
+                                    try {
+                                      window.localStorage.setItem('aiWebSearchMode', option.id);
+                                    } catch (error) {
+                                      console.warn('Failed to save web search mode to localStorage:', error);
+                                    }
+                                    setShowWebSearchMenu(false);
+                                  }}
+                                  className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                                    webSearchMode === option.id
+                                      ? 'bg-primary-600 text-white'
+                                      : 'text-dark-300 hover:bg-dark-700'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <span>{option.label}</span>
+                                    {webSearchMode === option.id && <CheckCircle className="w-3 h-3" />}
+                                  </div>
+                                  <p className="text-[10px] text-dark-500 mt-1">{option.description}</p>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => imageInputRef.current?.click()}
+                          className="hover:text-dark-200 transition-colors"
+                          title="Upload Image"
+                        >
+                          <Image className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          className="hover:text-dark-200 transition-colors"
+                          title="Voice Input"
+                        >
+                          <Mic className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="relative group" data-auto-dropdown>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAutoDropdown(!showAutoDropdown);
+                            if (!showAutoDropdown && ollamaModels.length === 0) {
+                              loadAvailableModels();
+                            }
+                            setShowAgentModeMenu(false);
+                            setShowWebSearchMenu(false);
+                          }}
+                          className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
+                        >
+                          <span>{currentModel || 'Auto'}</span>
+                          <ChevronDown className={`w-3 h-3 transition-transform ${showAutoDropdown ? 'rotate-180' : ''}`} />
+                        </button>
+                        {showAutoDropdown && (
+                          <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[200px] max-h-64 overflow-y-auto" data-auto-dropdown>
+                            {isLoadingModels ? (
+                              <div className="px-3 py-2 text-xs text-dark-400 flex items-center gap-2">
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                                Loading models...
+                              </div>
+                            ) : ollamaModels.length === 0 ? (
+                              <div className="px-3 py-2 text-xs text-dark-400">
+                                No models available
+                              </div>
+                            ) : (
+                              ollamaModels.map((model) => (
+                                <button
+                                  key={model}
+                                  type="button"
+                                  onClick={() => handleSelectModel(model)}
+                                  className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                                    currentModel === model
+                                      ? 'bg-primary-600 text-white'
+                                      : 'text-dark-300 hover:bg-dark-700'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <span>{model}</span>
+                                    {currentModel === model && (
+                                      <CheckCircle className="w-3 h-3" />
+                                    )}
+                                  </div>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="relative group">
+                        <button
+                          type="button"
+                          className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
+                        >
+                          <Folder className="w-3 h-3" />
+                          <span>Local</span>
+                          <ChevronDown className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                </div>
+              )}
+              
               {!isChatPinnedToBottom && (
                 <button
                   type="button"
@@ -10782,101 +11338,327 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               )}
             </div>
 
-            {/* Follow-up Input */}
+            {/* Follow-up Input - Always at Bottom */}
             {chatMessages.length > 0 && (
-              <div className="border-t border-dark-700 bg-dark-800 p-3 flex-shrink-0">
-                {/* Attached Images Preview for Follow-up */}
-                {(attachedImages.length > 0 || attachedFiles.length > 0) && (
-                  <div className="mb-2 space-y-2">
-                    {attachedImages.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {attachedImages.map((img) => (
-                          <div key={img.id} className="relative group">
-                            <img
-                              src={img.dataUrl}
-                              alt="Attached"
-                              className="w-16 h-16 object-cover rounded-lg border border-dark-600"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => removeImage(img.id)}
-                              className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                              title="Remove image"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {attachedFiles.length > 0 && (
-                      <div className="flex flex-wrap gap-2">
-                        {attachedFiles.map((file) => (
-                          <div key={file.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
-                            <File className="w-4 h-4 text-dark-400" />
-                            <span className="text-xs text-dark-200 truncate max-w-[120px]" title={file.name || file.file?.name}>
-                              {file.name || file.file?.name || 'file'}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => removeFile(file.id)}
-                              className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                              title="Remove file"
-                            >
-                              <X className="w-2.5 h-2.5" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+              <div className="border-t border-dark-700 bg-dark-800 flex flex-col flex-shrink-0">
+                <form onSubmit={handleFollowUpSubmit} className="flex flex-col flex-1 min-h-0 relative">
+                  {/* Attached Images Preview for Follow-up */}
+                  {(attachedImages.length > 0 || attachedFiles.length > 0 || attachedCodeSelections.length > 0) && (
+                    <div className="p-3 pb-2 space-y-2 flex-shrink-0">
+                      {attachedImages.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {attachedImages.map((img) => (
+                            <div key={img.id} className="relative group">
+                              <img
+                                src={img.dataUrl}
+                                alt="Attached"
+                                className="w-16 h-16 object-cover rounded-lg border border-dark-600"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeImage(img.id)}
+                                className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Remove image"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {attachedFiles.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {attachedFiles.map((file) => (
+                            <div key={file.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
+                              <File className="w-4 h-4 text-dark-400" />
+                              <span className="text-xs text-dark-200 truncate max-w-[120px]" title={file.name || file.file?.name}>
+                                {file.name || file.file?.name || 'file'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => removeFile(file.id)}
+                                className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                title="Remove file"
+                              >
+                                <X className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {attachedCodeSelections.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {attachedCodeSelections.map((selection) => {
+                            const lineRange = selection.startLine === selection.endLine 
+                              ? `${selection.startLine}` 
+                              : `${selection.startLine}-${selection.endLine}`;
+                            return (
+                              <div key={selection.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
+                                <File className="w-4 h-4 text-dark-400" />
+                                <span className="text-xs text-dark-200 truncate max-w-[200px]" title={`${selection.fileName} (${lineRange})`}>
+                                  {selection.fileName} ({lineRange})
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => removeCodeSelection(selection.id)}
+                                  className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                  title="Remove code selection"
+                                >
+                                  <X className="w-2.5 h-2.5" />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Scrollable Textarea Area */}
+                  <div className="flex-1 min-h-0 px-3 py-2 flex flex-col overflow-hidden">
+                    <div className="flex items-start gap-2 flex-1 min-h-0 overflow-hidden">
+                      <textarea
+                        value={followUpInput}
+                        onChange={(e) => setFollowUpInput(e.target.value)}
+                        onPaste={handleImagePaste}
+                        placeholder="Add a follow-up (or paste an image)"
+                        rows={1}
+                        className="flex-1 w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] overflow-y-auto"
+                        disabled={isLoadingChat}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleFollowUpSubmit(e);
+                          } else if (e.key === 'Escape') {
+                            setShowFileSuggestions(false);
+                          }
+                        }}
+                        onInput={(e) => {
+                          // Auto-resize textarea based on content - allow scrolling for long content
+                          const textarea = e.target;
+                          textarea.style.height = 'auto';
+                          const scrollHeight = textarea.scrollHeight;
+                          const maxHeight = 300;
+                          if (scrollHeight > maxHeight) {
+                            textarea.style.height = maxHeight + 'px';
+                            textarea.style.overflowY = 'auto';
+                          } else {
+                            textarea.style.height = scrollHeight + 'px';
+                            textarea.style.overflowY = 'hidden';
+                          }
+                        }}
+                      />
+                      <input
+                        ref={imageInputRef}
+                        type="file"
+                        accept="*/*"
+                        multiple
+                        onChange={handleImageUpload}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => imageInputRef.current?.click()}
+                        className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0"
+                        title="Attach image"
+                      >
+                        <Image className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={!followUpInput.trim() && attachedImages.length === 0}
+                        className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                        title={isLoadingChat ? 'Queue follow-up for later' : 'Send follow-up now'}
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                )}
-                <form onSubmit={handleFollowUpSubmit} className="flex items-center gap-2">
-                  <textarea
-                    value={followUpInput}
-                    onChange={(e) => setFollowUpInput(e.target.value)}
-                    onPaste={handleImagePaste}
-                    placeholder="Add a follow-up (or paste an image)"
-                    rows={1}
-                    className="flex-1 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] max-h-32 overflow-y-auto"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleFollowUpSubmit(e);
-                      } else if (e.key === 'Escape') {
-                        setShowFileSuggestions(false);
-                      }
-                    }}
-                    onInput={(e) => {
-                      // Auto-resize textarea based on content
-                      e.target.style.height = 'auto';
-                      e.target.style.height = Math.min(e.target.scrollHeight, 128) + 'px';
-                    }}
-                  />
-                  <input
-                    ref={imageInputRef}
-                    type="file"
-                    accept="*/*"
-                    multiple
-                    onChange={handleImageUpload}
-                    className="hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => imageInputRef.current?.click()}
-                    className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
-                    title="Attach image"
-                  >
-                    <Image className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={!followUpInput.trim() && attachedImages.length === 0}
-                    className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    title={isLoadingChat ? 'Queue follow-up for later' : 'Send follow-up now'}
-                  >
-                    <Send className="w-4 h-4" />
-                  </button>
+                  
+                  {/* Dropdown Menus - Always at Bottom */}
+                  <div className="flex flex-wrap items-center gap-2 p-3 pt-2 flex-shrink-0 border-t border-dark-700/50">
+                    <div className="relative" ref={agentModeMenuRef}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAgentModeMenu(prev => !prev);
+                          setShowAutoDropdown(false);
+                          setShowWebSearchMenu(false);
+                        }}
+                        className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
+                      >
+                        <Infinity className="w-3 h-3" />
+                        <span>{selectedChatMode.label}</span>
+                        <ChevronDown className={`w-3 h-3 transition-transform ${showAgentModeMenu ? 'rotate-180' : ''}`} />
+                      </button>
+                      {showAgentModeMenu && (
+                        <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[180px]">
+                          {chatModeOptions.map(mode => (
+                            <button
+                              key={mode.id}
+                              type="button"
+                              onClick={() => {
+                                setAgentMode(mode.id);
+                                try {
+                                  window.localStorage.setItem('aiAgentMode', mode.id);
+                                } catch (error) {
+                                  console.warn('Failed to save agent mode to localStorage:', error);
+                                }
+                                setShowAgentModeMenu(false);
+                              }}
+                              className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                                agentMode === mode.id
+                                  ? 'bg-primary-600 text-white'
+                                  : 'text-dark-300 hover:bg-dark-700'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span>{mode.label}</span>
+                                {agentMode === mode.id && <CheckCircle className="w-3 h-3" />}
+                              </div>
+                              <p className="text-[10px] text-dark-500 mt-1">{mode.description}</p>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 rounded-lg border border-dark-600 bg-dark-700/40 px-2 py-1 text-dark-400">
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          setFollowUpInput(prev => prev + '@');
+                        }}
+                        className="hover:text-dark-200 transition-colors"
+                        title="Mention"
+                      >
+                        <AtSign className="w-4 h-4" />
+                      </button>
+                      <div className="relative" ref={webSearchMenuRef}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowWebSearchMenu(prev => !prev);
+                            setShowAgentModeMenu(false);
+                            setShowAutoDropdown(false);
+                          }}
+                          className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors ${
+                            showWebSearchMenu ? 'bg-dark-600 text-dark-100' : 'hover:text-dark-200'
+                          }`}
+                          title={`Web Search (${selectedWebSearchMode.label})`}
+                        >
+                          <Globe className="w-4 h-4" />
+                          <span className="text-[10px] uppercase tracking-wide">{selectedWebSearchMode.label}</span>
+                          <ChevronDown className="w-3 h-3" />
+                        </button>
+                        {showWebSearchMenu && (
+                          <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[200px]">
+                            {webSearchOptions.map((option) => (
+                              <button
+                                key={option.id}
+                                type="button"
+                                onClick={() => {
+                                  setWebSearchMode(option.id);
+                                  try {
+                                    window.localStorage.setItem('aiWebSearchMode', option.id);
+                                  } catch (error) {
+                                    console.warn('Failed to save web search mode to localStorage:', error);
+                                  }
+                                  setShowWebSearchMenu(false);
+                                }}
+                                className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                                  webSearchMode === option.id
+                                    ? 'bg-primary-600 text-white'
+                                    : 'text-dark-300 hover:bg-dark-700'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span>{option.label}</span>
+                                  {webSearchMode === option.id && <CheckCircle className="w-3 h-3" />}
+                                </div>
+                                <p className="text-[10px] text-dark-500 mt-1">{option.description}</p>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => imageInputRef.current?.click()}
+                        className="hover:text-dark-200 transition-colors"
+                        title="Upload Image"
+                      >
+                        <Image className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        className="hover:text-dark-200 transition-colors"
+                        title="Voice Input"
+                      >
+                        <Mic className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="relative group" data-auto-dropdown>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAutoDropdown(!showAutoDropdown);
+                          if (!showAutoDropdown && ollamaModels.length === 0) {
+                            loadAvailableModels();
+                          }
+                          setShowAgentModeMenu(false);
+                          setShowWebSearchMenu(false);
+                        }}
+                        className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
+                      >
+                        <span>{currentModel || 'Auto'}</span>
+                        <ChevronDown className={`w-3 h-3 transition-transform ${showAutoDropdown ? 'rotate-180' : ''}`} />
+                      </button>
+                      {showAutoDropdown && (
+                        <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[200px] max-h-64 overflow-y-auto" data-auto-dropdown>
+                          {isLoadingModels ? (
+                            <div className="px-3 py-2 text-xs text-dark-400 flex items-center gap-2">
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              Loading models...
+                            </div>
+                          ) : ollamaModels.length === 0 ? (
+                            <div className="px-3 py-2 text-xs text-dark-400">
+                              No models available
+                            </div>
+                          ) : (
+                            ollamaModels.map((model) => (
+                              <button
+                                key={model}
+                                type="button"
+                                onClick={() => handleSelectModel(model)}
+                                className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                                  currentModel === model
+                                    ? 'bg-primary-600 text-white'
+                                    : 'text-dark-300 hover:bg-dark-700'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span>{model}</span>
+                                  {currentModel === model && (
+                                    <CheckCircle className="w-3 h-3" />
+                                  )}
+                                </div>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="relative group">
+                      <button
+                        type="button"
+                        className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
+                      >
+                        <Folder className="w-3 h-3" />
+                        <span>Local</span>
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
                 </form>
                 {queuedFollowUps.length > 0 && (
                   <div className="mt-2 space-y-1 text-[11px] text-dark-400">
