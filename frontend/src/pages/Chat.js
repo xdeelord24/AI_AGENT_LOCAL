@@ -634,6 +634,7 @@ const Chat = () => {
   const messagesEndRef = useRef(null);
   const [workspaceTree, setWorkspaceTree] = useState(null);
   const workspaceTreePromiseRef = useRef(null);
+  const prevIsLoadingRef = useRef(false);
 
   const planStatusStyles = {
     completed: 'border-green-700 bg-green-500/10 text-green-300',
@@ -943,6 +944,69 @@ useEffect(() => {
   }, 1000);
   return () => clearInterval(intervalId);
 }, [thinkingStart]);
+
+  // Notify user when AI response is complete
+  useEffect(() => {
+    // Check if isLoading changed from true to false (response completed)
+    const wasLoading = prevIsLoadingRef.current;
+    const isNowLoading = isLoading;
+    
+    // Debug logging
+    console.log('[Notification] isLoading changed:', { wasLoading, isNowLoading, willNotify: wasLoading === true && isNowLoading === false });
+    
+    if (wasLoading === true && isNowLoading === false) {
+      console.log('[Notification] Triggering notification');
+      
+      // Show toast notification (always show this)
+      toast.success('AI response complete', {
+        icon: '✅',
+        duration: 3000,
+      });
+
+      // Request browser notification permission if not already granted
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().then(permission => {
+          console.log('[Notification] Permission result:', permission);
+          // If permission was just granted, show notification
+          if (permission === 'granted') {
+            try {
+              new Notification('AI Response Complete', {
+                body: 'The AI has finished responding to your message.',
+                icon: '/favicon.ico',
+                tag: 'ai-response-complete',
+                requireInteraction: false,
+              });
+            } catch (err) {
+              console.error('[Notification] Error creating notification:', err);
+            }
+          }
+        }).catch(err => {
+          console.error('[Notification] Error requesting permission:', err);
+        });
+      }
+
+      // Show browser notification if permission is already granted
+      if ('Notification' in window && Notification.permission === 'granted') {
+        try {
+          // Show notification even if page is visible (user might be multitasking)
+          new Notification('AI Response Complete', {
+            body: 'The AI has finished responding to your message.',
+            icon: '/favicon.ico',
+            tag: 'ai-response-complete',
+            requireInteraction: false,
+          });
+          console.log('[Notification] Browser notification sent');
+        } catch (err) {
+          console.error('[Notification] Error creating notification:', err);
+        }
+      } else if ('Notification' in window) {
+        console.log('[Notification] Permission status:', Notification.permission);
+      }
+    }
+    
+    // Update ref for next comparison
+    prevIsLoadingRef.current = isLoading;
+  }, [isLoading]);
 
   const handleSendMessage = async (message, isComposer = false) => {
     const originalMessage = message;
