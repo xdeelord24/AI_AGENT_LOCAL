@@ -6595,10 +6595,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       try {
         // Extract base64 data URLs from attached images (use provided images or fall back to attachedImages)
         const imagesToUse = imagesToInclude || attachedImages;
+        console.log('[FRONTEND DEBUG] Images to use:', imagesToUse, 'imagesToInclude:', imagesToInclude, 'attachedImages:', attachedImages);
         const imageDataUrls = imagesToUse.map(img => {
           // Handle both object format {dataUrl, ...} and direct string format
           return typeof img === 'string' ? img : (img.dataUrl || img);
         }).filter(Boolean);
+        console.log('[FRONTEND DEBUG] Image data URLs:', imageDataUrls.length, 'URLs extracted');
+        console.log('[FRONTEND DEBUG] First image preview:', imageDataUrls[0]?.substring(0, 100));
         
         // Prepare files for sending
         const filesToUse = filesToInclude || attachedFiles;
@@ -6608,6 +6611,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           type: f.type || 'text/plain'
         })) : null;
         
+        console.log('[FRONTEND DEBUG] Sending to API - images count:', imageDataUrls.length, 'images:', imageDataUrls.length > 0 ? imageDataUrls : null);
         await ApiService.sendMessageStream({
           message: finalMessage,
           context: context,

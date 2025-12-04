@@ -99,6 +99,7 @@ class MCPServerTools:
         self._web_search_service = web_search_service  # Shared web search service instance
         self._location_service = location_service  # Location service for weather/news
         self._memory_service = memory_service  # Memory service for saving memories
+        self._current_images = []  # Store current images for identify_image tool access
         try:
             self._cache_ttl_seconds = max(1, int(os.getenv("MCP_CACHE_TTL_SECONDS", "4")))
         except ValueError:
@@ -527,6 +528,24 @@ class MCPServerTools:
                     "required": ["asset"]
                 }
             ),
+            Tool(
+                name="identify_image",
+                description="Identify and describe the contents of an image using AI vision capabilities. Analyzes images to detect objects, text, UI elements, code, diagrams, screenshots, and other visual content. Use this tool when users upload images and ask 'what is in this image' or similar questions. If images are attached to the current message, they are automatically available - you can call this tool without providing image_data, or provide image_data explicitly.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "image_data": {
+                            "type": "string",
+                            "description": "Base64-encoded image data (data URL format: data:image/...;base64,...) or base64 string without prefix. Optional if images are attached to the current message (they will be used automatically)."
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Optional specific question about the image (e.g., 'what code is shown?', 'identify the UI elements', 'what is this diagram about?', 'what is in this image?')"
+                        }
+                    },
+                    "required": []
+                }
+            ),
         ]
         
         if self.web_search_enabled:
@@ -822,6 +841,17 @@ class MCPServerTools:
                     arguments.get("asset_type"),
                     arguments.get("days_ahead", 7),
                     arguments.get("include_analysis", True)
+                )
+            elif tool_name == "identify_image":
+                # If no image_data provided, try to use current images from context
+                image_data = arguments.get("image_data", "")
+                if not image_data and self._current_images:
+                    # Use first available image if none specified
+                    image_data = self._current_images[0]
+                    logger.info(f"[MCP] Using current image from context for identify_image")
+                return await self._identify_image(
+                    image_data,
+                    arguments.get("query")
                 )
             else:
                 execution_time = time.time() - execution_start
@@ -2593,6 +2623,155 @@ class MCPServerTools:
         except Exception as e:
             logger.error(f"Error predicting price: {e}", exc_info=True)
             return [TextContent(type="text", text=f"Error predicting price: {str(e)}")]
+    
+    async def _identify_image(self, image_data: str, query: Optional[str] = None) -> List[TextContent]:
+        """
+        Identify and describe the contents of an image using Ollama's vision API.
+        
+        This method analyzes images to detect:
+        - Objects, people, scenes
+        - Text content (OCR)
+        - UI elements, buttons, icons
+        - Code screenshots
+        - Diagrams and charts
+        - Screenshots and interface elements
+        
+        Args:
+            image_data: Base64-encoded image data (data URL or raw base64). If empty, uses current images from context.
+            query: Optional specific question about the image
+            
+        Returns:
+            List of TextContent objects with image analysis results
+        """
+        try:
+            import base64
+            import json
+            
+            # If no image_data provided, try to use current images from context
+            if not image_data or not image_data.strip():
+                if self._current_images and len(self._current_images) > 0:
+                    image_data = self._current_images[0]
+                    logger.info(f"[MCP] Using current image from context (no image_data provided)")
+                else:
+                    return [TextContent(
+                        type="text",
+                        text="ERROR: No image data provided and no images are available in the current context. Please provide image_data or ensure images are attached to the message."
+                    )]
+            
+            # Extract base64 data from data URL if needed
+            if image_data.startswith("data:image"):
+                # Format: data:image/png;base64,iVBORw0KGgo...
+                base64_data = image_data.split(",", 1)[1] if "," in image_data else image_data
+            else:
+                base64_data = image_data
+            
+            # Validate base64 data
+            try:
+                # Try to decode to verify it's valid base64
+                base64.b64decode(base64_data[:100])  # Just check first 100 chars
+            except Exception as e:
+                return [TextContent(
+                    type="text",
+                    text=f"ERROR: Invalid base64 image data: {str(e)}"
+                )]
+            
+            # Get Ollama URL from environment or use default
+            ollama_url = os.getenv("OLLAMA_URL", "http://localhost:5000")
+            ollama_direct = os.getenv("OLLAMA_DIRECT_URL", "http://localhost:11434")
+            
+            # Try direct connection first, fallback to proxy
+            ollama_base = ollama_direct
+            
+            # Build the prompt for image identification
+            if query:
+                prompt = f"{query}\n\nPlease analyze this image in detail and provide a comprehensive description."
+            else:
+                prompt = (
+                    "Please analyze this image in detail and describe:\n"
+                    "- What objects, people, or scenes are visible\n"
+                    "- Any text content (if readable)\n"
+                    "- UI elements, buttons, icons, or interface components (if it's a screenshot)\n"
+                    "- Code or programming content (if visible)\n"
+                    "- Diagrams, charts, or visualizations\n"
+                    "- Overall context and purpose of the image\n"
+                    "- Any other relevant details"
+                )
+            
+            # Use a vision-capable model (try common vision models)
+            vision_models = ["llava", "llava:latest", "llava:13b", "llava:7b", "bakllava", "llama3.2-vision"]
+            model = None
+            
+            # Try to detect available vision model
+            try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+                    async with session.get(f"{ollama_base}/api/tags") as response:
+                        if response.status == 200:
+                            models_data = await response.json()
+                            available_models = [m.get("name", "") for m in models_data.get("models", [])]
+                            # Find first available vision model
+                            for vm in vision_models:
+                                if vm in available_models:
+                                    model = vm
+                                    break
+            except Exception as e:
+                logger.warning(f"Could not check available models: {e}")
+            
+            # Fallback to default vision model if none found
+            if not model:
+                model = vision_models[0]  # Default to llava
+            
+            # Call Ollama's vision API
+            try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+                    payload = {
+                        "model": model,
+                        "prompt": prompt,
+                        "images": [base64_data],
+                        "stream": False
+                    }
+                    
+                    async with session.post(
+                        f"{ollama_base}/api/generate",
+                        json=payload,
+                        headers={"Content-Type": "application/json"}
+                    ) as response:
+                        if response.status == 200:
+                            result_data = await response.json()
+                            identification = result_data.get("response", "").strip()
+                            
+                            if identification:
+                                result = f"Image Analysis Results:\n\n{identification}"
+                                if query:
+                                    result = f"Question: {query}\n\n{result}"
+                                return [TextContent(type="text", text=result)]
+                            else:
+                                return [TextContent(
+                                    type="text",
+                                    text="Image analyzed but no description was returned. The image may be empty or the model may not have been able to process it."
+                                )]
+                        else:
+                            error_text = await response.text()
+                            return [TextContent(
+                                type="text",
+                                text=f"ERROR: Failed to analyze image. Ollama API returned status {response.status}: {error_text}"
+                            )]
+            except aiohttp.ClientError as e:
+                return [TextContent(
+                    type="text",
+                    text=f"ERROR: Network error connecting to Ollama vision API: {str(e)}\n\nMake sure Ollama is running and a vision model (like llava) is installed."
+                )]
+            except asyncio.TimeoutError:
+                return [TextContent(
+                    type="text",
+                    text="ERROR: Image analysis timed out. The vision model may be taking too long to process the image."
+                )]
+                
+        except Exception as e:
+            logger.error(f"Error identifying image: {e}", exc_info=True)
+            return [TextContent(
+                type="text",
+                text=f"ERROR: Failed to identify image: {str(e)}"
+            )]
 
 
 def create_mcp_server(file_service=None, code_analyzer=None, web_search_enabled=True, location_service=None, memory_service=None):

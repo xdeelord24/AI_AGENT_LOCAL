@@ -499,28 +499,49 @@ class AIService:
 
         add_status("analysis", "Analyzing context and recent history", 700)
 
-        active_file = self._normalize_path(context.get("active_file"))
+        active_file = None
+        try:
+            active_file_raw = context.get("active_file")
+            if active_file_raw:
+                active_file = self._normalize_path(str(active_file_raw))
+        except Exception as e:
+            logger.warning(f"Error processing active_file in generate_agent_statuses: {e}")
+        
         if active_file:
             add_status(f"grep-active:{active_file}", f"Grepping {active_file} for relevant code", 750)
 
-        mentioned_files = context.get("mentioned_files") or []
+        mentioned_files = []
+        try:
+            mentioned_files_raw = context.get("mentioned_files")
+            if isinstance(mentioned_files_raw, list):
+                mentioned_files = mentioned_files_raw[:4]
+            elif mentioned_files_raw:
+                # If it's not a list, try to convert or skip
+                logger.warning(f"mentioned_files is not a list: {type(mentioned_files_raw)}")
+        except Exception as e:
+            logger.warning(f"Error processing mentioned_files in generate_agent_statuses: {e}")
+        
         added_paths = set()
         if active_file:
             added_paths.add(active_file)
 
-        for mention in mentioned_files[:4]:
-            if isinstance(mention, dict):
-                path = mention.get("path")
-            elif isinstance(mention, str):
-                path = mention
-            else:
-                path = None
-            
-            if path:
-                normalized = self._normalize_path(str(path))
-                if normalized and normalized not in added_paths:
-                    add_status(f"grep:{normalized}", f"Grepping {normalized} for matches", 600)
-                    added_paths.add(normalized)
+        for mention in mentioned_files:
+            try:
+                if isinstance(mention, dict):
+                    path = mention.get("path")
+                elif isinstance(mention, str):
+                    path = mention
+                else:
+                    path = None
+                
+                if path:
+                    normalized = self._normalize_path(str(path))
+                    if normalized and normalized not in added_paths:
+                        add_status(f"grep:{normalized}", f"Grepping {normalized} for matches", 600)
+                        added_paths.add(normalized)
+            except Exception as e:
+                logger.warning(f"Error processing mention in generate_agent_statuses: {e}")
+                continue
 
         if not mentioned_files and not active_file:
             add_status("grep_workspace", "Grepping workspace for references", 650)
@@ -541,16 +562,30 @@ class AIService:
             add_status("planning", "Preparing direct response", 700)
 
         if file_operations:
-            for op in file_operations[:6]:
-                op_type = (op.get("type") or "").lower()
-                path = self._normalize_path(op.get("path")) or "workspace"
-                if op_type == "delete_file":
-                    label = f"Preparing removal for {path}"
-                elif op_type == "create_file":
-                    label = f"Drafting new file {path}"
-                else:
-                    label = f"Updating {path}"
-                add_status(f"op:{path}", label, 600)
+            try:
+                if not isinstance(file_operations, list):
+                    logger.warning(f"file_operations is not a list: {type(file_operations)}")
+                    file_operations = []
+                
+                for op in file_operations[:6]:
+                    try:
+                        if not isinstance(op, dict):
+                            continue
+                        op_type = (op.get("type") or "").lower()
+                        path_raw = op.get("path")
+                        path = self._normalize_path(str(path_raw) if path_raw else None) or "workspace"
+                        if op_type == "delete_file":
+                            label = f"Preparing removal for {path}"
+                        elif op_type == "create_file":
+                            label = f"Drafting new file {path}"
+                        else:
+                            label = f"Updating {path}"
+                        add_status(f"op:{path}", label, 600)
+                    except Exception as e:
+                        logger.warning(f"Error processing file operation in generate_agent_statuses: {e}")
+                        continue
+            except Exception as e:
+                logger.warning(f"Error processing file_operations in generate_agent_statuses: {e}")
         else:
             add_status("drafting", "Drafting potential code changes", 750)
 
@@ -3023,6 +3058,49 @@ class AIService:
             "- Creating and editing files",
             "- Best practices and patterns",
             "",
+        ]
+        
+        # Add image information FIRST if provided (before other context)
+        # Note: For full vision model support, images are passed to Ollama's /api/chat endpoint
+        # The images are also available for use with the identify_image MCP tool
+        
+        # DEBUG: Log image status in prompt building
+        logger.info(f"[IMAGE DEBUG] _build_prompt called - images param: type={type(images)}, length={len(images) if images else 0}")
+        if images:
+            logger.info(f"[IMAGE DEBUG] ✅ _build_prompt: Images present - {len(images)} image(s)")
+            for idx, img in enumerate(images):
+                logger.info(f"[IMAGE DEBUG]   Image {idx+1}: type={type(img)}, length={len(img) if img else 0}, starts_with_data={img.startswith('data:image') if img and isinstance(img, str) else False}")
+        else:
+            logger.warning(f"[IMAGE DEBUG] ⚠️ _build_prompt: NO IMAGES provided!")
+        
+        if images and len(images) > 0:
+            prompt_parts.extend([
+                "=" * 80,
+                "🚨🚨🚨 CRITICAL: IMAGES ATTACHED TO THIS MESSAGE 🚨🚨🚨",
+                "=" * 80,
+                "",
+                f"⚠️ ATTENTION: The user has attached {len(images)} image(s) to their message.",
+                "",
+                "MANDATORY ACTION REQUIRED:",
+                "If the user's message mentions images, asks 'what is in this image', 'what's this', 'identify this',",
+                "or ANY question about the image content, you MUST IMMEDIATELY call the identify_image tool.",
+                "",
+                "DO NOT:",
+                "- Ask the user to provide image data",
+                "- Say 'no image was provided'",
+                "- Request the user to upload the image",
+                "- Ask for base64 data",
+                "",
+                "DO THIS INSTEAD:",
+                "- Call identify_image tool immediately: <tool_call name=\"identify_image\" args='{\"query\": \"what is in this image?\"}' />",
+                "- The images are ALREADY available - you don't need image_data parameter",
+                "- Use the tool FIRST, then respond based on the results",
+                "",
+                "=" * 80,
+                "",
+            ])
+        
+        prompt_parts.extend([
             "=" * 80,
             "CURRENT DATE AND TIME INFORMATION:",
             "=" * 80,
@@ -3035,25 +3113,31 @@ class AIService:
             "",
             "=" * 80,
             "",
-        ]
+        ])
         
-        # Add image information if provided
-        # Note: For full vision model support, images would need to be passed to Ollama's /api/chat endpoint
-        # For now, we include image references in the prompt
+        # Add detailed image instructions after date/time section
         if images and len(images) > 0:
             prompt_parts.extend([
                 "",
                 "=" * 80,
-                f"IMAGES ATTACHED: {len(images)} image(s) included with this message",
+                f"DETAILED IMAGE INFORMATION: {len(images)} image(s) attached",
                 "=" * 80,
                 "",
-                "The user has attached image(s) to their message. The image data is available in base64 format.",
-                "If you are using a vision-capable model, you can process these images.",
-                "If the images contain code, diagrams, screenshots, UI elements, or other visual content,",
-                "please analyze and incorporate that information into your response.",
+                "The images from this message are automatically stored and available to the identify_image tool.",
+                "You can call identify_image WITHOUT providing image_data - the images are already loaded.",
                 "",
-                f"Number of images: {len(images)}",
-                "Image format: base64 data URLs (data:image/...)",
+                "Tool call format (images are automatically available):",
+                '<tool_call name="identify_image" args=\'{"query": "what is in this image?"}\' />',
+                "",
+                "The identify_image tool analyzes images to detect:",
+                "- Objects, people, scenes, and visual content",
+                "- Text content (OCR)",
+                "- UI elements, buttons, icons, interface components",
+                "- Code screenshots and programming content",
+                "- Diagrams, charts, and visualizations",
+                "",
+                "REMEMBER: If the user asks about the image, call identify_image immediately.",
+                "Do NOT ask for image data - it's already available!",
                 "",
                 "=" * 80,
                 "",
@@ -3700,6 +3784,35 @@ class AIService:
             prompt_parts.append("")
         
         # Add current message
+        # Add explicit image detection instruction if images are present
+        if images and len(images) > 0:
+            message_lower = (message or "").lower().strip()
+            image_keywords = ['image', 'picture', 'photo', 'screenshot', 'what is', "what's", 'identify', 'what does', 'describe', 'show', 'see', 'what', 'this']
+            asks_about_image = any(keyword in message_lower for keyword in image_keywords) if message_lower else False
+            
+            # If message is empty or very short, assume user wants image identified
+            # Also trigger if message contains image-related keywords
+            if not message_lower or len(message_lower) < 10 or asks_about_image:
+                query = message.strip() if message.strip() else "what is in this image?"
+                prompt_parts.extend([
+                    "",
+                    "🚨🚨🚨 AUTOMATIC IMAGE DETECTION TRIGGERED 🚨🚨🚨",
+                    "",
+                    f"Images are attached ({len(images)} image(s)).",
+                    "The user's message is empty or asks about the image.",
+                    "YOU MUST call identify_image tool IMMEDIATELY before responding.",
+                    "",
+                    "REQUIRED ACTION: Include this tool call in your response:",
+                    f'<tool_call name="identify_image" args=\'{{"query": "{query}"}}\' />',
+                    "",
+                    "DO NOT ask for image data - it's already available!",
+                    "DO NOT say 'no image was provided' - images ARE attached!",
+                    "DO NOT say 'please upload the image' - images ARE already uploaded!",
+                    "",
+                    "=" * 80,
+                    "",
+                ])
+        
         prompt_parts.append(f"USER REQUEST: {message}")
         prompt_parts.append("")
         
@@ -4426,7 +4539,7 @@ class AIService:
             response = await self._call_huggingface(prompt)
             return response, None  # Hugging Face doesn't support thinking yet
         if self.provider == "openrouter":
-            response = await self._call_openrouter(prompt)
+            response = await self._call_openrouter(prompt, images=images)
             return response, None  # OpenRouter doesn't support separate thinking channel yet
         return await self._call_ollama(prompt, images=images)
 
@@ -4482,11 +4595,12 @@ class AIService:
         except Exception as error:
             raise Exception(f"Hugging Face API error: {error}") from error
 
-    async def _call_openrouter(self, prompt: str) -> str:
+    async def _call_openrouter(self, prompt: str, images: Optional[List[str]] = None) -> str:
         """
         Call OpenRouter's OpenAI-compatible chat completions API.
 
         This uses a simple non-streaming request to keep implementation small and robust.
+        Supports images via OpenAI-compatible format (base64 data URLs in content array).
         """
         if not self.openrouter_api_key:
             raise Exception("OpenRouter API key is not configured.")
@@ -4501,12 +4615,44 @@ class AIService:
             "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "") or "http://localhost",
             "X-Title": os.getenv("OPENROUTER_APP_NAME", "") or "Offline AI Agent",
         }
+        
+        # Build message content - OpenAI format supports images in content array
+        if images and len(images) > 0:
+            logger.info(f"[IMAGE DEBUG] OpenRouter: Processing {len(images)} image(s)")
+            # OpenAI format: content is an array of text and image_url objects
+            # Add text first if prompt exists
+            message_content = []
+            if prompt:
+                message_content.append({"type": "text", "text": prompt})
+            # Add images
+            for idx, img_data_url in enumerate(images):
+                logger.info(f"[IMAGE DEBUG] OpenRouter: Processing image {idx+1}, data_url_length={len(img_data_url) if img_data_url else 0}")
+                # OpenAI accepts data URLs directly in image_url format
+                if img_data_url and isinstance(img_data_url, str):
+                    message_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": img_data_url  # OpenAI/OpenRouter accepts data URLs directly
+                        }
+                    })
+                    logger.info(f"[IMAGE DEBUG] OpenRouter: Added image {idx+1} to content array")
+                else:
+                    logger.warning(f"[IMAGE DEBUG] OpenRouter: Skipping invalid image {idx+1}, type={type(img_data_url)}")
+            
+            if not message_content:
+                # Fallback: if no valid content, use prompt as text
+                message_content = prompt
+        else:
+            # No images, just text (can be string or array with single text item)
+            message_content = prompt
+            logger.info(f"[IMAGE DEBUG] OpenRouter: No images, using text-only content")
+        
         payload = {
             "model": self.openrouter_model,
             "messages": [
                 {
                     "role": "user",
-                    "content": prompt,
+                    "content": message_content,
                 }
             ],
         }
@@ -4524,9 +4670,36 @@ class AIService:
                     if resp.status != 200:
                         try:
                             text = await asyncio.wait_for(resp.text(), timeout=10)
+                            # Try to parse JSON error response
+                            error_message = text
+                            try:
+                                error_json = json.loads(text)
+                                # Extract meaningful error message from JSON response
+                                if isinstance(error_json, dict):
+                                    # Common OpenRouter error fields
+                                    error_msg = (
+                                        error_json.get("error", {}).get("message") if isinstance(error_json.get("error"), dict)
+                                        else error_json.get("message")
+                                        or error_json.get("error")
+                                        or str(error_json)
+                                    )
+                                    if error_msg and len(error_msg) < 500:  # Use JSON error if reasonable length
+                                        error_message = error_msg
+                                    else:
+                                        # If error message is too long, truncate it
+                                        error_message = f"OpenRouter API error: {str(error_msg)[:200]}..." if error_msg else text[:500]
+                            except (json.JSONDecodeError, AttributeError):
+                                # Not JSON, use text as-is but limit length
+                                error_message = text[:500] if len(text) > 500 else text
+                            
+                            # Log full error for debugging
+                            logger.error(f"OpenRouter API error (status {resp.status}): Full response: {text[:1000]}")
+                            
+                            # Raise with concise error message
+                            raise Exception(f"OpenRouter API error (status {resp.status}): {error_message}")
                         except asyncio.TimeoutError:
                             text = f"Failed to read error response (timeout)"
-                        raise Exception(f"OpenRouter API error (status {resp.status}): {text}")
+                            raise Exception(f"OpenRouter API error (status {resp.status}): {text}")
                     
                     # Read JSON with timeout protection
                     try:
@@ -4543,7 +4716,11 @@ class AIService:
                     f"Try again or use a simpler prompt."
                 ) from timeout_error
             except aiohttp.ClientError as client_error:
-                raise Exception(f"OpenRouter API connection error: {client_error}") from client_error
+                error_msg = str(client_error)
+                # Limit error message length
+                if len(error_msg) > 500:
+                    error_msg = error_msg[:500] + "..."
+                raise Exception(f"OpenRouter API connection error: {error_msg}") from client_error
             except Exception as error:
                 # Check if it's a timeout-related error
                 error_str = str(error).lower()
@@ -4552,7 +4729,12 @@ class AIService:
                         f"OpenRouter API request timed out. "
                         f"The model may be processing a complex request. Try again or use a simpler prompt."
                     ) from error
-                raise Exception(f"OpenRouter API request failed: {error}") from error
+                # Limit error message length to prevent truncation
+                error_msg = str(error)
+                if len(error_msg) > 500:
+                    error_msg = error_msg[:500] + "..."
+                    logger.error(f"OpenRouter API full error (truncated): {str(error)}")
+                raise Exception(f"OpenRouter API request failed: {error_msg}") from error
 
         try:
             choices = data.get("choices") or []
@@ -4589,20 +4771,31 @@ class AIService:
         
         # Use /api/chat endpoint if images are provided (for vision support)
         if images and len(images) > 0:
-            logger.info(f"[IMAGE DEBUG] Processing {len(images)} image(s) for Ollama chat API")
+            logger.info(f"[IMAGE DEBUG] ========== _call_ollama: Processing images ==========")
+            logger.info(f"[IMAGE DEBUG] Received {len(images)} image(s) for Ollama chat API")
             # Build messages format for chat API with images
             # Ollama expects images as base64 strings in an images array
             images_base64 = []
             for idx, img_data_url in enumerate(images):
+                logger.info(f"[IMAGE DEBUG] Processing image {idx+1}: type={type(img_data_url)}, length={len(img_data_url) if img_data_url else 0}")
+                logger.info(f"[IMAGE DEBUG] Image {idx+1} preview: {img_data_url[:200] if img_data_url else 'None'}...")
                 base64_data, media_type = self._extract_base64_from_data_url(img_data_url)
+                logger.info(f"[IMAGE DEBUG] Image {idx+1}: extracted base64 length={len(base64_data)}, media_type={media_type}")
                 images_base64.append(base64_data)
-                logger.info(f"[IMAGE DEBUG] Image {idx+1}: extracted {len(base64_data)} chars, media_type={media_type}")
+                logger.info(f"[IMAGE DEBUG] Image {idx+1}: ✅ Added to images_base64 array")
+            logger.info(f"[IMAGE DEBUG] Total images_base64: {len(images_base64)}")
+            logger.info(f"[IMAGE DEBUG] =====================================================")
             
             messages = [{
                 "role": "user",
                 "content": prompt,
                 "images": images_base64
             }]
+            
+            # Verify images are in the message
+            logger.info(f"[IMAGE DEBUG] Message structure - role: {messages[0]['role']}, content length: {len(messages[0]['content'])}, images count: {len(messages[0]['images'])}")
+            if len(messages[0]['images']) == 0:
+                logger.error(f"[IMAGE DEBUG] ⚠️⚠️⚠️ ERROR: No images in message! images_base64 length was {len(images_base64)}")
             
             payload = {
                 "model": self.current_model,
@@ -4613,7 +4806,11 @@ class AIService:
             if keep_alive:
                 payload["keep_alive"] = keep_alive
             
+            # Final verification before sending
+            logger.info(f"[IMAGE DEBUG] Final payload check - model: {payload['model']}, messages[0]['images'] count: {len(payload['messages'][0].get('images', []))}")
             logger.info(f"[IMAGE DEBUG] Using /api/chat endpoint with {len(images_base64)} image(s)")
+            logger.info(f"[IMAGE DEBUG] Payload preview - model: {self.current_model}, messages count: {len(messages)}")
+            logger.info(f"[IMAGE DEBUG] First message images count: {len(messages[0].get('images', [])) if messages else 0}")
             endpoint = "/api/chat"
         else:
             # Use /api/generate endpoint for text-only requests
@@ -4736,14 +4933,20 @@ class AIService:
         
         # Use /api/chat endpoint if images are provided (for vision support)
         if images and len(images) > 0:
-            logger.info(f"[IMAGE DEBUG] Streaming: Processing {len(images)} image(s) for Ollama chat API")
+            logger.info(f"[IMAGE DEBUG] ========== _stream_ollama: Processing images ==========")
+            logger.info(f"[IMAGE DEBUG] Streaming: Received {len(images)} image(s) for Ollama chat API")
             # Build messages format for chat API with images
             # Ollama expects images as base64 strings in an images array
             images_base64 = []
             for idx, img_data_url in enumerate(images):
+                logger.info(f"[IMAGE DEBUG] Streaming: Processing image {idx+1}: type={type(img_data_url)}, length={len(img_data_url) if img_data_url else 0}")
+                logger.info(f"[IMAGE DEBUG] Streaming: Image {idx+1} preview: {img_data_url[:200] if img_data_url else 'None'}...")
                 base64_data, media_type = self._extract_base64_from_data_url(img_data_url)
+                logger.info(f"[IMAGE DEBUG] Streaming: Image {idx+1}: extracted base64 length={len(base64_data)}, media_type={media_type}")
                 images_base64.append(base64_data)
-                logger.info(f"[IMAGE DEBUG] Streaming Image {idx+1}: extracted {len(base64_data)} chars, media_type={media_type}")
+                logger.info(f"[IMAGE DEBUG] Streaming: Image {idx+1}: ✅ Added to images_base64 array")
+            logger.info(f"[IMAGE DEBUG] Streaming: Total images_base64: {len(images_base64)}")
+            logger.info(f"[IMAGE DEBUG] ========================================================")
             
             messages = [{
                 "role": "user",
@@ -4761,6 +4964,8 @@ class AIService:
                 payload["keep_alive"] = keep_alive
             
             logger.info(f"[IMAGE DEBUG] Streaming: Using /api/chat endpoint with {len(images_base64)} image(s)")
+            logger.info(f"[IMAGE DEBUG] Streaming: Payload preview - model: {self.current_model}, messages count: {len(messages)}")
+            logger.info(f"[IMAGE DEBUG] Streaming: First message images count: {len(messages[0].get('images', [])) if messages else 0}")
             endpoint = "/api/chat"
         else:
             # Use /api/generate endpoint for text-only requests

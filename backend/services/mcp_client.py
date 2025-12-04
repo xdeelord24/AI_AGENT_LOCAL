@@ -153,6 +153,9 @@ class MCPClient:
                 tool_descriptions.append("  Example: <tool_call name=\"read_file\" args='{\"path\": \"src/main.py\"}' />")
             elif tool.name == "list_directory":
                 tool_descriptions.append("  Example: <tool_call name=\"list_directory\" args='{\"path\": \".\"}' />")
+            elif tool.name == "identify_image":
+                tool_descriptions.append("  Example (when images are attached): <tool_call name=\"identify_image\" args='{\"query\": \"what is in this image?\"}' />")
+                tool_descriptions.append("  Example (with explicit image data): <tool_call name=\"identify_image\" args='{\"image_data\": \"data:image/png;base64,...\", \"query\": \"what code is shown?\"}' />")
             
             tool_descriptions.append("")
         

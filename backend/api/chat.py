@@ -480,9 +480,39 @@ async def send_message_stream(
             working_history = list(history)
             current_message = request.message
             images = request.images or []  # Extract images from request
+            
+            # DEBUG: Comprehensive image logging
+            logger.info(f"[IMAGE DEBUG] ========== IMAGE REQUEST DEBUG ==========")
+            logger.info(f"[IMAGE DEBUG] Request.images type: {type(request.images)}")
+            logger.info(f"[IMAGE DEBUG] Request.images value: {request.images}")
+            logger.info(f"[IMAGE DEBUG] Images list length: {len(images)}")
+            logger.info(f"[IMAGE DEBUG] Images list: {images}")
             if images:
-                logger.info(f"[IMAGE DEBUG] Received {len(images)} image(s) in request")
-                logger.info(f"[IMAGE DEBUG] First image preview: {images[0][:100] if images[0] else 'empty'}...")
+                for idx, img in enumerate(images):
+                    logger.info(f"[IMAGE DEBUG] Image {idx+1}: type={type(img)}, length={len(img) if img else 0}, preview={img[:150] if img else 'None'}...")
+                    # Check if it's a valid data URL
+                    if img and isinstance(img, str):
+                        if img.startswith("data:image"):
+                            logger.info(f"[IMAGE DEBUG] Image {idx+1}: Valid data URL detected")
+                        else:
+                            logger.warning(f"[IMAGE DEBUG] Image {idx+1}: NOT a data URL! Starts with: {img[:50] if len(img) > 50 else img}")
+            else:
+                logger.warning(f"[IMAGE DEBUG] ⚠️ NO IMAGES IN REQUEST! request.images={request.images}")
+            logger.info(f"[IMAGE DEBUG] ==========================================")
+            
+            if images:
+                logger.info(f"[IMAGE DEBUG] ✅ Processing {len(images)} image(s) in request")
+                # Store images in MCP server for identify_image tool access
+                if ai_service.mcp_client and ai_service.mcp_client.mcp_tools:
+                    ai_service.mcp_client.mcp_tools._current_images = images
+                    logger.info(f"[IMAGE DEBUG] ✅ Stored {len(images)} image(s) in MCP server for identify_image tool")
+                else:
+                    logger.warning(f"[IMAGE DEBUG] ⚠️ MCP client or tools not available - cannot store images")
+            else:
+                logger.info(f"[IMAGE DEBUG] ⚠️ No images in request - clearing stored images")
+                # Clear images when none are present
+                if ai_service.mcp_client and ai_service.mcp_client.mcp_tools:
+                    ai_service.mcp_client.mcp_tools._current_images = []
             auto_continue_rounds = 0
             accumulated_thinking = ""
             accumulated_responses = []  # Accumulate responses from all rounds
@@ -495,11 +525,13 @@ async def send_message_stream(
             
             while True:
                 # Build prompt for current message (include images if provided, only on first round)
+                images_for_prompt = images if auto_continue_rounds == 0 else None
+                logger.info(f"[IMAGE DEBUG] About to call _build_prompt - auto_continue_rounds={auto_continue_rounds}, images_for_prompt={images_for_prompt}, images_count={len(images_for_prompt) if images_for_prompt else 0}")
                 prompt = ai_service._build_prompt(
                     current_message, 
                     context_payload, 
                     working_history,
-                    images=images if auto_continue_rounds == 0 else None
+                    images=images_for_prompt
                 )
                 
                 # DEBUG: Log if MCP tools are included in prompt
@@ -539,7 +571,9 @@ async def send_message_stream(
                 accumulated_response_round = ""
                 
                 if ai_service.provider == "ollama":
-                    async for chunk in ai_service._stream_ollama(prompt, images=images if auto_continue_rounds == 0 else None):
+                    images_for_stream = images if auto_continue_rounds == 0 else None
+                    logger.info(f"[IMAGE DEBUG] About to call _stream_ollama - auto_continue_rounds={auto_continue_rounds}, images_for_stream={images_for_stream}, images_count={len(images_for_stream) if images_for_stream else 0}")
+                    async for chunk in ai_service._stream_ollama(prompt, images=images_for_stream):
                         if chunk.get("type") == "thinking":
                             thinking_chunk = chunk.get("content", "")
                             accumulated_thinking_round += thinking_chunk
@@ -1253,7 +1287,11 @@ async def send_message_stream(
                     
         except Exception as e:
             logger.exception("Error in streaming chat")
-            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+            # Limit error message length to prevent truncation in frontend
+            error_msg = str(e)
+            if len(error_msg) > 500:
+                error_msg = error_msg[:500] + "..."
+            yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
     
     return StreamingResponse(generate_stream(), media_type="text/event-stream")
 
@@ -1319,10 +1357,34 @@ async def get_status_preview(
 ):
     """Generate contextual agent status steps for the UI"""
     try:
+        # Ensure context is a dict and handle any invalid values
+        context = request.context or {}
+        if not isinstance(context, dict):
+            logger.warning(f"Invalid context type in status-preview: {type(context)}, converting to dict")
+            context = {}
+        
+        # Validate and sanitize context to prevent errors in generate_agent_statuses
+        sanitized_context = {}
+        for key, value in context.items():
+            try:
+                # Only include safe, serializable values
+                if isinstance(value, (str, int, float, bool, list, dict, type(None))):
+                    sanitized_context[key] = value
+                else:
+                    # Convert other types to string
+                    sanitized_context[key] = str(value)
+            except Exception as sanitize_error:
+                logger.warning(f"Error sanitizing context key '{key}': {sanitize_error}")
+                continue
+        
         statuses = ai_service.generate_agent_statuses(
-            message=request.message,
-            context=request.context or {}
+            message=request.message or "",
+            context=sanitized_context
         )
         return {"agent_statuses": statuses}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating status preview: {str(e)}")
+        logger.exception("Error generating status preview")
+        error_msg = str(e)
+        if len(error_msg) > 500:
+            error_msg = error_msg[:500] + "..."
+        raise HTTPException(status_code=500, detail=f"Error generating status preview: {error_msg}")
