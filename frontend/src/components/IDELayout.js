@@ -10423,12 +10423,14 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               )}
             </div>
             
-            {/* Chat Messages - Scrollable Area */}
-            <div
-              ref={chatContainerRef}
-              onScroll={handleChatScroll}
-              className="relative flex-1 overflow-y-auto bg-dark-900 chat-messages-container min-h-0"
-            >
+            {/* Chat Messages Container - Wrapper for scrollable area and jump button */}
+            <div className="relative flex-1 min-h-0 flex flex-col">
+              {/* Chat Messages - Scrollable Area */}
+              <div
+                ref={chatContainerRef}
+                onScroll={handleChatScroll}
+                className="relative flex-1 overflow-y-auto bg-dark-900 chat-messages-container min-h-0"
+              >
               {/* Top Pinned Input - Shows the user message based on scroll position (last message when at bottom, visible message when scrolled up) */}
               {topVisibleUserMessageId && chatMessages.length > 0 && (
                 <div 
@@ -11324,12 +11326,14 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   </form>
                 </div>
               )}
+              </div>
               
+              {/* Jump to Latest Button - Positioned relative to parent container, not scrollable content */}
               {!isChatPinnedToBottom && (
                 <button
                   type="button"
                   onClick={() => scrollChatToBottom('smooth')}
-                  className="absolute bottom-4 right-4 flex items-center gap-1 rounded-full border border-dark-600 bg-dark-800/90 px-3 py-1.5 text-xs text-dark-100 shadow-lg hover:bg-dark-700 transition-colors"
+                  className="absolute bottom-4 right-4 flex items-center gap-1 rounded-full border border-dark-600 bg-dark-800/90 px-3 py-1.5 text-xs text-dark-100 shadow-lg hover:bg-dark-700 transition-colors z-10"
                   title="Jump to the latest reply"
                 >
                   <ArrowDownCircle className="w-4 h-4" />
