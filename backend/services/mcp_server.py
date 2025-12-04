@@ -1307,8 +1307,8 @@ class MCPServerTools:
                 # Sort by priority (highest first)
                 results.sort(key=price_source_priority, reverse=True)
             
-            # Format results
-            formatted = web_service.format_results(results, optimized_query, include_metadata=True)
+            # Format results (pass search_type so images are displayed correctly)
+            formatted = web_service.format_results(results, optimized_query, include_metadata=True, search_type=search_type)
             
             # Add metadata info if cached (but price queries shouldn't be cached)
             if metadata.get("cached") and not is_price_query:

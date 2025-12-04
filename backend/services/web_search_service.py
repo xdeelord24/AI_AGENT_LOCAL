@@ -401,12 +401,41 @@ class WebSearchService:
                 phrases.append(phrase)
         return phrases
     
-    def _format_result(self, result: Dict[str, Any], index: int, query: str) -> str:
+    def _format_result(self, result: Dict[str, Any], index: int, query: str, search_type: str = "text") -> str:
         """Format a single search result for display"""
         title = result.get("title", "No title")
         url = result.get("href") or result.get("url", "N/A")
         body = result.get("body") or result.get("description", "No description")
         
+        # For image search results, display images instead of just links
+        if search_type == "images":
+            # Image search results have different fields
+            image_url = result.get("image") or result.get("thumbnail") or result.get("url") or url
+            source_url = result.get("url") or result.get("href") or url
+            
+            # Extract domain from source URL
+            try:
+                from urllib.parse import urlparse
+                domain = urlparse(source_url).netloc
+            except Exception:
+                domain = source_url[:50] if len(source_url) > 50 else source_url
+            
+            # Format as markdown with image display
+            formatted = f"{index}. {title}\n"
+            formatted += f"   ![Image]({image_url})\n"
+            formatted += f"   Source: {domain}\n"
+            formatted += f"   [View Image]({image_url}) | [Source Page]({source_url})"
+            
+            if body and body != "No description":
+                # Truncate long descriptions
+                max_body_length = 200
+                if len(body) > max_body_length:
+                    body = body[:max_body_length].rsplit(' ', 1)[0] + "..."
+                formatted += f"\n   {body}"
+            
+            return formatted
+        
+        # For text/news search results, use original formatting
         # Truncate long descriptions
         max_body_length = 300
         if len(body) > max_body_length:
@@ -681,22 +710,32 @@ class WebSearchService:
         self,
         results: List[Dict[str, Any]],
         query: str,
-        include_metadata: bool = False
+        include_metadata: bool = False,
+        search_type: str = "text"
     ) -> str:
         """Format search results as a readable string"""
         if not results:
             return "No search results found."
         
-        lines = [f"Web search results for '{query}':"]
-        lines.append(f"Found {len(results)} result(s)\n")
+        # Use different header for image searches
+        if search_type == "images":
+            lines = [f"🖼️ Image Search Results for '{query}':"]
+            lines.append(f"Found {len(results)} image(s)\n")
+            lines.append("Click the links below to view image galleries:\n")
+        else:
+            lines = [f"Web search results for '{query}':"]
+            lines.append(f"Found {len(results)} result(s)\n")
         
         for idx, result in enumerate(results, 1):
-            lines.append(self._format_result(result, idx, query))
+            lines.append(self._format_result(result, idx, query, search_type))
             lines.append("")
         
         if include_metadata:
             lines.append("\n---")
-            lines.append("Tip: Use these results to inform your response.")
+            if search_type == "images":
+                lines.append("Tip: Images are displayed above. Click links to view full-size images.")
+            else:
+                lines.append("Tip: Use these results to inform your response.")
         
         return "\n".join(lines)
     

@@ -470,6 +470,77 @@ class AIService:
             normalized = normalized[2:]
         return normalized or None
     
+    def validate_ai_plan(self, ai_plan: Optional[Dict[str, Any]]) -> Tuple[bool, List[str]]:
+        """Validate an AI plan structure and return (is_valid, errors)"""
+        if not ai_plan:
+            return True, []  # Empty plan is valid
+        
+        errors = []
+        
+        if not isinstance(ai_plan, dict):
+            return False, ["AI plan must be a dictionary"]
+        
+        tasks = ai_plan.get("tasks", [])
+        if not isinstance(tasks, list):
+            errors.append("Tasks must be a list")
+        else:
+            # Validate each task
+            task_ids = set()
+            for idx, task in enumerate(tasks):
+                if not isinstance(task, dict):
+                    errors.append(f"Task {idx + 1} must be a dictionary")
+                    continue
+                
+                task_id = task.get("id")
+                if not task_id:
+                    errors.append(f"Task {idx + 1} missing required 'id' field")
+                elif task_id in task_ids:
+                    errors.append(f"Duplicate task id: {task_id}")
+                else:
+                    task_ids.add(task_id)
+                
+                if not task.get("title"):
+                    errors.append(f"Task {idx + 1} ({task_id or 'no-id'}) missing 'title' field")
+                
+                status = (task.get("status") or "pending").lower()
+                valid_statuses = {"pending", "in_progress", "completed", "complete", "done", "blocked"}
+                if status not in valid_statuses:
+                    errors.append(f"Task {idx + 1} ({task_id or 'no-id'}) has invalid status: {status}")
+        
+        # Check for circular dependencies if dependencies are specified
+        if tasks:
+            task_deps = {}
+            for task in tasks:
+                task_id = task.get("id")
+                if task_id:
+                    deps = task.get("depends_on", [])
+                    if isinstance(deps, list):
+                        task_deps[task_id] = deps
+            
+            # Check for circular dependencies
+            def has_cycle(task_id: str, visited: set, rec_stack: set) -> bool:
+                visited.add(task_id)
+                rec_stack.add(task_id)
+                
+                for dep in task_deps.get(task_id, []):
+                    if dep not in visited:
+                        if has_cycle(dep, visited, rec_stack):
+                            return True
+                    elif dep in rec_stack:
+                        return True
+                
+                rec_stack.remove(task_id)
+                return False
+            
+            visited = set()
+            for task_id in task_deps:
+                if task_id not in visited:
+                    if has_cycle(task_id, visited, set()):
+                        errors.append(f"Circular dependency detected involving task: {task_id}")
+                        break
+        
+        return len(errors) == 0, errors
+    
     def generate_agent_statuses(
         self,
         message: str,
@@ -481,6 +552,12 @@ class AIService:
         context = context or {}
         statuses: List[Dict[str, Any]] = []
         delay = 0
+
+        # Validate plan if present
+        if ai_plan:
+            is_valid, validation_errors = self.validate_ai_plan(ai_plan)
+            if not is_valid:
+                logger.warning(f"AI plan validation failed: {validation_errors}")
 
         def add_status(key: str, label: str, increment: int = 800):
             nonlocal delay
@@ -2496,11 +2573,13 @@ class AIService:
                             if tool_name == "web_search":
                                 # Use direct web search fallback
                                 try:
-                                    query = tool_call.get("arguments", {}).get("query", "")
-                                    max_results = tool_call.get("arguments", {}).get("max_results", self.web_search_max_results)
+                                    args = tool_call.get("arguments", {})
+                                    query = args.get("query", "")
+                                    max_results = args.get("max_results", self.web_search_max_results)
+                                    search_type = args.get("search_type", "text")  # Get search_type from arguments
                                     
                                     if query:
-                                        logger.info(f"Fallback: Performing web search for '{query}'")
+                                        logger.info(f"Fallback: Performing web search for '{query}' (type: {search_type})")
                                         search_results = await self.perform_web_search(query, max_results=max_results)
                                         
                                         if search_results:
@@ -2515,12 +2594,16 @@ class AIService:
                                                     "href": r.get("url", ""),
                                                     "url": r.get("url", ""),
                                                     "body": r.get("snippet", ""),
-                                                    "description": r.get("snippet", "")
+                                                    "description": r.get("snippet", ""),
+                                                    # Include image fields for image search results
+                                                    "image": r.get("image"),
+                                                    "thumbnail": r.get("thumbnail")
                                                 })
                                             formatted_results = web_service.format_results(
                                                 formatted_search_results,
                                                 query,
-                                                include_metadata=True
+                                                include_metadata=True,
+                                                search_type=search_type  # Use search_type from tool call
                                             )
                                             tool_results.append({
                                                 "tool": "web_search",
@@ -3351,7 +3434,8 @@ class AIService:
                 "- Your FIRST response MUST include a clear `ai_plan` with a summary and task breakdown.",
                 "- Show the plan prominently before starting execution.",
                 "- Break large requests into 3–6 concrete subtasks with clear titles.",
-                "- Each task must have: id, title, and status (`pending`, `in_progress`, or `completed`).",
+                "- Each task must have: id (unique string), title (descriptive), and status (`pending`, `in_progress`, or `completed`).",
+                "- OPTIONAL: Tasks can include `depends_on` array listing task IDs that must complete first (for dependency tracking).",
                 "- After showing the plan, begin executing tasks one by one.",
                 "- Update task statuses in real-time as you work: `pending` → `in_progress` → `completed`.",
                 "- The plan acts as a progress tracker—users can see what's done and what's remaining.",
@@ -3366,8 +3450,16 @@ class AIService:
                 "- CRITICAL: If the user asks to create/modify files, you MUST include file_operations. Never just describe—actually do it.",
                 "- Keep edits surgical: update only what's needed, preserve the rest.",
                 "- Mark tasks as `completed` only when actually done AND the tool call has been executed. Mark active work as `in_progress`.",
+                "- If a task fails or encounters an error, mark it as `blocked` and add a `error` field with details.",
+                "- When a task is blocked, try to work around it or mark dependent tasks appropriately.",
                 "- Continue working until all tasks are `completed` (unless blocked).",
                 "- End with a verification task and reporting task that summarizes outcomes.",
+                "",
+                "PLAN VALIDATION:",
+                "- Ensure all task IDs are unique and non-empty.",
+                "- Ensure all tasks have valid statuses.",
+                "- Avoid circular dependencies in `depends_on` arrays.",
+                "- Keep task titles concise but descriptive (under 100 characters).",
                 "",
                 "PLAN MODE is more structured than Agent mode—always show the plan first, then execute.",
                 "",

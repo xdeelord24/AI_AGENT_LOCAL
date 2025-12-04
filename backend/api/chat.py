@@ -75,20 +75,116 @@ def _plan_has_pending_tasks(ai_plan: Optional[Dict[str, Any]]) -> bool:
     return False
 
 
+def _get_ready_tasks(ai_plan: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Get tasks that are ready to execute (no pending dependencies)"""
+    if not isinstance(ai_plan, dict):
+        return []
+    tasks = ai_plan.get("tasks") or []
+    if not isinstance(tasks, list):
+        return []
+    
+    # Build task lookup
+    task_map = {}
+    for task in tasks:
+        if isinstance(task, dict):
+            task_id = task.get("id")
+            if task_id:
+                task_map[task_id] = task
+    
+    # Find ready tasks (no dependencies or all dependencies completed)
+    ready_tasks = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        
+        status = (task.get("status") or "pending").strip().lower()
+        if status in COMPLETED_TASK_STATUSES:
+            continue  # Already completed
+        
+        # Check dependencies
+        depends_on = task.get("depends_on", [])
+        if not isinstance(depends_on, list):
+            depends_on = []
+        
+        # If no dependencies, task is ready
+        if not depends_on:
+            ready_tasks.append(task)
+            continue
+        
+        # Check if all dependencies are completed
+        all_deps_complete = True
+        for dep_id in depends_on:
+            dep_task = task_map.get(dep_id)
+            if not dep_task:
+                # Dependency not found - assume ready (might be external)
+                continue
+            dep_status = (dep_task.get("status") or "pending").strip().lower()
+            if dep_status not in COMPLETED_TASK_STATUSES:
+                all_deps_complete = False
+                break
+        
+        if all_deps_complete:
+            ready_tasks.append(task)
+    
+    return ready_tasks
+
+
 def _format_pending_tasks(ai_plan: Optional[Dict[str, Any]]) -> str:
     if not isinstance(ai_plan, dict):
         return "No pending tasks were provided."
     tasks = ai_plan.get("tasks") or []
     lines = []
+    
+    # Group tasks by status for better readability
+    pending_tasks = []
+    in_progress_tasks = []
+    blocked_tasks = []
+    
     for task in tasks:
         if not isinstance(task, dict):
             continue
         title = task.get("title") or task.get("id") or "Untitled task"
         status = (task.get("status") or "pending").strip().lower()
-        if status not in COMPLETED_TASK_STATUSES:
-            lines.append(f"- [{status}] {title}")
+        
+        if status in COMPLETED_TASK_STATUSES:
+            continue
+        
+        task_info = {
+            "title": title,
+            "id": task.get("id", ""),
+            "status": status,
+            "error": task.get("error")
+        }
+        
+        if status == "blocked":
+            blocked_tasks.append(task_info)
+        elif status == "in_progress":
+            in_progress_tasks.append(task_info)
+        else:
+            pending_tasks.append(task_info)
+    
+    # Format output with status grouping
+    if in_progress_tasks:
+        lines.append("IN PROGRESS:")
+        for task_info in in_progress_tasks:
+            lines.append(f"- [{task_info['status']}] {task_info['title']}")
+        lines.append("")
+    
+    if blocked_tasks:
+        lines.append("BLOCKED (needs attention):")
+        for task_info in blocked_tasks:
+            error_msg = f" - {task_info['error']}" if task_info.get('error') else ""
+            lines.append(f"- [{task_info['status']}] {task_info['title']}{error_msg}")
+        lines.append("")
+    
+    if pending_tasks:
+        lines.append("PENDING:")
+        for task_info in pending_tasks:
+            lines.append(f"- [{task_info['status']}] {task_info['title']}")
+    
     if not lines:
         return "All tasks appear to be completed."
+    
     return "\n".join(lines)
 
 
@@ -123,13 +219,34 @@ def _finalize_ai_plan(ai_plan: Optional[Dict[str, Any]]) -> Optional[Dict[str, A
 def _build_auto_continue_prompt(ai_plan: Dict[str, Any]) -> str:
     summary = ai_plan.get("summary") or "Continue executing the current plan."
     pending_text = _format_pending_tasks(ai_plan)
-    return (
-        "Continue executing your existing TODO plan until every task is completed. "
-        "Do not stop early—finish the remaining tasks, run verification, update task "
-        "statuses to completed, and provide a short report of the results.\n\n"
-        f"Plan summary: {summary}\n"
+    
+    # Check for blocked tasks
+    tasks = ai_plan.get("tasks", [])
+    blocked_tasks = [t for t in tasks if isinstance(t, dict) and (t.get("status") or "").lower() == "blocked"]
+    
+    prompt_parts = [
+        "Continue executing your existing TODO plan until every task is completed. ",
+        "Do not stop early—finish the remaining tasks, run verification, update task ",
+        "statuses to completed, and provide a short report of the results.\n\n",
+        f"Plan summary: {summary}\n",
         f"Remaining tasks:\n{pending_text}"
-    )
+    ]
+    
+    if blocked_tasks:
+        blocked_info = "\n".join([
+            f"- {t.get('title', 'Unknown')} ({t.get('id', 'no-id')}): {t.get('error', 'Blocked')}"
+            for t in blocked_tasks
+        ])
+        prompt_parts.extend([
+            "\n\n⚠️ BLOCKED TASKS DETECTED:",
+            blocked_info,
+            "\nFor blocked tasks, either:",
+            "1. Retry the task if the error was transient",
+            "2. Work around the issue and mark as completed",
+            "3. If truly blocked, mark dependent tasks appropriately and continue with others"
+        ])
+    
+    return "".join(prompt_parts)
 
 
 def _summarize_request(message: str, limit: int = 120) -> str:
