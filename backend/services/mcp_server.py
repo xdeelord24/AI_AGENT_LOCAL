@@ -242,13 +242,21 @@ class MCPServerTools:
         tools = [
             Tool(
                 name="read_file",
-                description="Read the contents of a file. Path can be relative to workspace root or absolute.",
+                description="Read the contents of a file. Path can be relative to workspace root or absolute. You can optionally specify start_line and end_line to read a specific section.",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
                             "description": "Path to the file to read (relative to workspace or absolute)"
+                        },
+                        "start_line": {
+                            "type": "integer",
+                            "description": "Optional: Start line number (1-based, inclusive)"
+                        },
+                        "end_line": {
+                            "type": "integer",
+                            "description": "Optional: End line number (1-based, inclusive)"
                         }
                     },
                     "required": ["path"]
@@ -729,7 +737,9 @@ class MCPServerTools:
         
         try:
             if tool_name == "read_file":
-                return await self._read_file(arguments.get("path", ""))
+                start_line = arguments.get("start_line")
+                end_line = arguments.get("end_line")
+                return await self._read_file(arguments.get("path", ""), start_line, end_line)
             elif tool_name == "write_file":
                 if not allow_write:
                     return [TextContent(
@@ -869,8 +879,8 @@ class MCPServerTools:
                 text=error_msg
             )]
     
-    async def _read_file(self, path: str) -> List[TextContent]:
-        """Read a file"""
+    async def _read_file(self, path: str, start_line: Optional[int] = None, end_line: Optional[int] = None) -> List[TextContent]:
+        """Read a file, optionally with line range"""
         if not self.file_service:
             return [TextContent(type="text", text="File service not available")]
         
@@ -880,6 +890,30 @@ class MCPServerTools:
                 path = os.path.join(self.workspace_root, path)
             
             content = await self.file_service.read_file(path)
+            
+            # Application of line range if specified
+            if start_line is not None or end_line is not None:
+                lines = content.split('\n')
+                total_lines = len(lines)
+                
+                # Default start to 1 if not specified
+                start = max(1, start_line) if start_line is not None else 1
+                # Default end to total lines if not specified
+                end = min(total_lines, end_line) if end_line is not None else total_lines
+                
+                # Validate range
+                if start > total_lines:
+                    return [TextContent(type="text", text=f"Error: Start line {start} is beyond file length ({total_lines} lines)")]
+                if start > end:
+                    return [TextContent(type="text", text=f"Error: Start line {start} is greater than end line {end}")]
+                
+                # Adjust to 0-based index
+                selected_lines = lines[start-1:end]
+                content = '\n'.join(selected_lines)
+                
+                # Add context info to result
+                return [TextContent(type="text", text=f"File: {path} (lines {start}-{end} of {total_lines})\n\n{content}")]
+            
             return [TextContent(type="text", text=f"File: {path}\n\n{content}")]
         except FileNotFoundError:
             return [TextContent(type="text", text=f"File not found: {path}")]
@@ -918,6 +952,10 @@ class MCPServerTools:
                 return [TextContent(type="text", text=cached_text)]
 
             files = await self.file_service.list_directory(path)
+            
+            # Sort files: directories first (alphabetical), then files (alphabetical)
+            files.sort(key=lambda x: (not x.is_directory, x.name.lower()))
+            
             file_list = []
             for file_info in files:
                 file_type = "DIR" if file_info.is_directory else "FILE"

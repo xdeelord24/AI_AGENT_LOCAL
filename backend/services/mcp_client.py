@@ -151,6 +151,7 @@ class MCPClient:
                 tool_descriptions.append("  Example: <tool_call name=\"web_search\" args='{\"query\": \"Python async programming\", \"max_results\": 5}' />")
             elif tool.name == "read_file":
                 tool_descriptions.append("  Example: <tool_call name=\"read_file\" args='{\"path\": \"src/main.py\"}' />")
+                tool_descriptions.append("  Example with lines: <tool_call name=\"read_file\" args='{\"path\": \"src/main.py\", \"start_line\": 10, \"end_line\": 20}' />")
             elif tool.name == "list_directory":
                 tool_descriptions.append("  Example: <tool_call name=\"list_directory\" args='{\"path\": \".\"}' />")
             elif tool.name == "identify_image":
@@ -198,7 +199,13 @@ class MCPClient:
         # accounting for the fact that JSON inside may contain the opposite quote type
         
         # Find all <tool_call> tags (correct format)
-        tag_pattern = r'<tool_call\s+name=(["\'])([^"\']+)\1\s+args=(["\'])(.*?)\3\s*/>'
+        # Find all <tool_call> tags (correct format)
+        # Regex explanation:
+        # name=(["\'])([^"\']+)\1  -> capture name in quotes
+        # args=(["\'])             -> capture opening quote for args
+        # ((?:[^\\\3]|\\.)*?)      -> capture content allowing escaped characters (backslash followed by anything)
+        # \3                       -> match the same closing quote
+        tag_pattern = r'<tool_call\s+name=(["\'])([^"\']+)\1\s+args=(["\'])((?:[^\\\3]|\\.)*?)\3\s*/>'
         for match in re.finditer(tag_pattern, response, re.DOTALL | re.IGNORECASE):
             tool_name = match.group(2)
             tool_name = normalize_tool_name(tool_name)  # Normalize tool name
