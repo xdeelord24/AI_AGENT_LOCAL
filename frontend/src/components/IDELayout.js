@@ -376,13 +376,10 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
     
     if (currentActiveIndex !== previousActiveIndex) {
       if (previousActiveIndex >= 0) {
-        // Phase changed - trigger transition animation
         setIsTransitioning(true);
-        // Clear any existing timeout
         if (transitionTimeoutRef.current) {
           clearTimeout(transitionTimeoutRef.current);
         }
-        // Reset transition state after animation completes
         transitionTimeoutRef.current = setTimeout(() => {
           setIsTransitioning(false);
         }, 600);
@@ -408,45 +405,69 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
   const hasMultipleSteps = steps.length > 1;
 
   return (
-    <div className="rounded-2xl border border-primary-800/40 bg-gradient-to-br from-primary-500/15 via-dark-900/60 to-dark-900/80 p-4 space-y-4 shadow-inner shadow-black/20 transition-all duration-300">
-      <div className="flex items-center justify-between text-sm text-dark-200">
-        <div className="flex items-center gap-2 text-primary-200">
-          <Sparkles className="w-4 h-4 animate-pulse" />
-          <span>Live thinking pipeline</span>
-        </div>
+    <div className="group relative rounded-xl border border-primary-500/20 bg-dark-900/40 backdrop-blur-md p-5 shadow-[0_0_15px_-3px_rgba(0,0,0,0.3)] transition-all duration-500 hover:shadow-[0_0_25px_-5px_rgba(99,102,241,0.15)] hover:border-primary-500/30 overflow-hidden">
+      
+      {/* Sci-fi background elements */}
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(99,102,241,0.03)_1px,transparent_1px),linear-gradient(to_bottom,rgba(99,102,241,0.03)_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none" />
+      <div className="absolute top-0 right-0 w-32 h-32 bg-primary-500/5 blur-[50px] rounded-full pointer-events-none" />
+      <div className="absolute bottom-0 left-0 w-24 h-24 bg-purple-500/5 blur-[40px] rounded-full pointer-events-none" />
+
+      {/* Decorative corners */}
+      <div className="absolute top-0 left-0 w-2 h-2 border-t border-l border-primary-500/40" />
+      <div className="absolute top-0 right-0 w-2 h-2 border-t border-r border-primary-500/40" />
+      <div className="absolute bottom-0 left-0 w-2 h-2 border-b border-l border-primary-500/40" />
+      <div className="absolute bottom-0 right-0 w-2 h-2 border-b border-r border-primary-500/40" />
+
+      <div className="relative flex items-center justify-between mb-5">
         <div className="flex items-center gap-3">
-          {hasMultipleSteps && (
-            <button
-              onClick={() => setIsExpanded(!isExpanded)}
-              className="text-xs text-primary-300 hover:text-primary-200 transition-all duration-200 flex items-center gap-1 px-2 py-1 rounded hover:bg-primary-500/10 hover:scale-105 active:scale-95"
-              title={isExpanded ? 'Collapse to current phase' : 'Show all phases'}
-            >
-              {isExpanded ? (
-                <>
-                  <ChevronUp className="w-3 h-3 transition-transform duration-200" />
-                  <span>Collapse</span>
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="w-3 h-3 transition-transform duration-200" />
-                  <span>Show all ({steps.length})</span>
-                </>
-              )}
-            </button>
-          )}
-          <span className="text-xs text-dark-400 uppercase tracking-wide">
-            {Math.max(1, Math.round(elapsedMs / 1000))}s elapsed
-          </span>
+          <div className="relative group/icon">
+            <div className="absolute inset-0 bg-primary-500/20 rounded-full blur-sm group-hover/icon:bg-primary-500/40 transition-all duration-500" />
+            <div className="relative flex items-center justify-center w-8 h-8 rounded-full bg-dark-800/80 border border-primary-500/30 dark-glass-glow">
+              <Brain className="w-4 h-4 text-primary-300 animate-[pulse_3s_ease-in-out_infinite]" />
+            </div>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-[10px] font-mono uppercase text-primary-400/80 tracking-widest leading-none mb-1">Neural Engine</span>
+            <span className="text-sm font-bold text-white tracking-wide flex items-center gap-2">
+              ACTIVE PROCESSING
+              <span className="flex h-1.5 w-1.5 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+              </span>
+            </span>
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-2">
+           <div className="hidden sm:flex items-center px-2.5 py-1 rounded-md bg-dark-900/50 border border-white/5 backdrop-blur-sm">
+             <Activity className="w-3 h-3 text-primary-400 mr-2" />
+             <span className="font-mono text-xs text-primary-200">
+               {Math.max(1, Math.round(elapsedMs / 1000))}s
+             </span>
+           </div>
+           
+           {hasMultipleSteps && (
+              <button
+                onClick={() => setIsExpanded(!isExpanded)}
+                className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-white/5 border border-transparent hover:border-white/10 text-dark-400 hover:text-white transition-all duration-200"
+                title={isExpanded ? 'Collapse view' : 'Expand view'}
+              >
+                   {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+           )}
         </div>
       </div>
-      <ol className="space-y-4 relative overflow-hidden">
-        {visibleSteps.map((step, displayIdx) => {
-          // Find the original index in the full steps array
-          const originalIdx = isExpanded 
-            ? displayIdx 
-            : steps.findIndex(s => s === step);
-          
+
+      <div className="relative space-y-1 pl-1">
+         {/* Connector Line */}
+         {isExpanded && steps.length > 1 && (
+            <div className="absolute left-[1.35rem] top-6 bottom-6 w-px bg-gradient-to-b from-transparent via-primary-500/20 to-transparent" />
+         )}
+
+         {visibleSteps.map((step, displayIdx) => {
+          const originalIdx = isExpanded ? displayIdx : steps.findIndex(s => s === step);
           const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
+
           const status =
             step.status ||
             (step.completedAt
@@ -454,186 +475,71 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
               : originalIdx === steps.length - 1
               ? 'active'
               : 'done');
-          const toneClass = toneClasses[step.tone] || toneClasses.primary;
-          const durationMs =
-            step.durationMs ??
-            (step.completedAt && step.activatedAt
-              ? step.completedAt - step.activatedAt
-              : null);
-          const statusLabel =
-            status === 'done'
-              ? `Done in ${formatDuration(durationMs)}`
-              : status === 'active'
-              ? 'In progress'
-              : 'Pending';
 
           const isActive = status === 'active';
+          const isDone = status === 'done';
+          
+          const durationMs = step.durationMs ?? (step.completedAt && step.activatedAt ? step.completedAt - step.activatedAt : null);
+          const durationStr = formatDuration(durationMs);
+
           const isNewlyActive = isActive && originalIdx === currentActiveIndex && isTransitioning;
-          const animationDelay = isExpanded ? originalIdx * 50 : 0;
 
           return (
-            <li 
-              key={step.key || `${step.phase}-${originalIdx}`} 
-              className={`flex gap-3 transition-all duration-500 ease-out ${
-                isNewlyActive 
-                  ? 'animate-[slideInUp_0.6s_ease-out,glow_2s_ease-in-out_infinite]' 
-                  : isActive && !isExpanded && isTransitioning
-                  ? 'animate-[fadeInScale_0.5s_ease-out]'
-                  : isActive && !isExpanded
-                  ? 'opacity-100'
-                  : 'opacity-100'
-              }`}
-              style={{
-                animationDelay: `${animationDelay}ms`
-              }}
-            >
-              <div className="flex flex-col items-center">
-                <div
-                  className={`w-9 h-9 rounded-full border-2 flex items-center justify-center transition-all duration-500 ease-out relative ${
-                    toneClass
-                  } ${
-                    isActive 
-                      ? 'ring-4 ring-primary-500/60 shadow-lg shadow-primary-500/30 scale-110' 
-                      : 'ring-0 scale-100'
-                  } ${
-                    isNewlyActive ? 'animate-[pulseGlow_2s_ease-in-out_infinite]' : ''
-                  }`}
-                >
-                  {/* Animated glow effect for active phase */}
-                  {isActive && (
-                    <div className="absolute inset-0 rounded-full bg-primary-500/20 animate-ping" style={{ animationDuration: '2s' }} />
-                  )}
-                  <Icon 
-                    className={`w-4 h-4 transition-all duration-300 ${
-                      isActive ? 'scale-110 animate-[iconPulse_1.5s_ease-in-out_infinite]' : 'scale-100'
-                    }`}
-                  />
+             <div 
+                key={step.key || `${step.phase}-${originalIdx}`}
+                className={`group/step relative z-10 grid grid-cols-[auto_1fr] gap-4 p-2 rounded-lg transition-all duration-500 ${
+                    isActive ? 'bg-gradient-to-r from-primary-500/10 to-transparent translate-x-1' : 'opacity-80 hover:opacity-100 hover:bg-white/5'
+                }`}
+             >
+                <div className="relative flex items-center justify-center pt-1">
+                     <div className={`w-8 h-8 rounded-lg flex items-center justify-center border backdrop-blur-md transition-all duration-500 ${
+                          isActive 
+                            ? 'bg-primary-500/10 border-primary-500/50 text-primary-300 shadow-[0_0_15px_rgba(99,102,241,0.25)]' 
+                            : isDone
+                            ? 'bg-dark-900/40 border-emerald-500/20 text-emerald-500/60 grayscale-[0.3]'
+                            : 'bg-dark-900/20 border-white/5 text-dark-600'
+                     }`}>
+                          <Icon className={`w-4 h-4 transition-all duration-500 ${isActive ? 'scale-110 drop-shadow-[0_0_5px_rgba(99,102,241,0.5)]' : 'scale-100'}`} />
+                     </div>
                 </div>
-                {isExpanded && originalIdx < steps.length - 1 && (
-                  <span 
-                    className={`flex-1 w-px mt-1 transition-all duration-700 ease-out relative overflow-hidden ${
-                      originalIdx < currentActiveIndex 
-                        ? 'bg-primary-500/60' 
-                        : 'bg-dark-700'
-                    }`}
-                    style={{
-                      background: originalIdx < currentActiveIndex 
-                        ? 'linear-gradient(to bottom, rgba(99, 102, 241, 0.7), rgba(99, 102, 241, 0.3), rgba(99, 102, 241, 0.1))'
-                        : undefined
-                    }}
-                  >
-                    {originalIdx < currentActiveIndex && (
-                      <span 
-                        className="absolute top-0 left-0 w-full h-full bg-primary-400/40 animate-[flowDown_2s_ease-in-out_infinite]"
-                        style={{
-                          background: 'linear-gradient(to bottom, transparent, rgba(99, 102, 241, 0.6), transparent)',
-                          animationDelay: `${originalIdx * 200}ms`
-                        }}
-                      />
+
+                <div className="min-w-0 flex flex-col justify-center py-0.5">
+                    <div className="flex items-center justify-between gap-3 mb-0.5">
+                        <span className={`text-sm font-medium tracking-tight transition-colors duration-300 ${
+                             isActive ? 'text-white' : isDone ? 'text-dark-300' : 'text-dark-500'
+                        }`}>
+                             {step.label || THINKING_PHASE_META[step.phase]?.label}
+                        </span>
+                        
+                        {/* Status Label */}
+                        <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider border ${
+                              isActive 
+                                ? 'bg-primary-500/10 border-primary-500/30 text-primary-300'
+                                : isDone
+                                ? 'bg-emerald-500/5 border-emerald-500/10 text-emerald-500/50'
+                                : 'hidden'
+                        }`}>
+                             {isActive && <div className="w-1 h-1 rounded-full bg-primary-400 animate-pulse" />}
+                             {isActive ? 'Processing' : durationStr}
+                        </div>
+                    </div>
+                    
+                    {(step.description || THINKING_PHASE_META[step.phase]?.description) && (
+                         <div className={`text-xs truncate transition-all duration-500 flex items-center ${
+                              isActive ? 'text-primary-200/70 translate-x-1' : 'text-dark-500'
+                         }`}>
+                             {isActive && <span className="mr-1.5 text-primary-500 text-[10px]">›</span>}
+                             {step.description || THINKING_PHASE_META[step.phase]?.description}
+                         </div>
                     )}
-                  </span>
-                )}
-              </div>
-              <div className="flex-1 space-y-1">
-                <div className="flex items-start justify-between gap-3">
-                  <div 
-                    className={`text-sm font-medium leading-snug transition-all duration-300 ${
-                      isActive 
-                        ? 'text-primary-100 font-semibold' 
-                        : 'text-dark-100'
-                    }`}
-                  >
-                    {step.label || THINKING_PHASE_META[step.phase]?.label || 'Working…'}
-                  </div>
-                  <div 
-                    className={`text-xs whitespace-nowrap transition-all duration-300 ${
-                      isActive 
-                        ? 'text-primary-300 font-medium' 
-                        : 'text-dark-500'
-                    }`}
-                  >
-                    {statusLabel}
-                  </div>
                 </div>
-                {(step.description || THINKING_PHASE_META[step.phase]?.description) && (
-                  <p 
-                    className={`text-xs transition-all duration-300 ${
-                      isActive 
-                        ? 'text-dark-300' 
-                        : 'text-dark-400'
-                    }`}
-                  >
-                    {step.description || THINKING_PHASE_META[step.phase]?.description}
-                  </p>
-                )}
-              </div>
-            </li>
+             </div>
           );
-        })}
-      </ol>
+         })}
+      </div>
       <style>{`
-        @keyframes slideInUp {
-          from {
-            opacity: 0;
-            transform: translateY(12px) scale(0.95);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-          }
-        }
-        @keyframes fadeInScale {
-          from {
-            opacity: 0;
-            transform: scale(0.98);
-          }
-          to {
-            opacity: 1;
-            transform: scale(1);
-          }
-        }
-        @keyframes glow {
-          0%, 100% {
-            box-shadow: 0 0 0 0 rgba(99, 102, 241, 0), 0 0 0 0 rgba(139, 92, 246, 0);
-          }
-          50% {
-            box-shadow: 0 0 25px 8px rgba(99, 102, 241, 0.4), 0 0 15px 4px rgba(139, 92, 246, 0.2);
-          }
-        }
-        @keyframes pulseGlow {
-          0%, 100% {
-            box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.5), 0 0 0 0 rgba(99, 102, 241, 0.3);
-          }
-          50% {
-            box-shadow: 0 0 0 10px rgba(99, 102, 241, 0), 0 0 0 5px rgba(99, 102, 241, 0.15);
-          }
-        }
-        @keyframes iconPulse {
-          0%, 100% {
-            transform: scale(1) rotate(0deg);
-          }
-          25% {
-            transform: scale(1.15) rotate(-2deg);
-          }
-          50% {
-            transform: scale(1.1) rotate(0deg);
-          }
-          75% {
-            transform: scale(1.15) rotate(2deg);
-          }
-        }
-        @keyframes flowDown {
-          0% {
-            transform: translateY(-100%);
-            opacity: 0;
-          }
-          50% {
-            opacity: 1;
-          }
-          100% {
-            transform: translateY(100%);
-            opacity: 0;
-          }
+        .dark-glass-glow {
+          box-shadow: 0 0 10px rgba(0,0,0,0.5), inset 0 0 10px rgba(255,255,255,0.05);
         }
       `}</style>
     </div>
@@ -11278,7 +11184,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                           <ChevronDown className={`w-3 h-3 transition-transform ${showAutoDropdown ? 'rotate-180' : ''}`} />
                         </button>
                         {showAutoDropdown && (
-                          <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[200px] max-h-64 overflow-y-auto" data-auto-dropdown>
+                          <div className="absolute top-full left-0 mt-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-[100] min-w-[200px] max-h-[300px] overflow-y-auto" style={{ maxHeight: 'min(300px, calc(100vh - 200px))' }} data-auto-dropdown>
                             {isLoadingModels ? (
                               <div className="px-3 py-2 text-xs text-dark-400 flex items-center gap-2">
                                 <Loader2 className="w-3 h-3 animate-spin" />
@@ -11618,7 +11524,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         <ChevronDown className={`w-3 h-3 transition-transform ${showAutoDropdown ? 'rotate-180' : ''}`} />
                       </button>
                       {showAutoDropdown && (
-                        <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[200px] max-h-64 overflow-y-auto" data-auto-dropdown>
+                        <div className="absolute top-full left-0 mt-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-[100] min-w-[200px] max-h-[300px] overflow-y-auto" style={{ maxHeight: 'min(300px, calc(100vh - 200px))' }} data-auto-dropdown>
                           {isLoadingModels ? (
                             <div className="px-3 py-2 text-xs text-dark-400 flex items-center gap-2">
                               <Loader2 className="w-3 h-3 animate-spin" />
