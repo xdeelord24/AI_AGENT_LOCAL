@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { 
+import {
   X, ChevronLeft, ChevronRight, Maximize2,
   Code2, Bot, Wifi, WifiOff,
   Folder, File, FilePlus, FolderPlus,
@@ -357,15 +357,15 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
   const activeStepIndex = !Array.isArray(steps) || steps.length === 0
     ? -1
     : steps.findIndex((step, idx) => {
-        const status =
-          step.status ||
-          (step.completedAt
-            ? 'done'
-            : idx === steps.length - 1
+      const status =
+        step.status ||
+        (step.completedAt
+          ? 'done'
+          : idx === steps.length - 1
             ? 'active'
             : 'done');
-        return status === 'active';
-      });
+      return status === 'active';
+    });
 
   // If no active step found, use the last step
   const currentActiveIndex = activeStepIndex >= 0 ? activeStepIndex : (steps.length > 0 ? steps.length - 1 : -1);
@@ -373,7 +373,7 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
   // Track phase changes for animation
   useEffect(() => {
     if (currentActiveIndex === -1) return;
-    
+
     if (currentActiveIndex !== previousActiveIndex) {
       if (previousActiveIndex >= 0) {
         setIsTransitioning(true);
@@ -398,15 +398,15 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
   }
 
   // Filter steps: show only active when collapsed, all when expanded
-  const visibleSteps = isExpanded 
-    ? steps 
+  const visibleSteps = isExpanded
+    ? steps
     : steps.filter((step, idx) => idx === currentActiveIndex);
 
   const hasMultipleSteps = steps.length > 1;
 
   return (
     <div className="group relative rounded-xl border border-primary-500/20 bg-dark-900/40 backdrop-blur-md p-5 shadow-[0_0_15px_-3px_rgba(0,0,0,0.3)] transition-all duration-500 hover:shadow-[0_0_25px_-5px_rgba(99,102,241,0.15)] hover:border-primary-500/30 overflow-hidden">
-      
+
       {/* Sci-fi background elements */}
       <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(99,102,241,0.03)_1px,transparent_1px),linear-gradient(to_bottom,rgba(99,102,241,0.03)_1px,transparent_1px)] bg-[size:24px_24px] pointer-events-none" />
       <div className="absolute top-0 right-0 w-32 h-32 bg-primary-500/5 blur-[50px] rounded-full pointer-events-none" />
@@ -437,34 +437,34 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
             </span>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-2">
-           <div className="hidden sm:flex items-center px-2.5 py-1 rounded-md bg-dark-900/50 border border-white/5 backdrop-blur-sm">
-             <Activity className="w-3 h-3 text-primary-400 mr-2" />
-             <span className="font-mono text-xs text-primary-200">
-               {Math.max(1, Math.round(elapsedMs / 1000))}s
-             </span>
-           </div>
-           
-           {hasMultipleSteps && (
-              <button
-                onClick={() => setIsExpanded(!isExpanded)}
-                className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-white/5 border border-transparent hover:border-white/10 text-dark-400 hover:text-white transition-all duration-200"
-                title={isExpanded ? 'Collapse view' : 'Expand view'}
-              >
-                   {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-              </button>
-           )}
+          <div className="hidden sm:flex items-center px-2.5 py-1 rounded-md bg-dark-900/50 border border-white/5 backdrop-blur-sm">
+            <Activity className="w-3 h-3 text-primary-400 mr-2" />
+            <span className="font-mono text-xs text-primary-200">
+              {Math.max(1, Math.round(elapsedMs / 1000))}s
+            </span>
+          </div>
+
+          {hasMultipleSteps && (
+            <button
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="flex items-center justify-center w-7 h-7 rounded-md hover:bg-white/5 border border-transparent hover:border-white/10 text-dark-400 hover:text-white transition-all duration-200"
+              title={isExpanded ? 'Collapse view' : 'Expand view'}
+            >
+              {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+          )}
         </div>
       </div>
 
       <div className="relative space-y-1 pl-1">
-         {/* Connector Line */}
-         {isExpanded && steps.length > 1 && (
-            <div className="absolute left-[1.35rem] top-6 bottom-6 w-px bg-gradient-to-b from-transparent via-primary-500/20 to-transparent" />
-         )}
+        {/* Connector Line */}
+        {isExpanded && steps.length > 1 && (
+          <div className="absolute left-[1.35rem] top-6 bottom-6 w-px bg-gradient-to-b from-transparent via-primary-500/20 to-transparent" />
+        )}
 
-         {visibleSteps.map((step, displayIdx) => {
+        {visibleSteps.map((step, displayIdx) => {
           const originalIdx = isExpanded ? displayIdx : steps.findIndex(s => s === step);
           const Icon = PHASE_ICON_MAP[step.phase] || Sparkles;
 
@@ -473,69 +473,64 @@ const ThinkingStatusPanel = ({ steps = [], elapsedMs = 0 }) => {
             (step.completedAt
               ? 'done'
               : originalIdx === steps.length - 1
-              ? 'active'
-              : 'done');
+                ? 'active'
+                : 'done');
 
           const isActive = status === 'active';
           const isDone = status === 'done';
-          
+
           const durationMs = step.durationMs ?? (step.completedAt && step.activatedAt ? step.completedAt - step.activatedAt : null);
           const durationStr = formatDuration(durationMs);
 
           const isNewlyActive = isActive && originalIdx === currentActiveIndex && isTransitioning;
 
           return (
-             <div 
-                key={step.key || `${step.phase}-${originalIdx}`}
-                className={`group/step relative z-10 grid grid-cols-[auto_1fr] gap-4 p-2 rounded-lg transition-all duration-500 ${
-                    isActive ? 'bg-gradient-to-r from-primary-500/10 to-transparent translate-x-1' : 'opacity-80 hover:opacity-100 hover:bg-white/5'
+            <div
+              key={step.key || `${step.phase}-${originalIdx}`}
+              className={`group/step relative z-10 grid grid-cols-[auto_1fr] gap-4 p-2 rounded-lg transition-all duration-500 ${isActive ? 'bg-gradient-to-r from-primary-500/10 to-transparent translate-x-1' : 'opacity-80 hover:opacity-100 hover:bg-white/5'
                 }`}
-             >
-                <div className="relative flex items-center justify-center pt-1">
-                     <div className={`w-8 h-8 rounded-lg flex items-center justify-center border backdrop-blur-md transition-all duration-500 ${
-                          isActive 
-                            ? 'bg-primary-500/10 border-primary-500/50 text-primary-300 shadow-[0_0_15px_rgba(99,102,241,0.25)]' 
-                            : isDone
-                            ? 'bg-dark-900/40 border-emerald-500/20 text-emerald-500/60 grayscale-[0.3]'
-                            : 'bg-dark-900/20 border-white/5 text-dark-600'
-                     }`}>
-                          <Icon className={`w-4 h-4 transition-all duration-500 ${isActive ? 'scale-110 drop-shadow-[0_0_5px_rgba(99,102,241,0.5)]' : 'scale-100'}`} />
-                     </div>
+            >
+              <div className="relative flex items-center justify-center pt-1">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center border backdrop-blur-md transition-all duration-500 ${isActive
+                  ? 'bg-primary-500/10 border-primary-500/50 text-primary-300 shadow-[0_0_15px_rgba(99,102,241,0.25)]'
+                  : isDone
+                    ? 'bg-dark-900/40 border-emerald-500/20 text-emerald-500/60 grayscale-[0.3]'
+                    : 'bg-dark-900/20 border-white/5 text-dark-600'
+                  }`}>
+                  <Icon className={`w-4 h-4 transition-all duration-500 ${isActive ? 'scale-110 drop-shadow-[0_0_5px_rgba(99,102,241,0.5)]' : 'scale-100'}`} />
+                </div>
+              </div>
+
+              <div className="min-w-0 flex flex-col justify-center py-0.5">
+                <div className="flex items-center justify-between gap-3 mb-0.5">
+                  <span className={`text-sm font-medium tracking-tight transition-colors duration-300 ${isActive ? 'text-white' : isDone ? 'text-dark-300' : 'text-dark-500'
+                    }`}>
+                    {step.label || THINKING_PHASE_META[step.phase]?.label}
+                  </span>
+
+                  {/* Status Label */}
+                  <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider border ${isActive
+                    ? 'bg-primary-500/10 border-primary-500/30 text-primary-300'
+                    : isDone
+                      ? 'bg-emerald-500/5 border-emerald-500/10 text-emerald-500/50'
+                      : 'hidden'
+                    }`}>
+                    {isActive && <div className="w-1 h-1 rounded-full bg-primary-400 animate-pulse" />}
+                    {isActive ? 'Processing' : durationStr}
+                  </div>
                 </div>
 
-                <div className="min-w-0 flex flex-col justify-center py-0.5">
-                    <div className="flex items-center justify-between gap-3 mb-0.5">
-                        <span className={`text-sm font-medium tracking-tight transition-colors duration-300 ${
-                             isActive ? 'text-white' : isDone ? 'text-dark-300' : 'text-dark-500'
-                        }`}>
-                             {step.label || THINKING_PHASE_META[step.phase]?.label}
-                        </span>
-                        
-                        {/* Status Label */}
-                        <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono uppercase tracking-wider border ${
-                              isActive 
-                                ? 'bg-primary-500/10 border-primary-500/30 text-primary-300'
-                                : isDone
-                                ? 'bg-emerald-500/5 border-emerald-500/10 text-emerald-500/50'
-                                : 'hidden'
-                        }`}>
-                             {isActive && <div className="w-1 h-1 rounded-full bg-primary-400 animate-pulse" />}
-                             {isActive ? 'Processing' : durationStr}
-                        </div>
-                    </div>
-                    
-                    {(step.description || THINKING_PHASE_META[step.phase]?.description) && (
-                         <div className={`text-xs truncate transition-all duration-500 flex items-center ${
-                              isActive ? 'text-primary-200/70 translate-x-1' : 'text-dark-500'
-                         }`}>
-                             {isActive && <span className="mr-1.5 text-primary-500 text-[10px]">›</span>}
-                             {step.description || THINKING_PHASE_META[step.phase]?.description}
-                         </div>
-                    )}
-                </div>
-             </div>
+                {(step.description || THINKING_PHASE_META[step.phase]?.description) && (
+                  <div className={`text-xs truncate transition-all duration-500 flex items-center ${isActive ? 'text-primary-200/70 translate-x-1' : 'text-dark-500'
+                    }`}>
+                    {isActive && <span className="mr-1.5 text-primary-500 text-[10px]">›</span>}
+                    {step.description || THINKING_PHASE_META[step.phase]?.description}
+                  </div>
+                )}
+              </div>
+            </div>
           );
-         })}
+        })}
       </div>
       <style>{`
         .dark-glass-glow {
@@ -564,79 +559,107 @@ const ImageCarousel = ({ images = [], title = 'Search Results', webReferences = 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [imageErrors, setImageErrors] = useState(new Set());
   const [loadedImages, setLoadedImages] = useState(new Set());
-  
+
   // Filter out page URLs that aren't direct images
   const directImages = images.filter(img => {
     const url = typeof img === 'string' ? img : img.url || img.src || img.dataUrl || '';
     return !img.isPageUrl && url && !url.match(/\.(html|php|aspx)$/i);
   });
-  
+
   if (!directImages || directImages.length === 0) {
     // If no direct images but we have web references and it's an image search, show links
     if (webReferences && webReferences.length > 0) {
       return (
-        <div className="mb-3 rounded-lg border border-dark-600 bg-dark-800/50 p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <Image className="w-4 h-4 text-primary-400" />
-            <span className="text-xs font-semibold text-dark-300">Image Search Results</span>
+        <div className="mb-3 rounded-lg border border-dark-600 bg-dark-800/50 overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-dark-600 bg-dark-900/30">
+            <div className="flex items-center gap-2">
+              <Image className="w-4 h-4 text-primary-400" />
+              <span className="text-xs font-semibold text-dark-300">{title}</span>
+            </div>
           </div>
-          <div className="space-y-2">
-            <p className="text-xs text-dark-400 mb-2">Click the links below to view image galleries:</p>
-            {webReferences.slice(0, 5).map((ref, idx) => (
-              <a
-                key={idx}
-                href={ref.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block text-xs text-primary-400 hover:text-primary-300 hover:underline py-1"
-              >
-                {ref.index && `[${ref.index}] `}
-                {ref.title || ref.url}
-              </a>
-            ))}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 p-3">
+            {webReferences.slice(0, 8).map((ref, idx) => {
+              let hostname = '';
+              try {
+                hostname = new URL(ref.url).hostname;
+              } catch (e) {
+                hostname = ref.url;
+              }
+              const faviconUrl = `https://www.google.com/s2/favicons?sz=64&domain=${hostname}`;
+
+              return (
+                <a
+                  key={idx}
+                  href={ref.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group flex flex-col items-center p-3 rounded-lg bg-dark-700/30 hover:bg-dark-700/80 border border-transparent hover:border-primary-500/30 transition-all duration-200"
+                  title={ref.title || ref.url}
+                >
+                  <div className="w-10 h-10 mb-2 rounded-md bg-white/5 p-1.5 flex items-center justify-center overflow-hidden relative">
+                    <img
+                      src={faviconUrl}
+                      alt=""
+                      className="w-full h-full object-contain opacity-80 group-hover:opacity-100 transition-opacity"
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                        e.target.nextSibling.style.display = 'flex';
+                      }}
+                    />
+                    <div className="hidden absolute inset-0 items-center justify-center text-dark-500">
+                      <Globe className="w-5 h-5" />
+                    </div>
+                  </div>
+                  <span className="text-xs text-center text-dark-400 group-hover:text-primary-300 font-medium line-clamp-2 w-full break-words leading-tight">
+                    {ref.index && <span className="text-dark-600 mr-1">[{ref.index}]</span>}
+                    {ref.title || hostname}
+                  </span>
+                </a>
+              );
+            })}
           </div>
         </div>
       );
     }
     return null;
   }
-  
+
   // Use direct images for the carousel
   const displayImages = directImages;
-  
+
   const currentImage = displayImages[currentIndex];
-  const imageUrl = typeof currentImage === 'string' 
-    ? currentImage 
+  const imageUrl = typeof currentImage === 'string'
+    ? currentImage
     : (currentImage.url || currentImage.src || currentImage.dataUrl || currentImage);
-  const imageTitle = typeof currentImage === 'object' 
+  const imageTitle = typeof currentImage === 'object'
     ? (currentImage.title || currentImage.alt || currentImage.caption || '')
     : '';
   const sourceUrl = typeof currentImage === 'object' ? currentImage.sourceUrl : null;
   const hasError = imageErrors.has(currentIndex);
-  
+
   const goToPrevious = () => {
     setCurrentIndex((prev) => (prev === 0 ? images.length - 1 : prev - 1));
   };
-  
+
   const goToNext = () => {
     setCurrentIndex((prev) => (prev === images.length - 1 ? 0 : prev + 1));
   };
-  
+
   const goToImage = (index) => {
     setCurrentIndex(index);
   };
-  
+
   const handleImageError = () => {
     setImageErrors(prev => new Set(prev).add(currentIndex));
   };
-  
+
   const handleImageLoad = () => {
     setLoadedImages(prev => new Set(prev).add(currentIndex));
   };
-  
+
   if (isFullscreen) {
     return (
-      <div 
+      <div
         className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
         onClick={() => setIsFullscreen(false)}
       >
@@ -710,9 +733,8 @@ const ImageCarousel = ({ images = [], title = 'Search Results', webReferences = 
                     e.stopPropagation();
                     goToImage(idx);
                   }}
-                  className={`w-2 h-2 rounded-full transition-all ${
-                    idx === currentIndex ? 'bg-primary-500 w-6' : 'bg-dark-600 hover:bg-dark-500'
-                  }`}
+                  className={`w-2 h-2 rounded-full transition-all ${idx === currentIndex ? 'bg-primary-500 w-6' : 'bg-dark-600 hover:bg-dark-500'
+                    }`}
                   title={`Go to image ${idx + 1}`}
                 />
               ))}
@@ -727,7 +749,7 @@ const ImageCarousel = ({ images = [], title = 'Search Results', webReferences = 
       </div>
     );
   }
-  
+
   return (
     <div className="mb-3 rounded-lg border border-dark-600 bg-dark-800/50 overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2 border-b border-dark-600">
@@ -804,9 +826,8 @@ const ImageCarousel = ({ images = [], title = 'Search Results', webReferences = 
               <button
                 key={idx}
                 onClick={() => goToImage(idx)}
-                className={`w-1.5 h-1.5 rounded-full transition-all ${
-                  idx === currentIndex ? 'bg-primary-500 w-4' : 'bg-dark-600 hover:bg-dark-500'
-                }`}
+                className={`w-1.5 h-1.5 rounded-full transition-all ${idx === currentIndex ? 'bg-primary-500 w-4' : 'bg-dark-600 hover:bg-dark-500'
+                  }`}
                 title={`Go to image ${idx + 1}`}
               />
             ))}
@@ -828,17 +849,17 @@ const isImageSearchQuery = (content) => {
 // Helper function to extract images from web references or message data
 const extractSearchImages = (message, userQuery = '') => {
   const images = [];
-  
+
   // Check if message has images array (for assistant messages from search)
   if (message.searchImages && Array.isArray(message.searchImages)) {
     images.push(...message.searchImages);
   }
-  
+
   // Check web references for image URLs
   const webReferences = message.web_references || message.webReferences;
   const content = message.content || message.rawContent || '';
   const isImageQuery = isImageSearchQuery(userQuery) || isImageSearchQuery(content);
-  
+
   if (webReferences && Array.isArray(webReferences)) {
     webReferences.forEach((ref) => {
       // Check if reference has an image field
@@ -855,8 +876,8 @@ const extractSearchImages = (message, userQuery = '') => {
       else if (ref.url) {
         const urlLower = ref.url.toLowerCase();
         const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
-        if (imageExtensions.some(ext => urlLower.includes(ext)) || 
-            urlLower.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp)(\?|$)/i)) {
+        if (imageExtensions.some(ext => urlLower.includes(ext)) ||
+          urlLower.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp)(\?|$)/i)) {
           images.push({
             url: ref.url,
             title: ref.title || ref.url || '',
@@ -905,7 +926,7 @@ const extractSearchImages = (message, userQuery = '') => {
               }
             }
           ];
-          
+
           for (const pattern of imageHostingPatterns) {
             const match = ref.url.match(pattern.match);
             if (match) {
@@ -921,7 +942,7 @@ const extractSearchImages = (message, userQuery = '') => {
               }
             }
           }
-          
+
           // For Pexels search pages, try to fetch a sample image URL
           // Since we can't fetch from the frontend, we'll add the URL as a potential image source
           if (ref.url.includes('pexels.com') && ref.url.includes('search')) {
@@ -938,7 +959,7 @@ const extractSearchImages = (message, userQuery = '') => {
       }
     });
   }
-  
+
   // Check if message content contains image URLs (markdown images or direct URLs)
   if (typeof content === 'string') {
     // Match markdown images: ![alt](url)
@@ -957,7 +978,7 @@ const extractSearchImages = (message, userQuery = '') => {
         });
       }
     }
-    
+
     // Match direct image URLs (more comprehensive pattern)
     const imageUrlRegex = /https?:\/\/[^\s<>"{}|\\^`\[\]()]+\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)(\?[^\s<>"{}|\\^`\[\]()]*)?/gi;
     let urlMatch;
@@ -971,7 +992,7 @@ const extractSearchImages = (message, userQuery = '') => {
         const beforeUrl = content.substring(Math.max(0, urlMatch.index - 100), urlMatch.index);
         const titleMatch = beforeUrl.match(/(?:^|\n|\.)\s*([^.\n]{10,100})\s*$/);
         const title = titleMatch ? titleMatch[1].trim() : '';
-        
+
         images.push({
           url: imageUrl,
           title: title,
@@ -979,7 +1000,7 @@ const extractSearchImages = (message, userQuery = '') => {
         });
       }
     }
-    
+
     // For image queries, also look for image URLs in HTML img tags if content is HTML
     if (content.includes('<img')) {
       const imgTagRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
@@ -993,7 +1014,7 @@ const extractSearchImages = (message, userQuery = '') => {
           // Extract alt text if available
           const altMatch = imgMatch[0].match(/alt=["']([^"']*)["']/i);
           const alt = altMatch ? altMatch[1] : '';
-          
+
           images.push({
             url: imageUrl,
             title: alt,
@@ -1003,7 +1024,7 @@ const extractSearchImages = (message, userQuery = '') => {
       }
     }
   }
-  
+
   return images;
 };
 
@@ -1230,24 +1251,24 @@ const normalizeChatInput = (value) => {
   if (value == null) return '';
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
     let str = String(value);
-    
+
     // Remove JSON artifacts that might be embedded in the string
     // Remove patterns like: }, "fileoperations": [{...}], etc.
     str = str.replace(/\s*[,\s]*\}\s*,\s*"fileoperations?":\s*\[.*?\]\s*/gis, '');
     str = str.replace(/\s*[,\s]*\}\s*,\s*"file_operations?":\s*\[.*?\]\s*/gis, '');
     str = str.replace(/\s*[,\s]*\}\s*,\s*"ai[_-]?plan":\s*\{.*?\}\s*/gis, '');
     str = str.replace(/\s*[,\s]*\}\s*,\s*"activity[_-]?log":\s*\[.*?\]\s*/gis, '');
-    
+
     // Remove trailing JSON structure markers
     str = str.replace(/[,\s]*[\]}]+(\s*)$/m, '$1');
-    
+
     // Remove empty JSON object patterns
     str = str.replace(/\{\s*"type":\s*"none",?\s*"path":\s*"",?\s*"content":\s*"",?\s*\}/gi, '');
     str = str.replace(/\{\s*"type":\s*"none"\s*\}/gi, '');
     str = str.replace(/"type":\s*"none",?\s*/gi, '');
     str = str.replace(/"path":\s*"",?\s*/gi, '');
     str = str.replace(/"content":\s*"",?\s*/gi, '');
-    
+
     return str;
   }
   if (Array.isArray(value)) {
@@ -1308,11 +1329,10 @@ const MenuDropdown = ({ label, items }) => (
               item.onSelect?.();
             }}
             disabled={item.disabled}
-            className={`w-full text-left px-4 py-2 text-sm ${
-              item.disabled
-                ? 'text-dark-600 cursor-not-allowed'
-                : 'text-dark-200 hover:bg-dark-700'
-            }`}
+            className={`w-full text-left px-4 py-2 text-sm ${item.disabled
+              ? 'text-dark-600 cursor-not-allowed'
+              : 'text-dark-200 hover:bg-dark-700'
+              }`}
           >
             <div className="flex items-center justify-between space-x-4">
               <span>{item.label}</span>
@@ -1341,17 +1361,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
   });
   const [bottomPanelTab, setBottomPanelTab] = useState('terminal');
-  
+
   // Panel size states
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(256); // 64 * 4 = 256px (w-64)
   const [rightSidebarWidth, setRightSidebarWidth] = useState(600); // Maximum width for chat panel (50% of typical 1920px screen)
   const [bottomPanelHeight, setBottomPanelHeight] = useState(256); // 64 * 4 = 256px (h-64)
-  
+
   // Resize states
   const [isResizingLeft, setIsResizingLeft] = useState(false);
   const [isResizingRight, setIsResizingRight] = useState(false);
   const [isResizingBottom, setIsResizingBottom] = useState(false);
-  
+
   // File explorer states
   const [fileTree, setFileTree] = useState([]);
   const [projectRoot, setProjectRoot] = useState(DEFAULT_WORKSPACE_STATE);
@@ -1367,16 +1387,16 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [compareSource, setCompareSource] = useState(null);
   const [comparisonState, setComparisonState] = useState(null);
   const [folderSearchResults, setFolderSearchResults] = useState(null);
-  
+
   // Left sidebar tab state
   const [leftSidebarTab, setLeftSidebarTab] = useState('explorer'); // 'explorer' or 'extensions'
-  
+
   // Extensions marketplace states
   const [extensions, setExtensions] = useState([]);
   const [installedExtensions, setInstalledExtensions] = useState([]);
   const [isLoadingExtensions, setIsLoadingExtensions] = useState(false);
   const [extensionSearchQuery, setExtensionSearchQuery] = useState('');
-  
+
   // Theme state
   const [activeThemeId, setActiveThemeId] = useState(() => {
     try {
@@ -1391,10 +1411,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [extensionConfigs, setExtensionConfigs] = useState({}); // Map of extensionId -> config data
   const [loadingConfigs, setLoadingConfigs] = useState({}); // Map of extensionId -> loading state
   const [expandedConfigs, setExpandedConfigs] = useState({}); // Map of extensionId -> expanded state
-  
+
   // Command palette state
   const [showCommandPalette, setShowCommandPalette] = useState(false);
-  
+
   const isWindowsPlatform = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent || '');
   const mainLayoutRef = useRef(null);
   const pendingResizeRef = useRef({ left: null, right: null, bottom: null });
@@ -1482,12 +1502,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         }
       }
     };
-    
+
     // Listen for storage events (theme changes from other tabs/components)
     window.addEventListener('storage', handleThemeChange);
     // Also listen for custom theme change events
     window.addEventListener('themeChanged', handleThemeChange);
-    
+
     return () => {
       window.removeEventListener('storage', handleThemeChange);
       window.removeEventListener('themeChanged', handleThemeChange);
@@ -1571,7 +1591,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   }, [setOpenFiles]);
   const [activeTab, setActiveTab] = useState(null);
   const activeTabRef = useRef(null);
-  
+
   // Keep ref in sync with state
   useEffect(() => {
     activeTabRef.current = activeTab;
@@ -1673,7 +1693,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     quickSuggestions: true,
   });
   const [isEditorReady, setIsEditorReady] = useState(false);
-  
+
   // Apply theme to Monaco when activeThemeId changes
   useEffect(() => {
     if (!monacoRef.current || !isEditorReady || !editorRef.current) {
@@ -1684,7 +1704,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       });
       return;
     }
-    
+
     const applyThemeToMonaco = async () => {
       try {
         const monaco = monacoRef.current;
@@ -1693,16 +1713,16 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           console.warn('Monaco or editor not available');
           return;
         }
-        
+
         console.log('Applying theme to Monaco:', activeThemeId);
-        
+
         // Ensure Monaco instance is set in theme manager
         const { setMonacoInstance, getMonacoInstance, applyMonacoTheme } = await import('../utils/themeManager');
         const monacoInstance = getMonacoInstance();
         if (!monacoInstance) {
           setMonacoInstance(monaco);
         }
-        
+
         if (activeThemeId && activeThemeId !== 'vs-dark' && activeThemeId !== 'default') {
           // Load and register the theme, then apply it directly to the editor
           const success = await applyMonacoTheme(activeThemeId);
@@ -1734,10 +1754,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         }
       }
     };
-    
+
     applyThemeToMonaco();
   }, [activeThemeId, isEditorReady]);
-  
+
   // Chat states
   const [chatMessages, setChatMessages] = useState([]);
   const [messageFeedback, setMessageFeedback] = useState({});
@@ -1762,21 +1782,22 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [chatAbortController, setChatAbortController] = useState(null);
   const [chatTabs, setChatTabs] = useState([{ id: 1, title: 'New Chat', isActive: true }]);
   const [activeChatTab, setActiveChatTab] = useState(1);
+  const [allChatSessions, setAllChatSessions] = useState({}); // Map of tabId -> { messages, sessionId }
   const chatModeOptions = [
-    { 
-      id: 'ask', 
-      label: 'Ask', 
-      description: 'Get a single, direct answer. Read-only mode—no file modifications.' 
+    {
+      id: 'ask',
+      label: 'Ask',
+      description: 'Get a single, direct answer. Read-only mode—no file modifications.'
     },
-    { 
-      id: 'plan', 
-      label: 'Plan', 
-      description: 'Have the AI outline steps before acting. Shows plan first, then executes.' 
+    {
+      id: 'plan',
+      label: 'Plan',
+      description: 'Have the AI outline steps before acting. Shows plan first, then executes.'
     },
-    { 
-      id: 'agent', 
-      label: 'Agent', 
-      description: 'Let the AI act like a coding copilot. Fully autonomous execution.' 
+    {
+      id: 'agent',
+      label: 'Agent',
+      description: 'Let the AI act like a coding copilot. Fully autonomous execution.'
     }
   ];
   const webSearchOptions = [
@@ -1899,7 +1920,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   useEffect(() => {
     const loadExtensions = async () => {
       if (leftSidebarTab !== 'extensions' || !isConnected) return;
-      
+
       setIsLoadingExtensions(true);
       try {
         const [extensionsData, installedData] = await Promise.all([
@@ -1908,17 +1929,17 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         ]);
         const marketplaceExtensions = extensionsData?.extensions || [];
         const installed = installedData?.extensions || [];
-        
+
         // Merge installed extensions that aren't in marketplace results
         const installedIds = new Set(marketplaceExtensions.map(e => e.id?.toLowerCase()));
         const missingInstalled = installed.filter(inst => {
           const instId = inst.id?.toLowerCase();
           return instId && !installedIds.has(instId);
         });
-        
+
         // Combine marketplace extensions with missing installed extensions
         const allExtensions = [...marketplaceExtensions, ...missingInstalled];
-        
+
         console.log('Loaded extensions:', marketplaceExtensions.length, 'Installed:', installed.length, 'Missing from marketplace:', missingInstalled.length);
         console.log('Installed extension IDs:', installed.map(e => e.id));
         setExtensions(allExtensions);
@@ -1937,7 +1958,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   // Load extension configuration
   const loadExtensionConfig = useCallback(async (extensionId) => {
     if (loadingConfigs[extensionId]) return; // Already loading
-    
+
     setLoadingConfigs(prev => ({ ...prev, [extensionId]: true }));
     try {
       const config = await ApiService.getExtensionConfig(extensionId);
@@ -1957,18 +1978,18 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       const response = await ApiService.installExtension(extensionId);
       const message = response.message || 'Extension installed successfully';
       toast.success(message);
-      
+
       // Check if themes were installed
       if (response.themes && response.themes.length > 0) {
         toast.success(`${response.themes.length} theme(s) available! Go to Settings > Themes to apply.`, {
           duration: 6000
         });
       }
-      
+
       // Reload installed extensions
       const installedData = await ApiService.getInstalledExtensions();
       setInstalledExtensions(installedData?.extensions || []);
-      
+
       // Load config if it's an MCP server
       const extension = extensions.find(ext => ext.id === extensionId);
       if (extension?.category === 'MCP Servers') {
@@ -1987,7 +2008,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     try {
       const response = await ApiService.extractThemesFromExtension(extensionId);
       toast.success(response.message || `Extracted ${response.theme_count || 0} theme(s)`);
-      
+
       // Reload extensions to refresh theme data
       const extensionsData = await ApiService.getExtensions(extensionCategory, extensionSearchQuery);
       setExtensions(extensionsData?.extensions || []);
@@ -2006,7 +2027,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       // Reload installed extensions
       const installedData = await ApiService.getInstalledExtensions();
       setInstalledExtensions(installedData?.extensions || []);
-      
+
       // Clear config
       setExtensionConfigs(prev => {
         const newConfigs = { ...prev };
@@ -2207,11 +2228,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           const normalizedPrev = prev.map((step) =>
             step.status === 'active'
               ? {
-                  ...step,
-                  status: 'done',
-                  completedAt: now,
-                  durationMs: step.activatedAt ? Math.max(0, now - step.activatedAt) : null
-                }
+                ...step,
+                status: 'done',
+                completedAt: now,
+                durationMs: step.activatedAt ? Math.max(0, now - step.activatedAt) : null
+              }
               : step
           );
           const nextStep = buildPhaseStep(status, now);
@@ -2385,23 +2406,23 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     try {
       await ApiService.selectModel(modelName);
       setShowAutoDropdown(false);
-      
+
       // Persist to localStorage
       try {
         window.localStorage.setItem('aiSelectedModel', modelName);
       } catch (error) {
         console.warn('Failed to save selected model to localStorage:', error);
       }
-      
+
       // Notify parent component about model change
       if (onModelSelect) {
         onModelSelect(modelName);
       }
-      
+
       // Update chat status to reflect new model
       const status = await ApiService.getChatStatus();
       setChatStatus(status);
-      
+
       toast.success(`Selected model: ${modelName}`);
     } catch (error) {
       console.error('Failed to select model:', error);
@@ -2415,7 +2436,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [showChatHistoryDialog, setShowChatHistoryDialog] = useState(false);
   const [chatHistoryFilter, setChatHistoryFilter] = useState('');
   const [chatHistoryDetails, setChatHistoryDetails] = useState({}); // Map of sessionId -> full session data
-  
+
   // File/Folder picker states
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [showFilePicker, setShowFilePicker] = useState(false);
@@ -2425,12 +2446,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const [pickerSelectedPath, setPickerSelectedPath] = useState('');
   const [pickerMode, setPickerMode] = useState('folder'); // 'folder' or 'file'
   const [pickerContextMenu, setPickerContextMenu] = useState({ visible: false, x: 0, y: 0, target: null });
-  
+
   // Inline editing for new file/folder creation
   const [creatingItem, setCreatingItem] = useState(null); // { parentPath, type: 'file' | 'folder', tempId }
   const [creatingItemName, setCreatingItemName] = useState('');
   const creatingItemInputRef = useRef(null);
-  
+
   // Terminal states
   const [terminalSessionId, setTerminalSessionId] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -2737,7 +2758,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   useEffect(() => {
     const monaco = monacoRef.current;
     const editor = editorRef.current;
-    
+
     if (!monaco || !editor || !isEditorReady || !activeTab) {
       return;
     }
@@ -2786,7 +2807,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
             const line = position.lineNumber;
             const column = position.column;
-            
+
             // Validate line and column
             if (!line || line < 1 || !column || column < 1) {
               return { items: [] };
@@ -2799,7 +2820,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
               // Model might be disposed
               return { items: [] };
             }
-            
+
             // Validate content
             if (typeof content !== 'string') {
               return { items: [] };
@@ -2888,7 +2909,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                     try {
                       // Sanitize insert text - remove any problematic characters
                       let insertText = response.insert_text;
-                      
+
                       // Ensure insertText is a valid string
                       if (typeof insertText !== 'string') {
                         console.warn('Invalid insert_text type:', typeof insertText);
@@ -2931,7 +2952,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                       const startLine = Math.max(1, Math.min(modelLineCount, (response.range_start_line || line - 1) + 1));
                       const startColumn = Math.max(1, (response.range_start_column || column - 1) + 1);
                       const endLine = Math.max(startLine, Math.min(modelLineCount, (response.range_end_line || line - 1) + 1));
-                      
+
                       // Get the actual line length to validate column
                       let endLineText;
                       try {
@@ -2967,10 +2988,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                       }
 
                       // Validate the range
-                      if (!range || 
-                          range.startLineNumber < 1 || range.startColumn < 1 ||
-                          range.endLineNumber < range.startLineNumber ||
-                          (range.endLineNumber === range.startLineNumber && range.endColumn < range.startColumn)) {
+                      if (!range ||
+                        range.startLineNumber < 1 || range.startColumn < 1 ||
+                        range.endLineNumber < range.startLineNumber ||
+                        (range.endLineNumber === range.startLineNumber && range.endColumn < range.startColumn)) {
                         console.warn('Invalid range for completion:', range);
                         safeResolve({ items: [] });
                         return;
@@ -3053,7 +3074,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         }
         completionDebounceTimerRef.current = null;
       }
-      
+
       // Dispose provider with extra error handling
       if (completionProviderRef.current) {
         try {
@@ -3133,7 +3154,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       console.error('Error saving terminal history:', error);
     }
   }, [terminalHistory]);
-  
+
   const getLanguageFromPath = useCallback((path) => {
     const ext = normalizeEditorPath(path).split('.').pop().toLowerCase();
     const langMap = {
@@ -3208,12 +3229,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
       for (const file of prev) {
         const normalizedPath = normalizeEditorPath(file.path);
-        
+
         // Check if path needs normalization
         if (file.path !== normalizedPath) {
           needsUpdate = true;
         }
-        
+
         // Check if we've seen this normalized path before
         if (!seen.has(normalizedPath)) {
           seen.set(normalizedPath, true);
@@ -3251,7 +3272,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     if (!container || chatMessages.length === 0) {
       return;
     }
-    
+
     const distanceFromBottom =
       container.scrollHeight - container.scrollTop - container.clientHeight;
     const threshold = 48;
@@ -3261,11 +3282,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     const containerRect = container.getBoundingClientRect();
     const viewportTop = containerRect.top;
     const viewportBottom = containerRect.bottom;
-    
+
     // Find the user message that's currently visible and closest to the top of viewport
     let visibleUserMessageId = null;
     let closestToTop = Infinity;
-    
+
     // Check all user messages to find the one visible and closest to top
     for (let i = 0; i < chatMessages.length; i++) {
       const message = chatMessages[i];
@@ -3275,16 +3296,16 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           const rect = messageElement.getBoundingClientRect();
           const messageTop = rect.top;
           const messageBottom = rect.bottom;
-          
+
           // Check if message is visible in viewport (at least partially)
           const isVisible = messageBottom > viewportTop && messageTop < viewportBottom;
-          
+
           if (isVisible) {
             // Calculate distance from top of viewport (prefer messages at or above the top)
-            const distanceFromTop = messageTop >= viewportTop 
+            const distanceFromTop = messageTop >= viewportTop
               ? messageTop - viewportTop  // Message is below top, use positive distance
               : viewportTop - messageTop + 1000; // Message is above top, heavily penalize
-            
+
             // Find the message closest to the top of viewport
             if (distanceFromTop < closestToTop) {
               closestToTop = distanceFromTop;
@@ -3294,7 +3315,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         }
       }
     }
-    
+
     // If pinned to bottom, always show the last user message
     if (isPinned) {
       let lastUserMessage = null;
@@ -3308,12 +3329,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         visibleUserMessageId = lastUserMessage.id;
       }
     }
-    
+
     // If no visible message found when scrolled up, find the last user message before scroll position
     if (!visibleUserMessageId && !isPinned) {
       const scrollTop = container.scrollTop;
       let lastUserMessageBeforeScroll = null;
-      
+
       for (let i = chatMessages.length - 1; i >= 0; i--) {
         const message = chatMessages[i];
         if (message.role === 'user') {
@@ -3321,7 +3342,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           if (messageElement) {
             const rect = messageElement.getBoundingClientRect();
             const elementTop = rect.top - containerRect.top + scrollTop;
-            
+
             // Find the last user message that's at or above current scroll position
             if (elementTop <= scrollTop + 150) {
               lastUserMessageBeforeScroll = message;
@@ -3330,12 +3351,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           }
         }
       }
-      
+
       if (lastUserMessageBeforeScroll) {
         visibleUserMessageId = lastUserMessageBeforeScroll.id;
       }
     }
-    
+
     // Update pinned input with the found message
     if (visibleUserMessageId) {
       const targetMessage = chatMessages.find(m => m.id === visibleUserMessageId);
@@ -3419,26 +3440,26 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   const saveChatSession = useCallback(async (conversationId = null, messagesOverride = null) => {
     // Use provided messages or get latest from state
     const messagesToCheck = messagesOverride || chatMessages;
-    
+
     // Only save if there are messages and at least one user message
     if (messagesToCheck.length === 0) return;
-    
+
     const userMessages = messagesToCheck.filter(msg => msg.role === 'user');
     const assistantMessages = messagesToCheck.filter(msg => msg.role === 'assistant');
-    
+
     // Only save if there's at least one user message and one assistant message (complete exchange)
     if (userMessages.length === 0 || assistantMessages.length === 0) return;
-    
+
     // Create a unique key for this save operation to prevent duplicates
     // Use conversation_id + message count for better reliability
     const saveKey = `${conversationId || 'no-id'}-${messagesToCheck.length}`;
-    
+
     // Prevent duplicate saves for the same conversation and message count
     if (saveChatSessionRef.current.has(saveKey)) {
       return;
     }
     saveChatSessionRef.current.set(saveKey, true);
-    
+
     try {
       const messagesToSave = messagesToCheck.map(msg => ({
         role: msg.role,
@@ -3500,13 +3521,13 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
       // Create new session only if no existing session was found
       const firstUserMessage = userMessages[0];
-      const title = firstUserMessage 
+      const title = firstUserMessage
         ? (firstUserMessage.content.substring(0, 60).trim() + (firstUserMessage.content.length > 60 ? '…' : '')) || 'Untitled Chat'
         : 'Untitled Chat';
-      
+
       const session = await ApiService.createChatSession(title, messagesToSave, conversationId);
       setCurrentChatSessionId(session.id);
-      
+
       // Reload past chats to show the new one
       const sessions = await ApiService.listChatSessions();
       setPastChats(sessions || []);
@@ -3538,10 +3559,10 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           messageId: msg.messageId || null,
           conversationId: msg.conversationId || null
         }));
-        
+
         setChatMessages(restoredMessages);
         setCurrentChatSessionId(session.id);
-        
+
         // Clear save ref entries for this conversation_id to allow fresh saves
         if (session.conversation_id) {
           // Remove all entries that start with this conversation_id
@@ -3551,7 +3572,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
             }
           }
         }
-        
+
         toast.success(`Restored chat: ${session.title}`);
       }
     } catch (error) {
@@ -3576,6 +3597,88 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     saveChatSessionRef.current.clear();
   }, []);
 
+  const handleSwitchChatTab = useCallback((newTabId) => {
+    if (newTabId === activeChatTab) return;
+
+    // Save current session to the store
+    setAllChatSessions(prev => ({
+      ...prev,
+      [activeChatTab]: {
+        messages: chatMessages,
+        sessionId: currentChatSessionId
+      }
+    }));
+
+    // Load target session from the store (or initialize empty)
+    // Note: We use the functional update of setAllChatSessions above, but for reading *cached* data
+    // for the *target* tab, we rely on the `allChatSessions` available in current closure.
+    // If the target tab was visited before, it will be in `allChatSessions`.
+    // We assume `allChatSessions` is up to date for 'newTabId' because we are switching *to* it.
+    const targetSession = allChatSessions[newTabId] || { messages: [], sessionId: null };
+
+    setChatMessages(targetSession.messages || []);
+    setCurrentChatSessionId(targetSession.sessionId || null);
+    setActiveChatTab(newTabId);
+
+    // Also clear input fields as they are global to the component (optional, maybe we want to persist drafts too?)
+    // For now, let's clear inputs to avoid confusion, or keep them if they are bound to messages?
+    // The inputs (chatInput, composerInput) are global states. Ideally they should be per-tab too.
+    // Given the scope, clearing them is safer than showing input for wrong chat.
+    setChatInput('');
+    setComposerInput('');
+  }, [activeChatTab, chatMessages, currentChatSessionId, allChatSessions]);
+
+  const handleNewChatTab = useCallback(() => {
+    // Save current session
+    setAllChatSessions(prev => ({
+      ...prev,
+      [activeChatTab]: {
+        messages: chatMessages,
+        sessionId: currentChatSessionId
+      }
+    }));
+
+    const newId = Math.max(...chatTabs.map(t => t.id), 0) + 1;
+    setChatTabs(prev => prev.map(t => ({ ...t, isActive: false })).concat([{ id: newId, title: 'New Chat', isActive: true }]));
+
+    // Switch to new tab and initialize
+    setActiveChatTab(newId);
+    startNewChat();
+
+    // Ensure the new tab starts with empty session in store (implicit by not being in map yet)
+  }, [activeChatTab, chatMessages, currentChatSessionId, chatTabs, startNewChat]);
+
+  const handleCloseChatTab = useCallback((e, tabId) => {
+    e.stopPropagation();
+    if (chatTabs.length <= 1) return;
+
+    // Remove from store
+    setAllChatSessions(prev => {
+      const next = { ...prev };
+      delete next[tabId];
+      return next;
+    });
+
+    const newTabs = chatTabs.filter(t => t.id !== tabId);
+    setChatTabs(newTabs);
+
+    if (activeChatTab === tabId) {
+      // If closing active tab, switch to the first available one (usually previous or next)
+      // We need to load its data.
+      const nextTab = newTabs[0];
+      if (nextTab) {
+        // We can't use handleSwitchChatTab directly because activeChatTab is still the old one in this closure
+        // and we don't want to save the closed tab's data again.
+        const targetSession = allChatSessions[nextTab.id] || { messages: [], sessionId: null };
+        setChatMessages(targetSession.messages || []);
+        setCurrentChatSessionId(targetSession.sessionId || null);
+        setActiveChatTab(nextTab.id);
+        setChatInput('');
+        setComposerInput('');
+      }
+    }
+  }, [chatTabs, activeChatTab, allChatSessions]);
+
   useEffect(() => {
     if (bottomPanelTab !== 'terminal') return;
     if (terminalOutputRef.current) {
@@ -3586,16 +3689,16 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   // Close file suggestions when clicking outside
   useEffect(() => {
     const handleClickOutside = (e) => {
-      if (showFileSuggestions && 
-          !e.target.closest('.file-suggestions-container') &&
-          !e.target.closest('input[placeholder*="@"]') &&
-          !e.target.closest('input[placeholder*="Type your message"]')) {
+      if (showFileSuggestions &&
+        !e.target.closest('.file-suggestions-container') &&
+        !e.target.closest('input[placeholder*="@"]') &&
+        !e.target.closest('input[placeholder*="Type your message"]')) {
         setShowFileSuggestions(false);
       }
-      
+
       // Close Auto dropdown when clicking outside
-      if (showAutoDropdown && 
-          !e.target.closest('[data-auto-dropdown]')) {
+      if (showAutoDropdown &&
+        !e.target.closest('[data-auto-dropdown]')) {
         setShowAutoDropdown(false);
       }
     };
@@ -3620,7 +3723,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       let targetPath = options.overridePath
         ? options.overridePath.replace(/\\/g, '/')
         : file.path;
-      
+
       // Ensure path is resolved relative to workspace root
       targetPath = resolveWorkspacePath(targetPath);
 
@@ -4114,7 +4217,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     try {
       const sessions = await ApiService.listChatSessions();
       const detailsMap = {};
-      
+
       // Load full details for each session
       await Promise.all(
         sessions.map(async (chat) => {
@@ -4128,7 +4231,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           }
         })
       );
-      
+
       setChatHistoryDetails(detailsMap);
     } catch (error) {
       console.error('Failed to load chat history details:', error);
@@ -4163,28 +4266,28 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     const lowered = chatHistoryFilter.toLowerCase();
     return pastChats.filter((chat) => {
       const titleMatch = (chat.title || '').toLowerCase().includes(lowered);
-      
+
       // Check in full details if available, otherwise check summary
       const fullChat = chatHistoryDetails[chat.id] || chat;
-      
+
       // Search in message content if available
       if (fullChat.messages && Array.isArray(fullChat.messages)) {
-        const contentMatch = fullChat.messages.some(msg => 
+        const contentMatch = fullChat.messages.some(msg =>
           (msg.content || '').toLowerCase().includes(lowered)
         );
-        
+
         // Also search in plan summaries
         const planMatch = fullChat.messages.some(msg => {
           if (msg.plan) {
             const planSummary = (msg.plan.summary || '').toLowerCase();
-            const planTasks = Array.isArray(msg.plan.tasks) 
+            const planTasks = Array.isArray(msg.plan.tasks)
               ? msg.plan.tasks.map(t => (t.title || t.summary || '').toLowerCase()).join(' ')
               : '';
             return planSummary.includes(lowered) || planTasks.includes(lowered);
           }
           return false;
         });
-        
+
         return titleMatch || contentMatch || planMatch;
       }
       return titleMatch;
@@ -4420,19 +4523,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   const handleDeletePath = useCallback(async (target) => {
     if (!target) return;
-    
+
     // Check if we have multiple selections
     const hasMultipleSelections = selectedFiles.size > 1;
     const isTargetSelected = target && selectedFiles.has(normalizeEditorPath(target.path));
-    
+
     let itemsToDelete = [];
-    
+
     if (hasMultipleSelections && isTargetSelected) {
       // Delete all selected items
       const allItems = getAllTreeItems(fileTree);
       selectedFiles.forEach(selectedPath => {
-        const item = findItemInTree(fileTree, selectedPath) || 
-                     allItems.find(item => normalizeEditorPath(item.path) === normalizeEditorPath(selectedPath));
+        const item = findItemInTree(fileTree, selectedPath) ||
+          allItems.find(item => normalizeEditorPath(item.path) === normalizeEditorPath(selectedPath));
         if (item) {
           itemsToDelete.push(item);
         }
@@ -4441,31 +4544,31 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       // Delete only the target item
       itemsToDelete = [target];
     }
-    
+
     if (itemsToDelete.length === 0) return;
-    
+
     const itemNames = itemsToDelete.map(item => item.name).join(', ');
     const confirmMessage = itemsToDelete.length === 1
       ? `Delete ${itemsToDelete[0].name}? This cannot be undone.`
       : `Delete ${itemsToDelete.length} items (${itemNames})? This cannot be undone.`;
-    
+
     const confirmed = window.confirm(confirmMessage);
     if (!confirmed) return;
-    
+
     try {
       // Delete all items
       const deletePromises = itemsToDelete.map(item => ApiService.deleteFile(item.path));
       await Promise.all(deletePromises);
-      
+
       // Remove all deleted paths from references
       itemsToDelete.forEach(item => {
         removePathReferences(item.path);
       });
-      
+
       // Clear selections
       setSelectedFiles(new Set());
       setLastSelectedFile(null);
-      
+
       toast.success(`Deleted ${itemsToDelete.length} item${itemsToDelete.length > 1 ? 's' : ''} successfully`);
       await refreshFileTree();
     } catch (error) {
@@ -4492,7 +4595,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         setShowCommandPalette(true);
         return;
       }
-      
+
       // Don't trigger shortcuts when typing in inputs/textarea
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
         // Allow Ctrl+S, Ctrl+P, and Ctrl+Shift+P in inputs
@@ -4500,19 +4603,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           return;
         }
       }
-      
+
       // Ctrl+B: Toggle left sidebar (files)
       if (e.ctrlKey && e.key === 'b') {
         e.preventDefault();
         setLeftSidebarVisible(prev => !prev);
       }
-      
+
       // Ctrl+J: Toggle bottom panel (terminal)
       if (e.ctrlKey && e.key === 'j') {
         e.preventDefault();
         setBottomPanelVisible(prev => !prev);
       }
-      
+
       // Ctrl+\: Toggle right sidebar (chat)
       if (e.ctrlKey && e.key === '\\') {
         e.preventDefault();
@@ -4542,14 +4645,14 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       }
 
       // Delete key: Delete selected files/folders (only when not typing in inputs)
-      if (e.key === 'Delete' && selectedFiles.size > 0 && 
-          e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+      if (e.key === 'Delete' && selectedFiles.size > 0 &&
+        e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
         e.preventDefault();
         // Get the first selected item to use as target for handleDeletePath
         const allItems = getAllTreeItems(fileTree);
         const firstSelectedPath = Array.from(selectedFiles)[0];
-        const targetItem = findItemInTree(fileTree, firstSelectedPath) || 
-                          allItems.find(item => normalizeEditorPath(item.path) === normalizeEditorPath(firstSelectedPath));
+        const targetItem = findItemInTree(fileTree, firstSelectedPath) ||
+          allItems.find(item => normalizeEditorPath(item.path) === normalizeEditorPath(firstSelectedPath));
         if (targetItem) {
           handleDeletePath(targetItem);
         }
@@ -4696,7 +4799,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   const handleConfirmCreating = useCallback(async () => {
     if (!creatingItem) return;
-    
+
     const name = creatingItemName.trim();
     if (!name) {
       toast.error('Please enter a name');
@@ -4710,7 +4813,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
 
     const fullPath = joinPaths(creatingItem.parentPath, name);
-    
+
     try {
       if (creatingItem.type === 'file') {
         await ApiService.writeFile(fullPath, '');
@@ -4731,7 +4834,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         await ApiService.createDirectory(fullPath);
         toast.success(`Created folder ${name}`);
       }
-      
+
       await refreshFileTree();
       setCreatingItem(null);
       setCreatingItemName('');
@@ -4749,7 +4852,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       closePickerContextMenu();
       return;
     }
-    
+
     // Validate name
     if (/[<>:"|?*]/.test(name.trim())) {
       toast.error('Invalid characters in name. Cannot contain: < > : " | ? *');
@@ -4758,7 +4861,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
 
     const fullPath = joinPaths(basePath, name.trim());
-    
+
     try {
       await ApiService.writeFile(fullPath, '');
       toast.success(`Created ${name.trim()}`);
@@ -4778,7 +4881,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       closePickerContextMenu();
       return;
     }
-    
+
     // Validate name
     if (/[<>:"|?*]/.test(name.trim())) {
       toast.error('Invalid characters in name. Cannot contain: < > : " | ? *');
@@ -4787,7 +4890,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     }
 
     const fullPath = joinPaths(basePath, name.trim());
-    
+
     try {
       await ApiService.createDirectory(fullPath);
       toast.success(`Created folder ${name.trim()}`);
@@ -4805,7 +4908,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
     if (creatingItem && creatingItemInputRef.current) {
       creatingItemInputRef.current.focus();
       creatingItemInputRef.current.select();
-      
+
       // If creating in a folder, ensure it's expanded
       if (creatingItem.parentPath && creatingItem.parentPath !== (projectRootPath || currentPath || '.')) {
         setExpandedFolders(prev => {
@@ -4977,11 +5080,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   const handleAddSelectionToChat = useCallback(() => {
     if (!editorSelection || !activeTab) return;
-    
+
     const { startLine, endLine } = editorSelection;
     const relativePath = getRelativePath(activeTab);
     const fileName = relativePath.split('/').pop() || relativePath;
-    
+
     // Add as a chip instead of text
     const codeSelection = {
       id: Date.now() + Math.random(),
@@ -4991,7 +5094,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       endLine: endLine,
       relativePath: relativePath
     };
-    
+
     setAttachedCodeSelections(prev => [...prev, codeSelection]);
     requestAnimationFrame(() => composerInputRef.current?.focus());
     setEditorSelection(null);
@@ -5002,7 +5105,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   useEffect(() => {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
-    
+
     if (!editor || !monaco || !isEditorReady || !activeTab) {
       // Remove widget if editor is not ready
       if (addToChatWidgetRef.current) {
@@ -5033,7 +5136,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
       const relativePath = getRelativePath(activeTab);
       const fileName = relativePath.split('/').pop() || relativePath;
       const lineRange = startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`;
-      
+
       // Use a consistent widget ID based on selection to prevent duplicates
       const widgetId = `add-to-chat-widget-${activeTab}-${startLine}-${endLine}`;
       const domNode = document.createElement('div');
@@ -5057,20 +5160,20 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         transition: all 0.2s ease;
         pointer-events: auto;
       `;
-      
+
       // Create icon (using a simple code icon representation)
       const iconSpan = document.createElement('span');
       iconSpan.innerHTML = '📄';
       iconSpan.style.cssText = 'font-size: 14px; line-height: 1; display: flex; align-items: center;';
-      
+
       // Create text span with "Add to chat" button text
       const textSpan = document.createElement('span');
       textSpan.textContent = 'Add to chat';
       textSpan.style.cssText = 'font-weight: 500;';
-      
+
       // domNode.appendChild(iconSpan);
       domNode.appendChild(textSpan);
-      
+
       // Add hover effect
       domNode.addEventListener('mouseenter', () => {
         domNode.style.background = 'rgba(37, 99, 235, 0.95)';
@@ -5080,20 +5183,20 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         domNode.style.background = 'rgba(59, 130, 246, 0.95)';
         domNode.style.transform = 'scale(1)';
       });
-      
+
       // Add click handler
       domNode.addEventListener('click', (e) => {
         e.stopPropagation();
         handleAddSelectionToChat();
       });
-      
+
       const widget = {
         getId: () => widgetId,
         getDomNode: () => domNode,
         getPosition: () => {
           const model = editor.getModel();
           if (!model) return null;
-          
+
           // Position widget at the start of the selection (or above if at line 1)
           const lineNumber = startLine > 1 ? startLine - 1 : startLine;
           return {
@@ -5108,11 +5211,11 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
           };
         }
       };
-      
+
       editor.addContentWidget(widget);
       addToChatWidgetRef.current = widget;
     }
-    
+
     return () => {
       // Cleanup on unmount
       if (addToChatWidgetRef.current && editor) {
@@ -6031,12 +6134,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         const allItems = getAllTreeItems(fileTree);
         const currentIndex = allItems.findIndex(item => normalizeEditorPath(item.path) === normalizeEditorPath(normalizedPath));
         const lastIndex = allItems.findIndex(item => normalizeEditorPath(item.path) === normalizeEditorPath(lastSelectedFile));
-        
+
         if (currentIndex !== -1 && lastIndex !== -1) {
           const startIndex = Math.min(currentIndex, lastIndex);
           const endIndex = Math.max(currentIndex, lastIndex);
           const rangeItems = allItems.slice(startIndex, endIndex + 1);
-          
+
           setSelectedFiles(prev => {
             const newSet = new Set(prev);
             rangeItems.forEach(item => {
@@ -6056,7 +6159,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         setSelectedFiles(new Set([normalized]));
         setLastSelectedFile(normalizedPath);
       }
-      
+
       // Always toggle folder expansion on click (unless it's a range selection)
       if (!isShiftClick) {
         toggleFolder(file.path);
@@ -6071,12 +6174,12 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         const allItems = getAllTreeItems(fileTree);
         const currentIndex = allItems.findIndex(item => normalizeEditorPath(item.path) === normalizeEditorPath(normalizedPath));
         const lastIndex = allItems.findIndex(item => normalizeEditorPath(item.path) === normalizeEditorPath(lastSelectedFile));
-        
+
         if (currentIndex !== -1 && lastIndex !== -1) {
           const startIndex = Math.min(currentIndex, lastIndex);
           const endIndex = Math.max(currentIndex, lastIndex);
           const rangeItems = allItems.slice(startIndex, endIndex + 1);
-          
+
           setSelectedFiles(prev => {
             const newSet = new Set(prev);
             rangeItems.forEach(item => {
@@ -6101,7 +6204,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
 
   const toggleFolder = async (path) => {
     const isCurrentlyExpanded = expandedFolders.has(path);
-    
+
     if (!isCurrentlyExpanded) {
       // Expanding - check if we need to load children
       const findFolderInTree = (nodes, targetPath) => {
@@ -6114,19 +6217,19 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         }
         return null;
       };
-      
+
       const folder = findFolderInTree(fileTree, path);
-      
+
       // If folder exists but has no children loaded, or has_more_children flag, load them
       if (folder && (!folder.children || folder.children.length === 0 || folder.has_more_children)) {
         try {
           setIsFileTreeLoading(true);
           const response = await ApiService.getFileTree(path, 1); // Load only immediate children
-          
+
           if (response?.tree) {
             const normalizedTree = normalizeTreeNode(response.tree);
             const sortedChildren = sortTreeNodes(normalizedTree.children || []);
-            
+
             // Update the file tree to include the loaded children
             const updateTreeWithChildren = (nodes) => {
               return nodes.map(node => {
@@ -6146,7 +6249,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
                 return node;
               });
             };
-            
+
             setFileTree(prev => updateTreeWithChildren(prev));
           }
         } catch (error) {
@@ -6157,7 +6260,7 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
         }
       }
     }
-    
+
     // Toggle expansion state
     setExpandedFolders(prev => {
       const next = new Set(prev);
@@ -6247,45 +6350,45 @@ const IDELayout = ({ isConnected, currentModel, availableModels, onModelSelect }
   //   blocked: 'border-red-700 bg-red-600/10 text-red-300'
   // };
 
-const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
-  if (!Array.isArray(entries) || entries.length === 0) {
-    return null;
-  }
+  const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return null;
+    }
 
-  const palette =
-    variant === 'primary'
-      ? 'border-primary-700/50 bg-primary-900/20 text-primary-100'
-      : 'border-dark-700 bg-dark-900/40 text-dark-200';
+    const palette =
+      variant === 'primary'
+        ? 'border-primary-700/50 bg-primary-900/20 text-primary-100'
+        : 'border-dark-700 bg-dark-900/40 text-dark-200';
 
-  return (
-    <div className="mt-2 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
-      {entries.map(({ label, value }, idx) => (
-        <div
-          key={`${label}-${idx}`}
-          className={`rounded-md border px-2 py-1.5 ${palette}`}
-        >
-          <p className="text-[10px] uppercase tracking-wide opacity-70">{label}</p>
-          <p className="mt-0.5 truncate">{value}</p>
-        </div>
-      ))}
-    </div>
-  );
-};
+    return (
+      <div className="mt-2 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-2">
+        {entries.map(({ label, value }, idx) => (
+          <div
+            key={`${label}-${idx}`}
+            className={`rounded-md border px-2 py-1.5 ${palette}`}
+          >
+            <p className="text-[10px] uppercase tracking-wide opacity-70">{label}</p>
+            <p className="mt-0.5 truncate">{value}</p>
+          </div>
+        ))}
+      </div>
+    );
+  };
 
 
   const renderAiPlan = (plan) => {
     if (!plan) {
       return null;
     }
-    
+
     // Removed verbose logging - renderAiPlan is called frequently during renders
     // Use console.debug if you need to debug plan rendering
-    
+
     const summary = normalizeChatInput(
       plan.summary || plan.thoughts || plan.description || ''
     );
     const tasks = Array.isArray(plan.tasks) ? plan.tasks : [];
-    
+
     // If plan has no summary and no tasks, don't render
     if (!summary && tasks.length === 0) {
       return null;
@@ -6304,7 +6407,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       const status = (t.status || 'pending').toLowerCase().trim();
       return !['completed', 'done', 'finished', 'in_progress', 'in-progress', 'active', 'working', 'executing'].includes(status);
     });
-    
+
     // Calculate progress percentage
     const totalTasks = tasks.length;
     const completedCount = completedTasks.length;
@@ -6347,17 +6450,17 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             )}
           </div>
         </div>
-        
+
         {/* Progress bar */}
         {totalTasks > 0 && (
           <div className="w-full bg-dark-800 rounded-full h-2 overflow-hidden">
-            <div 
+            <div
               className="h-full bg-gradient-to-r from-primary-500 to-primary-400 transition-all duration-500 ease-out"
               style={{ width: `${progressPercentage}%` }}
             />
           </div>
         )}
-        
+
         {summary && (
           <div className="bg-primary-900/20 border border-primary-700/40 rounded-lg p-3">
             <p className="text-sm text-primary-100 leading-relaxed">{summary}</p>
@@ -6375,33 +6478,31 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 const status = (task.status || 'pending').toLowerCase().trim();
                 const isCompleted = status === 'completed' || status === 'done' || status === 'finished';
                 const isInProgress = status === 'in_progress' || status === 'in-progress' || status === 'active' || status === 'working' || status === 'executing';
-                
+
                 const title = normalizeChatInput(
                   task.title || task.summary || `Task ${idx + 1}`
                 );
                 const details = task.details != null ? normalizeChatInput(task.details) : '';
-                
+
                 return (
                   <div
                     key={task.id || `${task.title || 'task'}-${idx}`}
-                    className={`flex items-start gap-3 px-3 py-2 rounded-lg transition-all ${
-                      isCompleted 
-                        ? 'bg-emerald-900/20 border border-emerald-700/30' 
-                        : isInProgress
+                    className={`flex items-start gap-3 px-3 py-2 rounded-lg transition-all ${isCompleted
+                      ? 'bg-emerald-900/20 border border-emerald-700/30'
+                      : isInProgress
                         ? 'bg-primary-900/20 border border-primary-700/30'
                         : 'bg-dark-800/30 border border-dark-700/30'
-                    }`}
+                      }`}
                   >
                     {/* Checkbox */}
                     <div className="flex-shrink-0 mt-0.5">
                       {isCompleted ? (
                         <CheckCircle className="w-5 h-5 text-emerald-400" />
                       ) : (
-                        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                          isInProgress 
-                            ? 'border-primary-400 bg-primary-900/30' 
-                            : 'border-dark-500 bg-dark-800'
-                        }`}>
+                        <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${isInProgress
+                          ? 'border-primary-400 bg-primary-900/30'
+                          : 'border-dark-500 bg-dark-800'
+                          }`}>
                           {isInProgress && (
                             <Loader2 className="w-3 h-3 text-primary-400 animate-spin" />
                           )}
@@ -6410,23 +6511,21 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                     </div>
                     {/* Task content */}
                     <div className="flex-1 min-w-0">
-                      <div className={`text-sm ${
-                        isCompleted 
-                          ? 'text-emerald-200 line-through' 
-                          : isInProgress
+                      <div className={`text-sm ${isCompleted
+                        ? 'text-emerald-200 line-through'
+                        : isInProgress
                           ? 'text-primary-200 font-medium'
                           : 'text-dark-200'
-                      }`}>
+                        }`}>
                         {title}
                       </div>
                       {details && (
-                        <div className={`text-xs mt-0.5 ${
-                          isCompleted 
-                            ? 'text-emerald-300/70' 
-                            : isInProgress
+                        <div className={`text-xs mt-0.5 ${isCompleted
+                          ? 'text-emerald-300/70'
+                          : isInProgress
                             ? 'text-primary-300/80'
                             : 'text-dark-400'
-                        }`}>
+                          }`}>
                           {details}
                         </div>
                       )}
@@ -6586,7 +6685,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
 
     let finalMessage = normalizedMessage || "";
     // Allow empty message when images or files are present
-    
+
     // Add file contents to the message if files are attached
     const filesToUse = filesToInclude || attachedFiles;
     if (filesToUse && filesToUse.length > 0) {
@@ -6609,18 +6708,18 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     const fileMentions = detectFileMentions(finalMessage);
     const mentionedFiles = [];
     const isNewScriptRequest = detectNewScriptIntent(finalMessage);
-    
+
     // Load content for mentioned files
     for (const mention of fileMentions) {
       // Try to find exact match in open files first
-      const exactMatch = openFiles.find(f => 
+      const exactMatch = openFiles.find(f =>
         f.name === mention || f.path === mention || f.path.endsWith(mention)
       );
       if (exactMatch) {
         mentionedFiles.push(exactMatch);
         continue;
       }
-      
+
       // Try to find in file tree
       const findInTree = (tree, name) => {
         for (const item of tree) {
@@ -6634,7 +6733,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         }
         return null;
       };
-      
+
       const foundFile = findInTree(fileTree, mention);
       if (foundFile) {
         // Try to load file content if not already loaded
@@ -6661,7 +6760,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     const messageImages = imagesToUseForMessage.map(img => {
       return typeof img === 'string' ? { id: Date.now() + Math.random(), dataUrl: img } : img;
     }).filter(img => img && img.dataUrl);
-    
+
     const userMessage = {
       id: Date.now(),
       role: 'user',
@@ -6760,7 +6859,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       let streamingResponse = "";
       let assistantMessageId = Date.now() + 1;
       let currentRound = 1;
-      
+
       // Create initial assistant message for streaming
       const assistantMessage = {
         id: assistantMessageId,
@@ -6775,10 +6874,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         thinking: '',
         price_data: null,
       };
-      
+
       // Add the message immediately so we can update it
       setChatMessages(prev => [...prev, assistantMessage]);
-      
+
       try {
         // Extract base64 data URLs from attached images (use provided images or fall back to attachedImages)
         const imagesToUse = imagesToInclude || attachedImages;
@@ -6789,7 +6888,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         }).filter(Boolean);
         console.log('[FRONTEND DEBUG] Image data URLs:', imageDataUrls.length, 'URLs extracted');
         console.log('[FRONTEND DEBUG] First image preview:', imageDataUrls[0]?.substring(0, 100));
-        
+
         // Prepare files for sending
         const filesToUse = filesToInclude || attachedFiles;
         const filesToSend = filesToUse && filesToUse.length > 0 ? filesToUse.map(f => ({
@@ -6797,7 +6896,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           content: typeof f.content === 'string' ? f.content : '',
           type: f.type || 'text/plain'
         })) : null;
-        
+
         console.log('[FRONTEND DEBUG] Sending to API - images count:', imageDataUrls.length, 'images:', imageDataUrls.length > 0 ? imageDataUrls : null);
         await ApiService.sendMessageStream({
           message: finalMessage,
@@ -6836,10 +6935,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               debugInfo.planSummary = chunk.ai_plan?.summary;
             }
             console.log('[DEBUG] Received chunk:', JSON.stringify(debugInfo, null, 2));
-            
+
             if (chunk.type === 'thinking') {
               streamingThinking += chunk.content || '';
-              setChatMessages(prev => prev.map(msg => 
+              setChatMessages(prev => prev.map(msg =>
                 msg.id === assistantMessageId
                   ? { ...msg, thinking: streamingThinking }
                   : msg
@@ -6859,7 +6958,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 streamingResponse += chunk.content || '';
               }
               const normalizedContent = normalizeChatInput(streamingResponse);
-              setChatMessages(prev => prev.map(msg => 
+              setChatMessages(prev => prev.map(msg =>
                 msg.id === assistantMessageId
                   ? { ...msg, content: normalizedContent, rawContent: streamingResponse }
                   : msg
@@ -6870,7 +6969,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               streamingResponse = '';
               // Keep thinking as it may contain useful context, but clear the response content
               // Update the message to show we're processing tool results
-              setChatMessages(prev => prev.map(msg => 
+              setChatMessages(prev => prev.map(msg =>
                 msg.id === assistantMessageId
                   ? { ...msg, content: '', rawContent: '' }
                   : msg
@@ -6887,7 +6986,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 });
                 console.log('[AI Plan] Received plan chunk during streaming:', planData);
                 // Update both the message plan and thinking plan for immediate display
-                setChatMessages(prev => prev.map(msg => 
+                setChatMessages(prev => prev.map(msg =>
                   msg.id === assistantMessageId
                     ? { ...msg, plan: planData }
                     : msg
@@ -6909,7 +7008,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               const continueMsg = `\n\n---\n\n**Continuing with remaining tasks (round ${currentRound})...**\n\n`;
               streamingResponse += continueMsg;
               const normalizedContent = normalizeChatInput(streamingResponse);
-              setChatMessages(prev => prev.map(msg => 
+              setChatMessages(prev => prev.map(msg =>
                 msg.id === assistantMessageId
                   ? { ...msg, content: normalizedContent, rawContent: streamingResponse }
                   : msg
@@ -6945,8 +7044,8 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   console.log('[DEBUG] ✅ Tool execution successful');
                 }
                 // Check if save_memory tool was executed and refresh memories
-                if (chunk.tool_execution_status.executed_tools && 
-                    Array.isArray(chunk.tool_execution_status.executed_tools)) {
+                if (chunk.tool_execution_status.executed_tools &&
+                  Array.isArray(chunk.tool_execution_status.executed_tools)) {
                   const hasSaveMemory = chunk.tool_execution_status.executed_tools.some(
                     tool => tool === 'save_memory' || (typeof tool === 'object' && (tool.name === 'save_memory' || tool.tool === 'save_memory'))
                   );
@@ -7001,53 +7100,53 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               const finalThinking = chunk.thinking || streamingThinking;
               // Prefer chunk.response if it's a non-empty string, otherwise use accumulated streamingResponse
               // This handles cases where backend sends empty response but we have streamed content
-              const chunkResponse = chunk.response !== undefined && chunk.response !== null 
-                ? String(chunk.response).trim() 
+              const chunkResponse = chunk.response !== undefined && chunk.response !== null
+                ? String(chunk.response).trim()
                 : '';
               const finalResponse = chunkResponse || streamingResponse || '';
-              
+
               // Log warning if we have thinking but no response content (might indicate an issue)
               if (finalThinking && !finalResponse && !chunkResponse && !streamingResponse) {
                 console.warn('[Chat] Received thinking but no response content. This might indicate a backend issue.');
               }
-              
+
               const normalizedContent = normalizeChatInput(finalResponse);
               const conversationId = chunk.conversation_id || null;
-              
+
               setChatMessages(prev => {
-                const updated = prev.map(msg => 
+                const updated = prev.map(msg =>
                   msg.id === assistantMessageId
-                    ? { 
-                        ...msg, 
-                        content: normalizedContent,
-                        rawContent: finalResponse,
-                        thinking: finalThinking || null,
-                        timestamp: chunk.timestamp || new Date().toISOString(),
-                        messageId: chunk.message_id || null,
-                        conversationId: conversationId,
-                        price_data: chunk.price_data || msg.price_data || null,  // Preserve price_data when updating
-                        plan: (() => {
-                          const newPlan = chunk.ai_plan || chunk.plan || null;
-                          if (newPlan) {
-                            console.log('[AI Plan] ✅ Setting plan on message:', { summary: newPlan.summary, taskCount: newPlan.tasks?.length || 0 });
-                          }
-                          return newPlan || msg.plan || null;
-                        })(), // Preserve existing plan if new one is null
-                        activityLog: chunk.activity_log || null,
-                        web_references: chunk.web_references || null,
-                        price_data: chunk.price_data || null
-                      }
+                    ? {
+                      ...msg,
+                      content: normalizedContent,
+                      rawContent: finalResponse,
+                      thinking: finalThinking || null,
+                      timestamp: chunk.timestamp || new Date().toISOString(),
+                      messageId: chunk.message_id || null,
+                      conversationId: conversationId,
+                      price_data: chunk.price_data || msg.price_data || null,  // Preserve price_data when updating
+                      plan: (() => {
+                        const newPlan = chunk.ai_plan || chunk.plan || null;
+                        if (newPlan) {
+                          console.log('[AI Plan] ✅ Setting plan on message:', { summary: newPlan.summary, taskCount: newPlan.tasks?.length || 0 });
+                        }
+                        return newPlan || msg.plan || null;
+                      })(), // Preserve existing plan if new one is null
+                      activityLog: chunk.activity_log || null,
+                      web_references: chunk.web_references || null,
+                      price_data: chunk.price_data || null
+                    }
                     : msg
                 );
-                
+
                 // Save chat session after updating messages
                 saveChatSession(conversationId, updated).catch(err => {
                   console.error('Failed to save chat session:', err);
                 });
-                
+
                 return updated;
               });
-              
+
               // Handle file operations if present
               // CRITICAL: Always process file_operations from done chunk, even if they come late
               const isAskMode = (modePayload || '').toLowerCase() === 'ask';
@@ -7096,18 +7195,18 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               }
             } else if (chunk.type === 'error') {
               // Check multiple possible error message fields
-              const errorMessage = chunk.content || 
-                                   chunk.message || 
-                                   chunk.detail || 
-                                   chunk.error || 
-                                   chunk.error_message ||
-                                   chunk.error_detail ||
-                                   (typeof chunk === 'string' ? chunk : null) ||
-                                   'An error occurred while processing your request';
-              
+              const errorMessage = chunk.content ||
+                chunk.message ||
+                chunk.detail ||
+                chunk.error ||
+                chunk.error_message ||
+                chunk.error_detail ||
+                (typeof chunk === 'string' ? chunk : null) ||
+                'An error occurred while processing your request';
+
               // Only show toast if we have a meaningful error message (not just the default)
               const hasMeaningfulError = chunk.content || chunk.message || chunk.detail || chunk.error || chunk.error_message;
-              
+
               // Log error details for debugging (using console.debug to reduce noise)
               if (process.env.NODE_ENV === 'development') {
                 console.debug('[Stream Error]', {
@@ -7119,7 +7218,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   fullChunk: chunk
                 });
               }
-              
+
               if (hasMeaningfulError) {
                 toast.error(errorMessage);
               } else {
@@ -7129,19 +7228,19 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   console.debug('[Stream Error] Empty error chunk received - this might be a signal that processing failed');
                 }
               }
-              
+
               // Update the assistant message with error information only if we have content or existing message
               setChatMessages(prev => {
                 const updated = prev.map(msg => {
                   if (msg.id === assistantMessageId) {
                     const currentContent = msg.content || '';
                     const hasExistingContent = currentContent.trim().length > 0;
-                    
+
                     // Only append error if we have meaningful error or existing content
                     if (hasMeaningfulError || hasExistingContent) {
                       return {
                         ...msg,
-                        content: hasExistingContent 
+                        content: hasExistingContent
                           ? `${currentContent}\n\n**Error:** ${errorMessage}`
                           : `**Error:** ${errorMessage}`,
                         error: errorMessage
@@ -7157,12 +7256,12 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 });
                 return updated;
               });
-              
+
               // Stop loading but don't throw - let the stream complete gracefully
               setIsLoadingChat(false);
               setThinkingAiPlan(null);
               clearAgentStatuses();
-              
+
               // Don't throw - this allows the stream to complete if there's more data
               // The error has been logged and shown to the user (if meaningful)
             }
@@ -7180,13 +7279,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           finalMessage,
           context,
           sanitizedHistory,
-          { 
-            mode: modePayload, 
+          {
+            mode: modePayload,
             signal: abortController.signal,
             images: imageDataUrls.length > 0 ? imageDataUrls : null
           }
         );
-        
+
         if (abortController.signal.aborted) {
           setIsLoadingChat(false);
           setThinkingAiPlan(null);
@@ -7201,37 +7300,37 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
 
         const assistantContent = normalizeChatInput(response.response);
         const conversationId = response.conversation_id || null;
-        
+
         // CRITICAL: In ASK mode, NEVER process file operations, even if the backend sends them
         // This is a redundant safety check in case anything slips through
         const isAskMode = (modePayload || '').toLowerCase() === 'ask';
 
         setChatMessages(prev => {
-          const updated = prev.map(msg => 
+          const updated = prev.map(msg =>
             msg.id === assistantMessageId
               ? {
-                  ...msg,
-                  content: assistantContent,
-                  rawContent: assistantContent,
-                  timestamp: response.timestamp,
-                  plan: assistantPlan || msg.plan || null, // Preserve existing plan if new one is null
-                  activityLog: response.activity_log || null,
-                  messageId: response.message_id || null,
-                  conversationId: conversationId,
-                  thinking: response.thinking || null,
-                  web_references: response.web_references || null
-                }
+                ...msg,
+                content: assistantContent,
+                rawContent: assistantContent,
+                timestamp: response.timestamp,
+                plan: assistantPlan || msg.plan || null, // Preserve existing plan if new one is null
+                activityLog: response.activity_log || null,
+                messageId: response.message_id || null,
+                conversationId: conversationId,
+                thinking: response.thinking || null,
+                web_references: response.web_references || null
+              }
               : msg
           );
-          
+
           // Save chat session after updating messages
           saveChatSession(conversationId, updated).catch(err => {
             console.error('Failed to save chat session:', err);
           });
-          
+
           return updated;
         });
-        
+
         // Continue with file operations processing below
         if (!isAskMode && response.file_operations && response.file_operations.length > 0) {
           const normalizedOperations = coalesceFileOperationsForEditor(
@@ -7275,7 +7374,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         setThinkingAiPlan(null);
         return;
       }
-      
+
       // Check if request was aborted
       if (abortController.signal.aborted) {
         setIsLoadingChat(false);
@@ -7363,13 +7462,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
   const handleImageUpload = useCallback(async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
-    
+
     for (const file of files) {
       if (file.size > 10 * 1024 * 1024) { // 10MB limit
         toast.error(`${file.name} is too large. Maximum size is 10MB.`);
         continue;
       }
-      
+
       if (file.type.startsWith('image/')) {
         // Handle image files
         const reader = new FileReader();
@@ -7408,35 +7507,35 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           toast.error(`Failed to read ${file.name}`);
         };
         // Read as text for text-based files, otherwise as data URL
-        if (file.type.startsWith('text/') || 
-            file.name.endsWith('.txt') || 
-            file.name.endsWith('.md') || 
-            file.name.endsWith('.json') || 
-            file.name.endsWith('.js') || 
-            file.name.endsWith('.ts') || 
-            file.name.endsWith('.py') || 
-            file.name.endsWith('.html') || 
-            file.name.endsWith('.css') ||
-            file.name.endsWith('.xml') ||
-            file.name.endsWith('.yaml') ||
-            file.name.endsWith('.yml')) {
+        if (file.type.startsWith('text/') ||
+          file.name.endsWith('.txt') ||
+          file.name.endsWith('.md') ||
+          file.name.endsWith('.json') ||
+          file.name.endsWith('.js') ||
+          file.name.endsWith('.ts') ||
+          file.name.endsWith('.py') ||
+          file.name.endsWith('.html') ||
+          file.name.endsWith('.css') ||
+          file.name.endsWith('.xml') ||
+          file.name.endsWith('.yaml') ||
+          file.name.endsWith('.yml')) {
           reader.readAsText(file);
         } else {
           reader.readAsDataURL(file);
         }
       }
     }
-    
+
     // Reset input
     if (imageInputRef.current) {
       imageInputRef.current.value = '';
     }
   }, []);
-  
+
   const handleImagePaste = useCallback((e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
-    
+
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       if (item.type.startsWith('image/')) {
@@ -7446,7 +7545,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           toast.error('Image is too large. Maximum size is 10MB.');
           return;
         }
-        
+
         const reader = new FileReader();
         reader.onload = (event) => {
           const dataUrl = event.target.result;
@@ -7465,7 +7564,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       }
     }
   }, []);
-  
+
   const removeImage = useCallback((imageId) => {
     setAttachedImages(prev => prev.filter(img => img.id !== imageId));
   }, []);
@@ -7547,12 +7646,12 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     try {
       const contentToCopy = message.rawContent ?? message.content;
       const normalizedContent = normalizeChatInput(contentToCopy);
-      
+
       // Try to get plain text from HTML if it's formatted
       const tempDiv = document.createElement('div');
       tempDiv.innerHTML = formatMessageContent(normalizedContent);
       const plainText = tempDiv.textContent || tempDiv.innerText || normalizedContent;
-      
+
       await copyToClipboard(plainText.trim());
       toast.success('Message copied to clipboard');
     } catch (error) {
@@ -7605,7 +7704,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       });
       editorDiffViewZonesRef.current = [];
     }
-    
+
     // Clear content widgets
     editorContentWidgetsRef.current.forEach((widgetRef) => {
       if (typeof widgetRef === 'string') {
@@ -7632,7 +7731,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       try {
         const opType = op.type;
         const filePath = normalizeEditorPath(op.path);
-        
+
         // Check if this is a document file that shouldn't be opened in editor
         const isDocument = op.is_document === true || op.open_in_editor === false || isDocumentFile(filePath);
 
@@ -7642,7 +7741,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           const existingFile = openFiles.find(f => normalizeEditorPath(f.path) === normalizedFilePath);
           // Use preview content if available (with user's accepted/declined changes), otherwise use original
           const content = existingFile?.content || op.content || '';
-          
+
           // Create file (skip content for document files - they're binary)
           if (!isDocument) {
             await ApiService.writeFile(filePath, content);
@@ -7650,7 +7749,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             // For document files, they're already created by tools, just notify
             // Don't try to write text content to binary files
           }
-          
+
           // Only open in editor if it's not a document file
           if (!isDocument && !existingFile) {
             const fileInfo = {
@@ -7661,7 +7760,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               modified: false
             };
             upsertOpenFile(fileInfo);
-            
+
             // Only switch tabs if there's no existing tab with the same filename
             // This prevents switching to a different tab when files have same name but different paths (e.g., with @ prefix)
             const fileName = fileInfo.name;
@@ -7669,7 +7768,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               const existingFileName = f.path.split('/').pop() || '';
               return existingFileName === fileName && normalizeEditorPath(f.path) !== normalizedFilePath;
             });
-            
+
             if (!hasSameFileNameTab) {
               setActiveTab(normalizedFilePath);
               setEditorContent(content);
@@ -7677,13 +7776,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             }
           } else if (!isDocument && existingFile) {
             // Update existing file entry to mark as no longer a preview
-            setOpenFiles(prev => prev.map((f, idx) => 
-              normalizeEditorPath(f.path) === normalizedFilePath 
-                ? { ...f, modified: false, aiPreview: false } 
+            setOpenFiles(prev => prev.map((f, idx) =>
+              normalizeEditorPath(f.path) === normalizedFilePath
+                ? { ...f, modified: false, aiPreview: false }
                 : f
             ));
           }
-          
+
           if (isDocument) {
             toast.success(`Created document: ${filePath} (binary file - not opened in editor)`);
           } else {
@@ -7693,28 +7792,28 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           // Check if this is a document file
           const normalizedFilePath = normalizeEditorPath(filePath);
           const isEditDocument = op.is_document === true || op.open_in_editor === false || isDocumentFile(normalizedFilePath);
-          
+
           // Document files should not be edited via file_operations - they're binary
           if (isEditDocument) {
             toast.warning(`Document files (${filePath}) cannot be edited as text. Use document creation tools instead.`);
             continue;
           }
-          
+
           // For edited files, use the preview content (which includes user's accepted/declined line changes)
           const existingFile = openFiles.find(f => normalizeEditorPath(f.path) === normalizedFilePath);
           // Use preview content if available (with user's accepted/declined changes), otherwise use original
           const content = existingFile?.content || op.content || '';
-          
+
           // Update file
           await ApiService.writeFile(filePath, content);
-          
+
           // Update in openFiles if open
           const fileIndex = openFiles.findIndex(f => normalizeEditorPath(f.path) === normalizedFilePath);
           if (fileIndex >= 0) {
-            setOpenFiles(prev => prev.map((f, idx) => 
+            setOpenFiles(prev => prev.map((f, idx) =>
               idx === fileIndex ? { ...f, content, modified: false, aiPreview: false } : f
             ));
-            
+
             // Update editor if active
             const normalizedActiveTab = normalizeEditorPath(activeTab || '');
             if (normalizedActiveTab === normalizedFilePath) {
@@ -7730,7 +7829,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               modified: false
             };
             upsertOpenFile(fileInfo);
-            
+
             // Only switch tabs if there's no existing tab with the same filename
             // This prevents switching to a different tab when files have same name but different paths (e.g., with @ prefix)
             const fileName = fileInfo.name;
@@ -7738,18 +7837,18 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               const existingFileName = f.path.split('/').pop() || '';
               return existingFileName === fileName && normalizeEditorPath(f.path) !== normalizedFilePath;
             });
-            
+
             if (!hasSameFileNameTab) {
               setActiveTab(filePath);
               setEditorContent(content);
               setEditorLanguage(fileInfo.language);
             }
           }
-          
+
           toast.success(`Updated file: ${filePath}`);
         } else if (opType === 'delete_file') {
           await ApiService.deleteFile(filePath);
-          
+
           // Remove from openFiles if open
           setOpenFiles(prev => prev.filter(f => f.path !== filePath));
           if (activeTab === filePath) {
@@ -7764,7 +7863,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               setEditorContent('');
             }
           }
-          
+
           toast.success(`Deleted file: ${filePath}`);
         }
       } catch (error) {
@@ -7781,12 +7880,12 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     const value = e.target.value;
     setComposerInput(value);
     setSuggestionInputType('composer');
-    
+
     // Check for @ mention
     const cursorPos = e.target.selectionStart;
     const textBeforeCursor = value.substring(0, cursorPos);
     const lastAtIndex = textBeforeCursor.lastIndexOf('@');
-    
+
     if (lastAtIndex !== -1) {
       const query = textBeforeCursor.substring(lastAtIndex + 1).split(/\s/)[0];
       const suggestions = getFileSuggestions(query);
@@ -7804,13 +7903,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     const mentionValue = typeof file === 'object'
       ? (file.displayPath || file.path || file.name)
       : file;
-    
+
     if (suggestionInputType === 'composer') {
       const before = composerInput.substring(0, mentionPosition.start);
       const after = composerInput.substring(mentionPosition.end);
       const newValue = `${before}@${mentionValue} ${after}`;
       setComposerInput(newValue);
-      
+
       setTimeout(() => {
         composerInputRef.current?.focus();
         const newPos = before.length + mentionValue.length + 2;
@@ -7821,14 +7920,14 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       const after = chatInput.substring(mentionPosition.end);
       const newValue = `${before}@${mentionValue} ${after}`;
       setChatInput(newValue);
-      
+
       setTimeout(() => {
         chatInputRef.current?.focus();
         const newPos = before.length + mentionValue.length + 2;
         chatInputRef.current?.setSelectionRange(newPos, newPos);
       }, 0);
     }
-    
+
     setShowFileSuggestions(false);
     setMentionPosition(null);
   };
@@ -7843,19 +7942,19 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
     const imagesToSend = [...attachedImages];
     const filesToSend = [...attachedFiles];
     const codeSelectionsToSend = [...attachedCodeSelections];
-    
+
     // Convert code selections to mentions and add to input
     let inputToSend = composerInput;
     if (codeSelectionsToSend.length > 0) {
       const mentions = codeSelectionsToSend.map(selection => {
-        const mention = selection.startLine === selection.endLine 
+        const mention = selection.startLine === selection.endLine
           ? `@${selection.relativePath}:${selection.startLine}`
           : `@${selection.relativePath}:${selection.startLine}-${selection.endLine}`;
         return mention;
       }).join(' ');
       inputToSend = inputToSend.trim() ? `${inputToSend.trim()} ${mentions}` : mentions;
     }
-    
+
     setComposerInput('');
     setAttachedImages([]);
     setAttachedFiles([]);
@@ -7895,8 +7994,8 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           // Preserve existing modified state if user has actually edited the file
           const existingFile = next[existingIndex];
           const wasUserModified = existingFile.modified && !existingFile.aiPreview;
-          next[existingIndex] = { 
-            ...next[existingIndex], 
+          next[existingIndex] = {
+            ...next[existingIndex],
             ...baseFile,
             modified: wasUserModified, // Keep user modifications
           };
@@ -7940,24 +8039,24 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
   // Apply accepted/declined lines to file content immediately
   const applyLineChangesToFile = useCallback((opIndex, acceptedLinesMap, declinedLinesMap) => {
     if (!pendingFileOperations || !pendingFileOperations.operations) return;
-    
+
     const op = pendingFileOperations.operations[opIndex];
     if (!op || !op.diff) return;
-    
+
     const targetPath = normalizeEditorPath(op.path);
     const fileIndex = openFiles.findIndex(f => normalizeEditorPath(f.path) === targetPath);
     if (fileIndex < 0) return;
-    
+
     // Start with the proposed content (afterContent)
     const afterContent = op.afterContent || op.content || '';
     const beforeContent = op.beforeContent || '';
     const afterLines = afterContent.split('\n');
     const beforeLines = beforeContent.split('\n');
-    
+
     // Build a map of line numbers to diff entries for quick lookup
     const addedLinesMap = new Map(); // newNumber -> diffLine
     const removedLinesMap = new Map(); // oldNumber -> diffLine
-    
+
     op.diff.forEach((diffLine) => {
       if (diffLine.type === 'added' && typeof diffLine.newNumber === 'number') {
         addedLinesMap.set(diffLine.newNumber, diffLine);
@@ -7965,20 +8064,20 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         removedLinesMap.set(diffLine.oldNumber, diffLine);
       }
     });
-    
+
     // Build new content by filtering based on accepted/declined lines
     const newLines = [];
-    
+
     // Process the afterContent (proposed content) line by line
     afterLines.forEach((line, index) => {
       const lineNumber = index + 1; // 1-based line numbers
       const lineKey = `${opIndex}-${lineNumber}`;
       const isAccepted = acceptedLinesMap.has(lineKey);
       const isDeclined = declinedLinesMap.has(lineKey);
-      
+
       // Check if this line was added in the diff
       const addedDiffLine = addedLinesMap.get(lineNumber);
-      
+
       if (addedDiffLine) {
         // This is an added line
         // If accepted, keep it; if declined, remove it
@@ -7991,12 +8090,12 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         newLines.push(line);
       }
     });
-    
+
     // Now handle removed lines that were declined (undo removal - add them back)
     removedLinesMap.forEach((removedDiffLine, oldLineNumber) => {
       const lineKey = `${opIndex}-${oldLineNumber}`;
       const isDeclined = declinedLinesMap.has(lineKey);
-      
+
       if (isDeclined) {
         // User wants to undo the removal - add the line back
         // Find the position to insert it (before the line that replaced it, or at the end)
@@ -8009,9 +8108,9 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         }
       }
     });
-    
+
     const newContent = newLines.join('\n');
-    
+
     // Update the file content (preview only - don't save to disk yet)
     // Files will only be saved when user clicks "Keep All" button
     setOpenFiles((prev) => {
@@ -8026,7 +8125,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       }
       return next;
     });
-    
+
     // Update editor if this file is active (preview only)
     if (activeTab && normalizeEditorPath(activeTab) === targetPath) {
       setEditorContent(newContent);
@@ -8410,10 +8509,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
   //   const op = operations[index];
 
   //   if (!op) return;
-    
+
   //   const targetPath = normalizeEditorPath(op.path);
   //   const normalizedActiveTab = activeTab ? normalizeEditorPath(activeTab) : null;
-    
+
   //   // Only auto-open if the file is not already the active tab
   //   // This prevents duplicate opens when user manually clicks "Review the file"
   //   if (normalizedActiveTab !== targetPath) {
@@ -8472,109 +8571,109 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
       const editor = editorRef.current;
       const monaco = monacoRef.current;
       if (!editor || !monaco) return;
-      
+
       const model = editor.getModel();
       if (!model) {
         return;
       }
 
-    const lineCount = model.getLineCount();
-    const decorations = [];
-    const removedBlocks = [];
-    let pendingRemoved = [];
+      const lineCount = model.getLineCount();
+      const decorations = [];
+      const removedBlocks = [];
+      let pendingRemoved = [];
 
-    const flushRemovedBlock = (nextLineNumber) => {
-      if (!pendingRemoved.length) return;
-      let anchorLine = typeof nextLineNumber === 'number' ? nextLineNumber : lineCount + 1;
-      anchorLine = Math.min(Math.max(anchorLine, 1), lineCount + 1);
-      removedBlocks.push({
-        id: `${currentOpIndex}-${Math.max(anchorLine - 1, 0)}-${pendingRemoved[0]?.oldNumber ?? 0}-${pendingRemoved[pendingRemoved.length - 1]?.oldNumber ?? 0}`,
-        lines: pendingRemoved.map((line) => ({
-          ...line,
-          lineKey: `${currentOpIndex}-${line.oldNumber}`,
-        })),
-        afterLineNumber: Math.max(anchorLine - 1, 0),
-      });
-      pendingRemoved = [];
-    };
-
-    const currentOpIndex = activeFileOperationIndex;
-    const addedLines = [];
-    op.diff.forEach((line) => {
-      const addedLineNumber =
-        line.type === 'added' && typeof line.newNumber === 'number'
-          ? line.newNumber
-          : null;
-      // removedLineNumber is kept for potential future use
-      // const removedLineNumber =
-      //   line.type === 'removed' && typeof line.oldNumber === 'number'
-      //     ? line.oldNumber
-      //     : null;
-      const addedLineKey =
-        addedLineNumber !== null ? `${currentOpIndex}-${addedLineNumber}` : null;
-      const isAddedAccepted = addedLineKey ? acceptedLines.has(addedLineKey) : false;
-      const isAddedDeclined = addedLineKey ? declinedLines.has(addedLineKey) : false;
-
-      if (line.type === 'added' && typeof line.newNumber === 'number') {
-        if (line.newNumber >= 1 && line.newNumber <= lineCount) {
-          addedLines.push({ lineNumber: line.newNumber, line });
-          if (!isAddedAccepted && !isAddedDeclined) {
-            decorations.push({
-              range: new monaco.Range(
-                line.newNumber,
-                1,
-                line.newNumber,
-                model.getLineMaxColumn(line.newNumber) || 1
-              ),
-              options: {
-                isWholeLine: true,
-                className: 'ai-editor-line-added',
-                glyphMarginClassName: 'ai-editor-glyph-added',
-                glyphMarginHoverMessage: { value: 'AI: added line' },
-              },
-            });
-          }
-        }
-        flushRemovedBlock(line.newNumber);
-        return;
-      }
-
-      if (line.type === 'context' && typeof line.newNumber === 'number') {
-        flushRemovedBlock(line.newNumber);
-        return;
-      }
-
-      if (line.type === 'removed' && typeof line.oldNumber === 'number') {
-        pendingRemoved.push(line);
-        return;
-      }
-    });
-
-    flushRemovedBlock(lineCount + 1);
-
-    editorDiffDecorationsRef.current = editor.deltaDecorations(
-      editorDiffDecorationsRef.current,
-      decorations
-    );
-
-    editor.changeViewZones((accessor) => {
-      editorDiffViewZonesRef.current.forEach((zoneId) => accessor.removeZone(zoneId));
-      const newZoneIds = [];
-      const lineHeight =
-        editor.getOption(monaco.editor.EditorOption.lineHeight) || 18;
-
-      removedBlocks.forEach((block) => {
-        const blockHasPendingLines = block.lines.some((line) => {
-          const key = line.lineKey;
-          return key ? !acceptedLines.has(key) && !declinedLines.has(key) : true;
+      const flushRemovedBlock = (nextLineNumber) => {
+        if (!pendingRemoved.length) return;
+        let anchorLine = typeof nextLineNumber === 'number' ? nextLineNumber : lineCount + 1;
+        anchorLine = Math.min(Math.max(anchorLine, 1), lineCount + 1);
+        removedBlocks.push({
+          id: `${currentOpIndex}-${Math.max(anchorLine - 1, 0)}-${pendingRemoved[0]?.oldNumber ?? 0}-${pendingRemoved[pendingRemoved.length - 1]?.oldNumber ?? 0}`,
+          lines: pendingRemoved.map((line) => ({
+            ...line,
+            lineKey: `${currentOpIndex}-${line.oldNumber}`,
+          })),
+          afterLineNumber: Math.max(anchorLine - 1, 0),
         });
-        if (!blockHasPendingLines) {
+        pendingRemoved = [];
+      };
+
+      const currentOpIndex = activeFileOperationIndex;
+      const addedLines = [];
+      op.diff.forEach((line) => {
+        const addedLineNumber =
+          line.type === 'added' && typeof line.newNumber === 'number'
+            ? line.newNumber
+            : null;
+        // removedLineNumber is kept for potential future use
+        // const removedLineNumber =
+        //   line.type === 'removed' && typeof line.oldNumber === 'number'
+        //     ? line.oldNumber
+        //     : null;
+        const addedLineKey =
+          addedLineNumber !== null ? `${currentOpIndex}-${addedLineNumber}` : null;
+        const isAddedAccepted = addedLineKey ? acceptedLines.has(addedLineKey) : false;
+        const isAddedDeclined = addedLineKey ? declinedLines.has(addedLineKey) : false;
+
+        if (line.type === 'added' && typeof line.newNumber === 'number') {
+          if (line.newNumber >= 1 && line.newNumber <= lineCount) {
+            addedLines.push({ lineNumber: line.newNumber, line });
+            if (!isAddedAccepted && !isAddedDeclined) {
+              decorations.push({
+                range: new monaco.Range(
+                  line.newNumber,
+                  1,
+                  line.newNumber,
+                  model.getLineMaxColumn(line.newNumber) || 1
+                ),
+                options: {
+                  isWholeLine: true,
+                  className: 'ai-editor-line-added',
+                  glyphMarginClassName: 'ai-editor-glyph-added',
+                  glyphMarginHoverMessage: { value: 'AI: added line' },
+                },
+              });
+            }
+          }
+          flushRemovedBlock(line.newNumber);
           return;
         }
-        const domNode = document.createElement('div');
-        domNode.className = 'ai-editor-removed-zone';
-        domNode.style.height = `${block.lines.length * lineHeight}px`;
-        domNode.innerHTML = `
+
+        if (line.type === 'context' && typeof line.newNumber === 'number') {
+          flushRemovedBlock(line.newNumber);
+          return;
+        }
+
+        if (line.type === 'removed' && typeof line.oldNumber === 'number') {
+          pendingRemoved.push(line);
+          return;
+        }
+      });
+
+      flushRemovedBlock(lineCount + 1);
+
+      editorDiffDecorationsRef.current = editor.deltaDecorations(
+        editorDiffDecorationsRef.current,
+        decorations
+      );
+
+      editor.changeViewZones((accessor) => {
+        editorDiffViewZonesRef.current.forEach((zoneId) => accessor.removeZone(zoneId));
+        const newZoneIds = [];
+        const lineHeight =
+          editor.getOption(monaco.editor.EditorOption.lineHeight) || 18;
+
+        removedBlocks.forEach((block) => {
+          const blockHasPendingLines = block.lines.some((line) => {
+            const key = line.lineKey;
+            return key ? !acceptedLines.has(key) && !declinedLines.has(key) : true;
+          });
+          if (!blockHasPendingLines) {
+            return;
+          }
+          const domNode = document.createElement('div');
+          domNode.className = 'ai-editor-removed-zone';
+          domNode.style.height = `${block.lines.length * lineHeight}px`;
+          domNode.innerHTML = `
           <div class="ai-editor-removed-lines">
             ${block.lines
               .map(
@@ -8582,8 +8681,8 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   <div class="ai-editor-removed-line" data-line-key="${currentOpIndex}-${line.oldNumber}" data-line-number="${line.oldNumber}">
                     <span class="ai-editor-removed-marker">−</span>
                     <span class="ai-editor-removed-text">${escapeHtml(
-                      line.text === '' ? ' ' : line.text
-                    )}</span>
+                  line.text === '' ? ' ' : line.text
+                )}</span>
                   </div>
                 `
               )
@@ -8591,99 +8690,99 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           </div>
         `;
 
-        const marginDomNode = document.createElement('div');
-        marginDomNode.className = 'ai-editor-removed-margin';
-        marginDomNode.style.height = `${block.lines.length * lineHeight}px`;
+          const marginDomNode = document.createElement('div');
+          marginDomNode.className = 'ai-editor-removed-margin';
+          marginDomNode.style.height = `${block.lines.length * lineHeight}px`;
 
-        const zoneId = accessor.addZone({
-          afterLineNumber: Math.min(block.afterLineNumber, lineCount),
-          heightInPx: block.lines.length * lineHeight,
-          domNode,
-          marginDomNode,
-          suppressMouseDown: false,
+          const zoneId = accessor.addZone({
+            afterLineNumber: Math.min(block.afterLineNumber, lineCount),
+            heightInPx: block.lines.length * lineHeight,
+            domNode,
+            marginDomNode,
+            suppressMouseDown: false,
+          });
+          newZoneIds.push(zoneId);
         });
-        newZoneIds.push(zoneId);
-      });
 
-    editorDiffViewZonesRef.current = newZoneIds;
-  });
+        editorDiffViewZonesRef.current = newZoneIds;
+      });
 
       // Add content widgets for added lines with accept/decline buttons
       const monacoInstance = monacoRef.current;
-    
-    // Remove existing content widgets
-    editorContentWidgetsRef.current.forEach((widgetRef) => {
-      if (typeof widgetRef === 'string') {
-        editor.removeContentWidget({ getId: () => widgetRef });
-      } else if (widgetRef && widgetRef.cleanup) {
-        widgetRef.cleanup();
-        editor.removeContentWidget({ getId: () => widgetRef.id });
-      }
-    });
-    editorContentWidgetsRef.current = [];
 
-    // Group consecutive added lines together (within 2 lines of each other)
-    const MAX_GAP = 2; // Maximum gap between lines to consider them a group
-    const lineGroups = [];
-    // Clean up processed keys that no longer have any lines (e.g., operation changed)
-    const activeGroupKeys = new Set();
-    
-    if (addedLines.length > 0) {
-      // Sort added lines by line number
-      const sortedLines = [...addedLines].sort((a, b) => a.lineNumber - b.lineNumber);
-      
-      let currentGroup = [sortedLines[0]];
-      
-      for (let i = 1; i < sortedLines.length; i++) {
-        const prevLine = sortedLines[i - 1];
-        const currLine = sortedLines[i];
-        const gap = currLine.lineNumber - prevLine.lineNumber;
-        
-        // If lines are close together (within MAX_GAP), add to current group
-        if (gap <= MAX_GAP) {
-          currentGroup.push(currLine);
-        } else {
-          // Start a new group
+      // Remove existing content widgets
+      editorContentWidgetsRef.current.forEach((widgetRef) => {
+        if (typeof widgetRef === 'string') {
+          editor.removeContentWidget({ getId: () => widgetRef });
+        } else if (widgetRef && widgetRef.cleanup) {
+          widgetRef.cleanup();
+          editor.removeContentWidget({ getId: () => widgetRef.id });
+        }
+      });
+      editorContentWidgetsRef.current = [];
+
+      // Group consecutive added lines together (within 2 lines of each other)
+      const MAX_GAP = 2; // Maximum gap between lines to consider them a group
+      const lineGroups = [];
+      // Clean up processed keys that no longer have any lines (e.g., operation changed)
+      const activeGroupKeys = new Set();
+
+      if (addedLines.length > 0) {
+        // Sort added lines by line number
+        const sortedLines = [...addedLines].sort((a, b) => a.lineNumber - b.lineNumber);
+
+        let currentGroup = [sortedLines[0]];
+
+        for (let i = 1; i < sortedLines.length; i++) {
+          const prevLine = sortedLines[i - 1];
+          const currLine = sortedLines[i];
+          const gap = currLine.lineNumber - prevLine.lineNumber;
+
+          // If lines are close together (within MAX_GAP), add to current group
+          if (gap <= MAX_GAP) {
+            currentGroup.push(currLine);
+          } else {
+            // Start a new group
+            lineGroups.push(currentGroup);
+            currentGroup = [currLine];
+          }
+        }
+
+        // Don't forget the last group
+        if (currentGroup.length > 0) {
           lineGroups.push(currentGroup);
-          currentGroup = [currLine];
         }
       }
-      
-      // Don't forget the last group
-      if (currentGroup.length > 0) {
-        lineGroups.push(currentGroup);
-      }
-    }
-    
-    // Create content widgets for each group - one widget per group, positioned on the right
-    lineGroups.forEach((group) => {
-      const firstLine = group[0];
-      const lastLine = group[group.length - 1];
-      const groupLineNumbers = group.map(({ lineNumber }) => lineNumber);
-      const groupKey = `${currentOpIndex}-${firstLine.lineNumber}-${lastLine.lineNumber}`;
-      activeGroupKeys.add(groupKey);
-      
-      // Check if all lines in the group are accepted/declined
-      const allAccepted = groupLineNumbers.every(lineNum => {
-        const lineKey = `${currentOpIndex}-${lineNum}`;
-        return acceptedLines.has(lineKey);
-      });
-      const allDeclined = groupLineNumbers.every(lineNum => {
-        const lineKey = `${currentOpIndex}-${lineNum}`;
-        return declinedLines.has(lineKey);
-      });
-      
-      if (allAccepted || allDeclined) {
-        return;
-      }
 
-      // Determine button states
-      const isDeclined = allDeclined;
-      
-      const widgetId = `ai-line-widget-${groupKey}`;
-      const domNode = document.createElement('div');
-      domNode.className = 'ai-editor-line-widget';
-      domNode.style.cssText = `
+      // Create content widgets for each group - one widget per group, positioned on the right
+      lineGroups.forEach((group) => {
+        const firstLine = group[0];
+        const lastLine = group[group.length - 1];
+        const groupLineNumbers = group.map(({ lineNumber }) => lineNumber);
+        const groupKey = `${currentOpIndex}-${firstLine.lineNumber}-${lastLine.lineNumber}`;
+        activeGroupKeys.add(groupKey);
+
+        // Check if all lines in the group are accepted/declined
+        const allAccepted = groupLineNumbers.every(lineNum => {
+          const lineKey = `${currentOpIndex}-${lineNum}`;
+          return acceptedLines.has(lineKey);
+        });
+        const allDeclined = groupLineNumbers.every(lineNum => {
+          const lineKey = `${currentOpIndex}-${lineNum}`;
+          return declinedLines.has(lineKey);
+        });
+
+        if (allAccepted || allDeclined) {
+          return;
+        }
+
+        // Determine button states
+        const isDeclined = allDeclined;
+
+        const widgetId = `ai-line-widget-${groupKey}`;
+        const domNode = document.createElement('div');
+        domNode.className = 'ai-editor-line-widget';
+        domNode.style.cssText = `
         position: absolute;
         right: 10px;
         display: flex;
@@ -8699,18 +8798,18 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         white-space: nowrap;
         pointer-events: auto;
       `;
-      
-      // Show line count if group has multiple lines
-      const lineCountText = group.length > 1 ? ` (${group.length})` : '';
-      
-      const undoBtn = document.createElement('button');
-      undoBtn.type = 'button'; // Prevent form submission
-      undoBtn.textContent = `Undo${lineCountText}`;
-      undoBtn.className = 'ai-line-undo-btn';
-      undoBtn.setAttribute('data-group-key', groupKey);
-      undoBtn.setAttribute('data-action', 'decline');
-      undoBtn.setAttribute('data-line-numbers', groupLineNumbers.join(','));
-      undoBtn.style.cssText = `
+
+        // Show line count if group has multiple lines
+        const lineCountText = group.length > 1 ? ` (${group.length})` : '';
+
+        const undoBtn = document.createElement('button');
+        undoBtn.type = 'button'; // Prevent form submission
+        undoBtn.textContent = `Undo${lineCountText}`;
+        undoBtn.className = 'ai-line-undo-btn';
+        undoBtn.setAttribute('data-group-key', groupKey);
+        undoBtn.setAttribute('data-action', 'decline');
+        undoBtn.setAttribute('data-line-numbers', groupLineNumbers.join(','));
+        undoBtn.style.cssText = `
         padding: 4px 10px;
         border: 1px solid ${isDeclined ? '#475569' : '#374151'};
         background: ${isDeclined ? '#1e293b' : '#0f172a'};
@@ -8725,67 +8824,67 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         pointer-events: auto;
         user-select: none;
       `;
-      undoBtn.title = group.length > 1 
-        ? `Undo ${group.length} lines (${firstLine.lineNumber}-${lastLine.lineNumber})`
-        : `Undo line ${firstLine.lineNumber}`;
-      // Store references to avoid closure issues
-      const opIndex = currentOpIndex;
-      const lineNums = [...groupLineNumbers];
-      
-      // Create a proper event handler function that will work
-      const createUndoHandler = () => {
-        return function(e) {
-          console.log('Undo button clicked!', { opIndex, lineNums });
-          e = e || window.event;
-          try {
-            if (e) {
-              if (typeof e.preventDefault === 'function') {
-                e.preventDefault();
+        undoBtn.title = group.length > 1
+          ? `Undo ${group.length} lines (${firstLine.lineNumber}-${lastLine.lineNumber})`
+          : `Undo line ${firstLine.lineNumber}`;
+        // Store references to avoid closure issues
+        const opIndex = currentOpIndex;
+        const lineNums = [...groupLineNumbers];
+
+        // Create a proper event handler function that will work
+        const createUndoHandler = () => {
+          return function (e) {
+            console.log('Undo button clicked!', { opIndex, lineNums });
+            e = e || window.event;
+            try {
+              if (e) {
+                if (typeof e.preventDefault === 'function') {
+                  e.preventDefault();
+                }
+                if (typeof e.stopPropagation === 'function') {
+                  e.stopPropagation();
+                }
+                if (typeof e.stopImmediatePropagation === 'function') {
+                  e.stopImmediatePropagation();
+                }
+                if (e.cancelBubble !== undefined) {
+                  e.cancelBubble = true;
+                }
               }
-              if (typeof e.stopPropagation === 'function') {
-                e.stopPropagation();
-              }
-              if (typeof e.stopImmediatePropagation === 'function') {
-                e.stopImmediatePropagation();
-              }
-              if (e.cancelBubble !== undefined) {
-                e.cancelBubble = true;
-              }
+              // Decline all lines in the group
+              handleDeclineLinesRef.current?.(opIndex, lineNums, 'added');
+            } catch (error) {
+              console.error('Error in undo handler:', error);
             }
-            // Decline all lines in the group
-            handleDeclineLinesRef.current?.(opIndex, lineNums, 'added');
-          } catch (error) {
-            console.error('Error in undo handler:', error);
-          }
-          return false;
+            return false;
+          };
         };
-      };
-      
-      // Attach handler - use addEventListener with capture to intercept before Monaco
-      const undoHandler = createUndoHandler();
-      undoBtn.addEventListener('click', undoHandler, true); // Use capture phase to intercept early
-      
-      // Handle mousedown to prevent editor from capturing it
-      undoBtn.onmousedown = function(e) {
-        e = e || window.event;
-        if (e) {
-          if (typeof e.stopPropagation === 'function') {
-            e.stopPropagation();
+
+        // Attach handler - use addEventListener with capture to intercept before Monaco
+        const undoHandler = createUndoHandler();
+        undoBtn.addEventListener('click', undoHandler, true); // Use capture phase to intercept early
+
+        // Handle mousedown to prevent editor from capturing it
+        undoBtn.onmousedown = function (e) {
+          e = e || window.event;
+          if (e) {
+            if (typeof e.stopPropagation === 'function') {
+              e.stopPropagation();
+            }
+            if (e.cancelBubble !== undefined) {
+              e.cancelBubble = true;
+            }
           }
-          if (e.cancelBubble !== undefined) {
-            e.cancelBubble = true;
-          }
-        }
-      };
-      
-      const keepBtn = document.createElement('button');
-      keepBtn.type = 'button'; // Prevent form submission
-      keepBtn.textContent = `Keep${lineCountText}`;
-      keepBtn.className = 'ai-line-keep-btn';
-      keepBtn.setAttribute('data-group-key', groupKey);
-      keepBtn.setAttribute('data-action', 'accept');
-      keepBtn.setAttribute('data-line-numbers', groupLineNumbers.join(','));
-      keepBtn.style.cssText = `
+        };
+
+        const keepBtn = document.createElement('button');
+        keepBtn.type = 'button'; // Prevent form submission
+        keepBtn.textContent = `Keep${lineCountText}`;
+        keepBtn.className = 'ai-line-keep-btn';
+        keepBtn.setAttribute('data-group-key', groupKey);
+        keepBtn.setAttribute('data-action', 'accept');
+        keepBtn.setAttribute('data-line-numbers', groupLineNumbers.join(','));
+        keepBtn.style.cssText = `
         padding: 4px 10px;
         border: 1px solid #22c55e;
         background: #22c55e;
@@ -8800,121 +8899,121 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         pointer-events: auto;
         user-select: none;
       `;
-      keepBtn.title = group.length > 1 
-        ? `Keep ${group.length} lines (${firstLine.lineNumber}-${lastLine.lineNumber})`
-        : `Keep line ${firstLine.lineNumber}`;
-      // Create a proper event handler function that will work
-      const createKeepHandler = () => {
-        return function(e) {
-          console.log('Keep button clicked!', { opIndex, lineNums });
-          e = e || window.event;
-          try {
-            if (e) {
-              if (typeof e.preventDefault === 'function') {
-                e.preventDefault();
+        keepBtn.title = group.length > 1
+          ? `Keep ${group.length} lines (${firstLine.lineNumber}-${lastLine.lineNumber})`
+          : `Keep line ${firstLine.lineNumber}`;
+        // Create a proper event handler function that will work
+        const createKeepHandler = () => {
+          return function (e) {
+            console.log('Keep button clicked!', { opIndex, lineNums });
+            e = e || window.event;
+            try {
+              if (e) {
+                if (typeof e.preventDefault === 'function') {
+                  e.preventDefault();
+                }
+                if (typeof e.stopPropagation === 'function') {
+                  e.stopPropagation();
+                }
+                if (typeof e.stopImmediatePropagation === 'function') {
+                  e.stopImmediatePropagation();
+                }
+                if (e.cancelBubble !== undefined) {
+                  e.cancelBubble = true;
+                }
               }
-              if (typeof e.stopPropagation === 'function') {
-                e.stopPropagation();
-              }
-              if (typeof e.stopImmediatePropagation === 'function') {
-                e.stopImmediatePropagation();
-              }
-              if (e.cancelBubble !== undefined) {
-                e.cancelBubble = true;
-              }
+              // Accept all lines in the group
+              console.log('Calling handleAcceptLines for lines:', lineNums);
+              handleAcceptLinesRef.current?.(opIndex, lineNums, 'added');
+              domNode.style.display = 'none';
+            } catch (error) {
+              console.error('Error in keep handler:', error);
             }
-            // Accept all lines in the group
-            console.log('Calling handleAcceptLines for lines:', lineNums);
-            handleAcceptLinesRef.current?.(opIndex, lineNums, 'added');
-            domNode.style.display = 'none';
-          } catch (error) {
-            console.error('Error in keep handler:', error);
-          }
-          return false;
-        };
-      };
-      
-      // Attach handler - use addEventListener with capture to intercept before Monaco
-      const keepHandler = createKeepHandler();
-      keepBtn.addEventListener('click', keepHandler, true); // Use capture phase to intercept early
-      
-      // Handle mousedown to prevent editor from capturing it
-      keepBtn.onmousedown = function(e) {
-        e = e || window.event;
-        if (e) {
-          if (typeof e.stopPropagation === 'function') {
-            e.stopPropagation();
-          }
-          if (e.cancelBubble !== undefined) {
-            e.cancelBubble = true;
-          }
-        }
-      };
-      
-      domNode.appendChild(undoBtn);
-      domNode.appendChild(keepBtn);
-      
-      // Position widget on the first line of the group
-      const widgetLineNumber = firstLine.lineNumber;
-      
-      const widget = {
-        getId: () => widgetId,
-        getDomNode: () => domNode,
-        getPosition: () => {
-          // Use a very large column number to position at the far right
-          // The widget will be positioned by Monaco, then we'll adjust with CSS
-          return {
-            position: { lineNumber: widgetLineNumber, column: 99999 },
-            preference: [
-              monacoInstance.editor.ContentWidgetPositionPreference.ABOVE,
-              monacoInstance.editor.ContentWidgetPositionPreference.BELOW
-            ]
+            return false;
           };
-        },
-        suppressMouseDown: false, // Let Monaco handle mouse events normally, but our buttons will intercept
-        allowEditorOverflow: false
-      };
-      
-      editor.addContentWidget(widget);
-      
-      // Position the widget at the far right after it's rendered
-      requestAnimationFrame(() => {
-        const updatePosition = () => {
-          const editorContainer = editor.getContainerDomNode();
-          if (!editorContainer || !domNode || !domNode.parentElement) return;
-          
-          const widgetParent = domNode.parentElement;
-          
-          // Only position within the editor content area, not blocking tabs
-          if (widgetParent) {
-            const lineTop = editor.getTopForLineNumber(widgetLineNumber);
-            const scrollTop = editor.getScrollTop();
-            const layoutInfo = editor.getLayoutInfo();
-            
-            // Calculate position relative to editor content area
-            // Get the editor's content area (view-lines container)
-            const editorOverlay = editorContainer.querySelector('.monaco-editor .monaco-editor-overlay');
-            if (!editorOverlay) return;
-            
-            // Position widget always at the right edge of the content area
-            // This prevents overlaying code and keeps buttons visible
-            const rightOffset = 10;
-            
-            // Calculate position: Monaco positions widgets relative to the overlay
-            // The overlay spans the full editor width, but we want to position
-            // the widget at the right edge of the content area (where code is displayed)
-            const editorWidth = layoutInfo.width;
-            const contentLeft = layoutInfo.contentLeft;
-            const contentWidth = layoutInfo.contentWidth;
-            
-            // The content area ends at: contentLeft + contentWidth
-            // From the right edge of the editor overlay, the content area ends at:
-            // editorWidth - (contentLeft + contentWidth)
-            // Position it at the right edge with a small offset from the content edge
-            const contentRightEdge = editorWidth - (contentLeft + contentWidth);
-            const rightPosition = contentRightEdge + rightOffset;
-            
-            widgetParent.style.cssText = `
+        };
+
+        // Attach handler - use addEventListener with capture to intercept before Monaco
+        const keepHandler = createKeepHandler();
+        keepBtn.addEventListener('click', keepHandler, true); // Use capture phase to intercept early
+
+        // Handle mousedown to prevent editor from capturing it
+        keepBtn.onmousedown = function (e) {
+          e = e || window.event;
+          if (e) {
+            if (typeof e.stopPropagation === 'function') {
+              e.stopPropagation();
+            }
+            if (e.cancelBubble !== undefined) {
+              e.cancelBubble = true;
+            }
+          }
+        };
+
+        domNode.appendChild(undoBtn);
+        domNode.appendChild(keepBtn);
+
+        // Position widget on the first line of the group
+        const widgetLineNumber = firstLine.lineNumber;
+
+        const widget = {
+          getId: () => widgetId,
+          getDomNode: () => domNode,
+          getPosition: () => {
+            // Use a very large column number to position at the far right
+            // The widget will be positioned by Monaco, then we'll adjust with CSS
+            return {
+              position: { lineNumber: widgetLineNumber, column: 99999 },
+              preference: [
+                monacoInstance.editor.ContentWidgetPositionPreference.ABOVE,
+                monacoInstance.editor.ContentWidgetPositionPreference.BELOW
+              ]
+            };
+          },
+          suppressMouseDown: false, // Let Monaco handle mouse events normally, but our buttons will intercept
+          allowEditorOverflow: false
+        };
+
+        editor.addContentWidget(widget);
+
+        // Position the widget at the far right after it's rendered
+        requestAnimationFrame(() => {
+          const updatePosition = () => {
+            const editorContainer = editor.getContainerDomNode();
+            if (!editorContainer || !domNode || !domNode.parentElement) return;
+
+            const widgetParent = domNode.parentElement;
+
+            // Only position within the editor content area, not blocking tabs
+            if (widgetParent) {
+              const lineTop = editor.getTopForLineNumber(widgetLineNumber);
+              const scrollTop = editor.getScrollTop();
+              const layoutInfo = editor.getLayoutInfo();
+
+              // Calculate position relative to editor content area
+              // Get the editor's content area (view-lines container)
+              const editorOverlay = editorContainer.querySelector('.monaco-editor .monaco-editor-overlay');
+              if (!editorOverlay) return;
+
+              // Position widget always at the right edge of the content area
+              // This prevents overlaying code and keeps buttons visible
+              const rightOffset = 10;
+
+              // Calculate position: Monaco positions widgets relative to the overlay
+              // The overlay spans the full editor width, but we want to position
+              // the widget at the right edge of the content area (where code is displayed)
+              const editorWidth = layoutInfo.width;
+              const contentLeft = layoutInfo.contentLeft;
+              const contentWidth = layoutInfo.contentWidth;
+
+              // The content area ends at: contentLeft + contentWidth
+              // From the right edge of the editor overlay, the content area ends at:
+              // editorWidth - (contentLeft + contentWidth)
+              // Position it at the right edge with a small offset from the content edge
+              const contentRightEdge = editorWidth - (contentLeft + contentWidth);
+              const rightPosition = contentRightEdge + rightOffset;
+
+              widgetParent.style.cssText = `
               position: absolute !important;
               right: ${rightPosition}px !important;
               top: ${lineTop - scrollTop}px !important;
@@ -8923,42 +9022,42 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               max-width: ${contentWidth - rightOffset * 2}px !important;
               overflow: visible !important;
             `;
-            
-            // Ensure the widget itself has pointer events but parent doesn't block
-            // Only update pointer-events, don't overwrite all styles
-            domNode.style.pointerEvents = 'auto';
-            domNode.style.position = 'relative';
-            domNode.style.zIndex = '11';
-            
-            // Make buttons clickable - ensure they have pointer events
-            // Handlers are already attached, just ensure pointer-events are set
-            const buttons = domNode.querySelectorAll('button');
-            buttons.forEach(btn => {
-              btn.style.pointerEvents = 'auto';
-              btn.style.cursor = 'pointer';
-              btn.style.zIndex = '12';
-            });
-          }
-        };
-        
-        updatePosition();
-        const scrollDisposable = editor.onDidScrollChange(updatePosition);
-        
-        // Also update on resize
-        const resizeDisposable = editor.onDidLayoutChange(updatePosition);
-        
-        // Store cleanup
-        editorContentWidgetsRef.current.push({
-          id: widgetId,
-          cleanup: () => {
-            scrollDisposable.dispose();
-            resizeDisposable.dispose();
-          }
+
+              // Ensure the widget itself has pointer events but parent doesn't block
+              // Only update pointer-events, don't overwrite all styles
+              domNode.style.pointerEvents = 'auto';
+              domNode.style.position = 'relative';
+              domNode.style.zIndex = '11';
+
+              // Make buttons clickable - ensure they have pointer events
+              // Handlers are already attached, just ensure pointer-events are set
+              const buttons = domNode.querySelectorAll('button');
+              buttons.forEach(btn => {
+                btn.style.pointerEvents = 'auto';
+                btn.style.cursor = 'pointer';
+                btn.style.zIndex = '12';
+              });
+            }
+          };
+
+          updatePosition();
+          const scrollDisposable = editor.onDidScrollChange(updatePosition);
+
+          // Also update on resize
+          const resizeDisposable = editor.onDidLayoutChange(updatePosition);
+
+          // Store cleanup
+          editorContentWidgetsRef.current.push({
+            id: widgetId,
+            cleanup: () => {
+              scrollDisposable.dispose();
+              resizeDisposable.dispose();
+            }
+          });
         });
       });
-    });
     }, 150);
-    
+
     return () => clearTimeout(timeoutId);
   }, [
     pendingFileOperations,
@@ -9032,13 +9131,12 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             const normalizedCreatingParentPath = creatingItem?.parentPath ? normalizeEditorPath(creatingItem.parentPath) : null;
             const isCreatingInThisFolder = creatingItem && normalizedFilePath === normalizedCreatingParentPath;
             const isSelected = selectedFiles.has(normalizedFilePath);
-            
+
             return (
               <div key={file.path}>
                 <div
-                  className={`flex items-center px-2 py-1 hover:bg-dark-700 cursor-pointer text-sm ${
-                    isSelected ? 'bg-dark-700' : ''
-                  }`}
+                  className={`flex items-center px-2 py-1 hover:bg-dark-700 cursor-pointer text-sm ${isSelected ? 'bg-dark-700' : ''
+                    }`}
                   style={{ paddingLeft: `${8 + depth * 16}px` }}
                   onClick={(e) => handleFileClick(file, e)}
                   onContextMenu={(e) => handleFileContextMenu(e, file)}
@@ -9099,17 +9197,16 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           } else {
             const normalizedFilePath = normalizeEditorPath(file.path);
             const isSelected = selectedFiles.has(normalizedFilePath);
-            
+
             return (
-                <div
-                  key={file.path}
-                  className={`flex items-center px-2 py-1 hover:bg-dark-700 cursor-pointer text-sm ${
-                    isSelected ? 'bg-dark-700' : ''
+              <div
+                key={file.path}
+                className={`flex items-center px-2 py-1 hover:bg-dark-700 cursor-pointer text-sm ${isSelected ? 'bg-dark-700' : ''
                   }`}
-                  style={{ paddingLeft: `${8 + depth * 16}px` }}
-                  onClick={(e) => handleFileClick(file, e)}
-                  onContextMenu={(e) => handleFileContextMenu(e, file)}
-                >
+                style={{ paddingLeft: `${8 + depth * 16}px` }}
+                onClick={(e) => handleFileClick(file, e)}
+                onContextMenu={(e) => handleFileContextMenu(e, file)}
+              >
                 <div className="w-4 h-4 mr-1 flex-shrink-0" />
                 <File className="w-4 h-4 mr-1 text-dark-400 flex-shrink-0" />
                 <span className="text-dark-200 truncate">{file.name}</span>
@@ -9123,40 +9220,40 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
           const normalizedCreatingParentPath = creatingItem?.parentPath ? normalizeEditorPath(creatingItem.parentPath) : null;
           return creatingItem && normalizedParentPath === normalizedCreatingParentPath;
         })() && (
-          <div
-            className="flex items-center px-2 py-1 text-sm"
-            style={{ paddingLeft: `${8 + depth * 16}px` }}
-          >
-            <div className="w-4 h-4 mr-1 flex-shrink-0" />
-            {creatingItem.type === 'folder' ? (
-              <Folder className="w-4 h-4 mr-1 text-blue-400 flex-shrink-0" />
-            ) : (
-              <File className="w-4 h-4 mr-1 text-dark-400 flex-shrink-0" />
-            )}
-            <input
-              ref={creatingItemInputRef}
-              type="text"
-              value={creatingItemName}
-              onChange={(e) => setCreatingItemName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  handleConfirmCreating();
-                } else if (e.key === 'Escape') {
-                  e.preventDefault();
-                  handleCancelCreating();
-                }
-              }}
-              onBlur={() => {
-                // Don't cancel on blur - let user click outside or press Escape
-                // This allows clicking the confirm button
-              }}
-              className="flex-1 bg-dark-700 border border-primary-500 rounded px-2 py-0.5 text-dark-100 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
-              placeholder={creatingItem.type === 'folder' ? 'Folder name' : 'File name (e.g., sample.txt)'}
-              autoFocus
-            />
-          </div>
-        )}
+            <div
+              className="flex items-center px-2 py-1 text-sm"
+              style={{ paddingLeft: `${8 + depth * 16}px` }}
+            >
+              <div className="w-4 h-4 mr-1 flex-shrink-0" />
+              {creatingItem.type === 'folder' ? (
+                <Folder className="w-4 h-4 mr-1 text-blue-400 flex-shrink-0" />
+              ) : (
+                <File className="w-4 h-4 mr-1 text-dark-400 flex-shrink-0" />
+              )}
+              <input
+                ref={creatingItemInputRef}
+                type="text"
+                value={creatingItemName}
+                onChange={(e) => setCreatingItemName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleConfirmCreating();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    handleCancelCreating();
+                  }
+                }}
+                onBlur={() => {
+                  // Don't cancel on blur - let user click outside or press Escape
+                  // This allows clicking the confirm button
+                }}
+                className="flex-1 bg-dark-700 border border-primary-500 rounded px-2 py-0.5 text-dark-100 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
+                placeholder={creatingItem.type === 'folder' ? 'Folder name' : 'File name (e.g., sample.txt)'}
+                autoFocus
+              />
+            </div>
+          )}
       </>
     );
   };
@@ -9240,7 +9337,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
         {/* Left Sidebar - File Explorer */}
         {leftSidebarVisible && (
           <>
-            <div 
+            <div
               className="bg-dark-800 border-r border-dark-700 flex flex-col"
               style={{
                 width: `var(--left-sidebar-width, ${leftSidebarWidth}px)`,
@@ -9248,597 +9345,591 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 maxWidth: '600px',
               }}
             >
-            {/* Left Sidebar Tabs */}
-            <div className="flex border-b border-dark-700">
-              <button
-                onClick={() => setLeftSidebarTab('explorer')}
-                className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                  leftSidebarTab === 'explorer'
+              {/* Left Sidebar Tabs */}
+              <div className="flex border-b border-dark-700">
+                <button
+                  onClick={() => setLeftSidebarTab('explorer')}
+                  className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${leftSidebarTab === 'explorer'
                     ? 'bg-dark-900 text-dark-100 border-b-2 border-primary-500'
                     : 'text-dark-400 hover:text-dark-200 hover:bg-dark-700/50'
-                }`}
-              >
-                <div className="flex items-center justify-center gap-2">
-                  <Folder className="w-4 h-4" />
-                  <span>Explorer</span>
-                </div>
-              </button>
-              <button
-                onClick={() => setLeftSidebarTab('extensions')}
-                className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
-                  leftSidebarTab === 'extensions'
+                    }`}
+                >
+                  <div className="flex items-center justify-center gap-2">
+                    <Folder className="w-4 h-4" />
+                    <span>Explorer</span>
+                  </div>
+                </button>
+                <button
+                  onClick={() => setLeftSidebarTab('extensions')}
+                  className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${leftSidebarTab === 'extensions'
                     ? 'bg-dark-900 text-dark-100 border-b-2 border-primary-500'
                     : 'text-dark-400 hover:text-dark-200 hover:bg-dark-700/50'
-                }`}
-              >
-                <div className="flex items-center justify-center gap-2">
-                  <Package className="w-4 h-4" />
-                  <span>Extensions</span>
-                </div>
-              </button>
-            </div>
+                    }`}
+                >
+                  <div className="flex items-center justify-center gap-2">
+                    <Package className="w-4 h-4" />
+                    <span>Extensions</span>
+                  </div>
+                </button>
+              </div>
 
-            {leftSidebarTab === 'explorer' ? (
-            <>
-            <div className="p-3 border-b border-dark-700">
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-sm font-semibold text-dark-200 truncate">
-                      {projectRoot?.name || 'No workspace'}
-                    </h3>
-                    <div className="flex items-center gap-1 text-dark-400">
-                      <button
-                        type="button"
-                        onClick={() => handleCreateFile()}
-                        disabled={!workspaceReady}
-                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        title="New File"
-                        aria-label="New File"
-                      >
-                        <FilePlus className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleCreateFolder()}
-                        disabled={!workspaceReady}
-                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        title="New Folder"
-                        aria-label="New Folder"
-                      >
-                        <FolderPlus className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleRefreshExplorer}
-                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Refresh Explorer"
-                        aria-label="Refresh Explorer"
-                        disabled={isFileTreeLoading || !workspaceReady}
-                      >
-                        {isFileTreeLoading ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <RefreshCw className="w-4 h-4" />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleCollapseExplorer}
-                        className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors"
-                        title="Collapse folders"
-                        aria-label="Collapse folders"
-                      >
-                        <Minimize2 className="w-4 h-4" />
-                      </button>
+              {leftSidebarTab === 'explorer' ? (
+                <>
+                  <div className="p-3 border-b border-dark-700">
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-sm font-semibold text-dark-200 truncate">
+                            {projectRoot?.name || 'No workspace'}
+                          </h3>
+                          <div className="flex items-center gap-1 text-dark-400">
+                            <button
+                              type="button"
+                              onClick={() => handleCreateFile()}
+                              disabled={!workspaceReady}
+                              className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                              title="New File"
+                              aria-label="New File"
+                            >
+                              <FilePlus className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCreateFolder()}
+                              disabled={!workspaceReady}
+                              className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                              title="New Folder"
+                              aria-label="New Folder"
+                            >
+                              <FolderPlus className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleRefreshExplorer}
+                              className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              title="Refresh Explorer"
+                              aria-label="Refresh Explorer"
+                              disabled={isFileTreeLoading || !workspaceReady}
+                            >
+                              {isFileTreeLoading ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <RefreshCw className="w-4 h-4" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleCollapseExplorer}
+                              className="p-1 rounded hover:bg-dark-700 hover:text-dark-100 transition-colors"
+                              title="Collapse folders"
+                              aria-label="Collapse folders"
+                            >
+                              <Minimize2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setLeftSidebarVisible(false)}
+                          className="p-1 hover:bg-dark-700 rounded transition-colors"
+                          title="Hide sidebar (Ctrl+B)"
+                        >
+                          <X className="w-4 h-4 text-dark-400" />
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <button
-                    onClick={() => setLeftSidebarVisible(false)}
-                    className="p-1 hover:bg-dark-700 rounded transition-colors"
-                    title="Hide sidebar (Ctrl+B)"
-                  >
-                    <X className="w-4 h-4 text-dark-400" />
-                  </button>
-                </div>
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-2">
-              {isFileTreeLoading ? (
-                <div className="text-xs text-dark-400 p-2">Loading files...</div>
-              ) : workspaceReady ? (
-                fileTree.length > 0 ? (
-                  renderFileTree(fileTree, 0, projectRootPath || currentPath || '.')
-                ) : (
-                  <div className="text-xs text-dark-400 p-2">
-                    {(() => {
-                      const rootPath = projectRootPath || currentPath || '.';
-                      const normalizedRootPath = normalizeEditorPath(rootPath);
-                      const normalizedCreatingParentPath = creatingItem?.parentPath ? normalizeEditorPath(creatingItem.parentPath) : null;
-                      return creatingItem && normalizedRootPath === normalizedCreatingParentPath;
-                    })() ? (
-                      <div
-                        className="flex items-center px-2 py-1 text-sm"
-                        style={{ paddingLeft: '8px' }}
-                      >
-                        <div className="w-4 h-4 mr-1 flex-shrink-0" />
-                        {creatingItem.type === 'folder' ? (
-                          <Folder className="w-4 h-4 mr-1 text-blue-400 flex-shrink-0" />
-                        ) : (
-                          <File className="w-4 h-4 mr-1 text-dark-400 flex-shrink-0" />
-                        )}
-                        <input
-                          ref={creatingItemInputRef}
-                          type="text"
-                          value={creatingItemName}
-                          onChange={(e) => setCreatingItemName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              handleConfirmCreating();
-                            } else if (e.key === 'Escape') {
-                              e.preventDefault();
-                              handleCancelCreating();
-                            }
-                          }}
-                          className="flex-1 bg-dark-700 border border-primary-500 rounded px-2 py-0.5 text-dark-100 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
-                          placeholder={creatingItem.type === 'folder' ? 'Folder name' : 'File name (e.g., sample.txt)'}
-                          autoFocus
-                        />
-                      </div>
+                  <div className="flex-1 overflow-y-auto p-2">
+                    {isFileTreeLoading ? (
+                      <div className="text-xs text-dark-400 p-2">Loading files...</div>
+                    ) : workspaceReady ? (
+                      fileTree.length > 0 ? (
+                        renderFileTree(fileTree, 0, projectRootPath || currentPath || '.')
+                      ) : (
+                        <div className="text-xs text-dark-400 p-2">
+                          {(() => {
+                            const rootPath = projectRootPath || currentPath || '.';
+                            const normalizedRootPath = normalizeEditorPath(rootPath);
+                            const normalizedCreatingParentPath = creatingItem?.parentPath ? normalizeEditorPath(creatingItem.parentPath) : null;
+                            return creatingItem && normalizedRootPath === normalizedCreatingParentPath;
+                          })() ? (
+                            <div
+                              className="flex items-center px-2 py-1 text-sm"
+                              style={{ paddingLeft: '8px' }}
+                            >
+                              <div className="w-4 h-4 mr-1 flex-shrink-0" />
+                              {creatingItem.type === 'folder' ? (
+                                <Folder className="w-4 h-4 mr-1 text-blue-400 flex-shrink-0" />
+                              ) : (
+                                <File className="w-4 h-4 mr-1 text-dark-400 flex-shrink-0" />
+                              )}
+                              <input
+                                ref={creatingItemInputRef}
+                                type="text"
+                                value={creatingItemName}
+                                onChange={(e) => setCreatingItemName(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    handleConfirmCreating();
+                                  } else if (e.key === 'Escape') {
+                                    e.preventDefault();
+                                    handleCancelCreating();
+                                  }
+                                }}
+                                className="flex-1 bg-dark-700 border border-primary-500 rounded px-2 py-0.5 text-dark-100 text-sm focus:outline-none focus:ring-1 focus:ring-primary-500"
+                                placeholder={creatingItem.type === 'folder' ? 'Folder name' : 'File name (e.g., sample.txt)'}
+                                autoFocus
+                              />
+                            </div>
+                          ) : (
+                            <div className="text-xs text-dark-400 p-2">Folder is empty</div>
+                          )}
+                        </div>
+                      )
                     ) : (
-                      <div className="text-xs text-dark-400 p-2">Folder is empty</div>
+                      <div className="text-xs text-dark-400 p-2 space-y-3">
+                        <p className="text-dark-300">No workspace selected.</p>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenFolderPrompt()}
+                          className="w-full px-3 py-2 text-left rounded-lg border border-dashed border-dark-600 text-dark-200 hover:bg-dark-800"
+                        >
+                          Open workspace…
+                        </button>
+                        {recentWorkspaces.length > 0 && (
+                          <div className="space-y-2">
+                            <div className="text-[10px] uppercase tracking-wide text-dark-500">
+                              Recent workspaces
+                            </div>
+                            <div className="space-y-1">
+                              {recentWorkspaces.map((workspace) => (
+                                <button
+                                  key={workspace.path}
+                                  type="button"
+                                  onClick={() => handleSelectRecentWorkspace(workspace.path)}
+                                  className="w-full text-left px-2 py-1.5 rounded border border-dark-700 bg-dark-900/60 hover:bg-dark-800 transition-colors"
+                                >
+                                  <div className="text-dark-100 text-[11px] font-semibold">
+                                    {workspace.name}
+                                  </div>
+                                  <div className="text-[10px] text-dark-500 truncate">
+                                    {workspace.path}
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
-                )
-              ) : (
-                <div className="text-xs text-dark-400 p-2 space-y-3">
-                  <p className="text-dark-300">No workspace selected.</p>
-                  <button
-                    type="button"
-                    onClick={() => handleOpenFolderPrompt()}
-                    className="w-full px-3 py-2 text-left rounded-lg border border-dashed border-dark-600 text-dark-200 hover:bg-dark-800"
-                  >
-                    Open workspace…
-                  </button>
-                  {recentWorkspaces.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="text-[10px] uppercase tracking-wide text-dark-500">
-                        Recent workspaces
+                  {folderSearchResults && (
+                    <div className="border-t border-dark-700 p-2 text-xs text-dark-300 space-y-2 bg-dark-900/60">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-dark-100 font-semibold">
+                            Search “{folderSearchResults.query}”
+                          </div>
+                          <div className="text-[10px] text-dark-500">
+                            {formatDisplayPath(folderSearchResults.folderPath)}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setFolderSearchResults(null)}
+                          className="text-[10px] uppercase tracking-wide text-dark-400 hover:text-dark-100"
+                        >
+                          Clear
+                        </button>
                       </div>
-                      <div className="space-y-1">
-                        {recentWorkspaces.map((workspace) => (
+                      <div className="max-h-48 overflow-y-auto space-y-1">
+                        {folderSearchResults.results.length > 0 ? (
+                          folderSearchResults.results.map((result) => (
+                            <button
+                              key={result.path}
+                              type="button"
+                              onClick={() => loadFile(result.path)}
+                              className="w-full text-left px-2 py-1 rounded hover:bg-dark-700 flex items-center gap-2"
+                            >
+                              <File className="w-3 h-3 text-dark-500" />
+                              <div className="flex-1">
+                                <div className="text-dark-100 text-xs">{result.name}</div>
+                                <div className="text-[10px] text-dark-500 truncate">
+                                  {formatDisplayPath(result.path)}
+                                </div>
+                              </div>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="text-[11px] text-dark-500">No matches found.</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  <div className="p-2 border-t border-dark-700 text-xs text-dark-400">
+                    <div>OUTLINE</div>
+                    <div className="mt-1">TIMELINE</div>
+                    <div className="mt-2 pt-2 border-t border-dark-700">
+                      <div>main</div>
+                      <div>0 changes</div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Extensions Marketplace */}
+                  <div className="flex-1 flex flex-col overflow-hidden">
+                    <div className="p-3 border-b border-dark-700">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold text-dark-200">Extensions</h3>
+                        <button
+                          onClick={() => setLeftSidebarVisible(false)}
+                          className="p-1 hover:bg-dark-700 rounded transition-colors"
+                          title="Hide sidebar (Ctrl+B)"
+                        >
+                          <X className="w-4 h-4 text-dark-400" />
+                        </button>
+                      </div>
+
+                      {/* Search Bar */}
+                      <div className="relative mb-3">
+                        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-dark-400" />
+                        <input
+                          type="text"
+                          value={extensionSearchQuery}
+                          onChange={(e) => setExtensionSearchQuery(e.target.value)}
+                          placeholder="Search extensions..."
+                          className="w-full pl-10 pr-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm"
+                        />
+                      </div>
+
+                      {/* Installation Status Filter */}
+                      <div className="flex gap-1 mb-3">
+                        {['all', 'installed', 'not_installed'].map((filter) => (
                           <button
-                            key={workspace.path}
-                            type="button"
-                            onClick={() => handleSelectRecentWorkspace(workspace.path)}
-                            className="w-full text-left px-2 py-1.5 rounded border border-dark-700 bg-dark-900/60 hover:bg-dark-800 transition-colors"
+                            key={filter}
+                            onClick={() => setExtensionInstallFilter(filter)}
+                            className={`px-3 py-1 text-xs rounded transition-colors ${extensionInstallFilter === filter
+                              ? 'bg-primary-600 text-white'
+                              : 'bg-dark-700 text-dark-300 hover:bg-dark-600'
+                              }`}
                           >
-                            <div className="text-dark-100 text-[11px] font-semibold">
-                              {workspace.name}
-                            </div>
-                            <div className="text-[10px] text-dark-500 truncate">
-                              {workspace.path}
-                            </div>
+                            {filter === 'all' ? 'All' : filter === 'installed' ? 'Installed' : 'Not Installed'}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Category Filter */}
+                      <div className="flex gap-1 overflow-x-auto pb-2 mb-3">
+                        {[
+                          { id: 'all', label: 'All' },
+                          { id: 'themes', label: 'Themes' },
+                          { id: 'icon_themes', label: 'Icon Themes' },
+                          { id: 'languages', label: 'Languages' },
+                          { id: 'grammars', label: 'Grammars' },
+                          { id: 'language_servers', label: 'Language Servers' },
+                          { id: 'snippets', label: 'Snippets' },
+                          { id: 'debuggers', label: 'Debuggers' },
+                          { id: 'formatters', label: 'Formatters' },
+                          { id: 'linters', label: 'Linters' },
+                          { id: 'mcp_servers', label: 'MCP Servers' },
+                          { id: 'agent_servers', label: 'Agent Servers' }
+                        ].map((category) => (
+                          <button
+                            key={category.id}
+                            onClick={() => setExtensionCategory(category.id)}
+                            className={`px-3 py-1 text-xs rounded whitespace-nowrap transition-colors ${extensionCategory === category.id
+                              ? 'bg-dark-700 text-dark-100 border border-primary-500'
+                              : 'bg-dark-800 text-dark-400 hover:bg-dark-700 hover:text-dark-200'
+                              }`}
+                          >
+                            {category.label}
                           </button>
                         ))}
                       </div>
                     </div>
-                  )}
-                </div>
-              )}
-            </div>
-            {folderSearchResults && (
-              <div className="border-t border-dark-700 p-2 text-xs text-dark-300 space-y-2 bg-dark-900/60">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-dark-100 font-semibold">
-                      Search “{folderSearchResults.query}”
-                    </div>
-                    <div className="text-[10px] text-dark-500">
-                      {formatDisplayPath(folderSearchResults.folderPath)}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setFolderSearchResults(null)}
-                    className="text-[10px] uppercase tracking-wide text-dark-400 hover:text-dark-100"
-                  >
-                    Clear
-                  </button>
-                </div>
-                <div className="max-h-48 overflow-y-auto space-y-1">
-                  {folderSearchResults.results.length > 0 ? (
-                    folderSearchResults.results.map((result) => (
-                      <button
-                        key={result.path}
-                        type="button"
-                        onClick={() => loadFile(result.path)}
-                        className="w-full text-left px-2 py-1 rounded hover:bg-dark-700 flex items-center gap-2"
-                      >
-                        <File className="w-3 h-3 text-dark-500" />
-                        <div className="flex-1">
-                          <div className="text-dark-100 text-xs">{result.name}</div>
-                          <div className="text-[10px] text-dark-500 truncate">
-                            {formatDisplayPath(result.path)}
-                          </div>
+
+                    {/* Extensions List */}
+                    <div className="flex-1 overflow-y-auto p-3">
+                      {isLoadingExtensions ? (
+                        <div className="flex items-center justify-center py-8">
+                          <Loader2 className="w-6 h-6 animate-spin text-dark-400" />
+                          <span className="ml-2 text-sm text-dark-400">Loading extensions...</span>
                         </div>
-                      </button>
-                    ))
-                  ) : (
-                    <div className="text-[11px] text-dark-500">No matches found.</div>
-                  )}
-                </div>
-              </div>
-            )}
-            <div className="p-2 border-t border-dark-700 text-xs text-dark-400">
-              <div>OUTLINE</div>
-              <div className="mt-1">TIMELINE</div>
-              <div className="mt-2 pt-2 border-t border-dark-700">
-                <div>main</div>
-                <div>0 changes</div>
-              </div>
-            </div>
-            </>
-            ) : (
-            <>
-            {/* Extensions Marketplace */}
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="p-3 border-b border-dark-700">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-dark-200">Extensions</h3>
-                  <button
-                    onClick={() => setLeftSidebarVisible(false)}
-                    className="p-1 hover:bg-dark-700 rounded transition-colors"
-                    title="Hide sidebar (Ctrl+B)"
-                  >
-                    <X className="w-4 h-4 text-dark-400" />
-                  </button>
-                </div>
-                
-                {/* Search Bar */}
-                <div className="relative mb-3">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-dark-400" />
-                  <input
-                    type="text"
-                    value={extensionSearchQuery}
-                    onChange={(e) => setExtensionSearchQuery(e.target.value)}
-                    placeholder="Search extensions..."
-                    className="w-full pl-10 pr-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm"
-                  />
-                </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {extensions
+                            .filter((ext) => {
+                              // Filter by installation status
+                              // Match by ID (case-insensitive) or by name if IDs don't match
+                              const isInstalled = installedExtensions.some(inst => {
+                                const instId = (inst.id || '').toLowerCase().trim();
+                                const extId = (ext.id || '').toLowerCase().trim();
+                                const instName = (inst.name || '').toLowerCase().trim();
+                                const extName = (ext.name || '').toLowerCase().trim();
+                                return instId === extId || (instId && extId && instId.includes(extId)) || (extId && instId.includes(extId)) ||
+                                  (instName === extName && instName && extName);
+                              });
+                              if (extensionInstallFilter === 'installed' && !isInstalled) return false;
+                              if (extensionInstallFilter === 'not_installed' && isInstalled) return false;
 
-                {/* Installation Status Filter */}
-                <div className="flex gap-1 mb-3">
-                  {['all', 'installed', 'not_installed'].map((filter) => (
-                    <button
-                      key={filter}
-                      onClick={() => setExtensionInstallFilter(filter)}
-                      className={`px-3 py-1 text-xs rounded transition-colors ${
-                        extensionInstallFilter === filter
-                          ? 'bg-primary-600 text-white'
-                          : 'bg-dark-700 text-dark-300 hover:bg-dark-600'
-                      }`}
-                    >
-                      {filter === 'all' ? 'All' : filter === 'installed' ? 'Installed' : 'Not Installed'}
-                    </button>
-                  ))}
-                </div>
+                              // Filter by search query
+                              if (extensionSearchQuery) {
+                                const query = extensionSearchQuery.toLowerCase();
+                                return (
+                                  ext.name?.toLowerCase().includes(query) ||
+                                  ext.description?.toLowerCase().includes(query) ||
+                                  ext.author?.toLowerCase().includes(query)
+                                );
+                              }
+                              return true;
+                            })
+                            .map((extension) => {
+                              // Match by ID (case-insensitive) or by name if IDs don't match
+                              const isInstalled = installedExtensions.some(inst => {
+                                const instId = (inst.id || '').toLowerCase().trim();
+                                const extId = (extension.id || '').toLowerCase().trim();
+                                const instName = (inst.name || '').toLowerCase().trim();
+                                const extName = (extension.name || '').toLowerCase().trim();
+                                return instId === extId || (instId && extId && instId.includes(extId)) || (extId && instId.includes(extId)) ||
+                                  (instName === extName && instName && extName);
+                              });
+                              const isInstalling = installingExtensionId === extension.id;
 
-                {/* Category Filter */}
-                <div className="flex gap-1 overflow-x-auto pb-2 mb-3">
-                  {[
-                    { id: 'all', label: 'All' },
-                    { id: 'themes', label: 'Themes' },
-                    { id: 'icon_themes', label: 'Icon Themes' },
-                    { id: 'languages', label: 'Languages' },
-                    { id: 'grammars', label: 'Grammars' },
-                    { id: 'language_servers', label: 'Language Servers' },
-                    { id: 'snippets', label: 'Snippets' },
-                    { id: 'debuggers', label: 'Debuggers' },
-                    { id: 'formatters', label: 'Formatters' },
-                    { id: 'linters', label: 'Linters' },
-                    { id: 'mcp_servers', label: 'MCP Servers' },
-                    { id: 'agent_servers', label: 'Agent Servers' }
-                  ].map((category) => (
-                    <button
-                      key={category.id}
-                      onClick={() => setExtensionCategory(category.id)}
-                      className={`px-3 py-1 text-xs rounded whitespace-nowrap transition-colors ${
-                        extensionCategory === category.id
-                          ? 'bg-dark-700 text-dark-100 border border-primary-500'
-                          : 'bg-dark-800 text-dark-400 hover:bg-dark-700 hover:text-dark-200'
-                      }`}
-                    >
-                      {category.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Extensions List */}
-              <div className="flex-1 overflow-y-auto p-3">
-                {isLoadingExtensions ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="w-6 h-6 animate-spin text-dark-400" />
-                    <span className="ml-2 text-sm text-dark-400">Loading extensions...</span>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {extensions
-                      .filter((ext) => {
-                        // Filter by installation status
-                        // Match by ID (case-insensitive) or by name if IDs don't match
-                        const isInstalled = installedExtensions.some(inst => {
-                          const instId = (inst.id || '').toLowerCase().trim();
-                          const extId = (ext.id || '').toLowerCase().trim();
-                          const instName = (inst.name || '').toLowerCase().trim();
-                          const extName = (ext.name || '').toLowerCase().trim();
-                          return instId === extId || (instId && extId && instId.includes(extId)) || (extId && instId.includes(extId)) || 
-                                 (instName === extName && instName && extName);
-                        });
-                        if (extensionInstallFilter === 'installed' && !isInstalled) return false;
-                        if (extensionInstallFilter === 'not_installed' && isInstalled) return false;
-                        
-                        // Filter by search query
-                        if (extensionSearchQuery) {
-                          const query = extensionSearchQuery.toLowerCase();
-                          return (
-                            ext.name?.toLowerCase().includes(query) ||
-                            ext.description?.toLowerCase().includes(query) ||
-                            ext.author?.toLowerCase().includes(query)
-                          );
-                        }
-                        return true;
-                      })
-                      .map((extension) => {
-                        // Match by ID (case-insensitive) or by name if IDs don't match
-                        const isInstalled = installedExtensions.some(inst => {
-                          const instId = (inst.id || '').toLowerCase().trim();
-                          const extId = (extension.id || '').toLowerCase().trim();
-                          const instName = (inst.name || '').toLowerCase().trim();
-                          const extName = (extension.name || '').toLowerCase().trim();
-                          return instId === extId || (instId && extId && instId.includes(extId)) || (extId && instId.includes(extId)) || 
-                                 (instName === extName && instName && extName);
-                        });
-                        const isInstalling = installingExtensionId === extension.id;
-                        
-                        return (
-                          <div
-                            key={extension.id}
-                            className="bg-dark-900 border border-dark-700 rounded-lg p-4 hover:border-dark-600 transition-colors"
-                          >
-                            <div className="flex items-start justify-between mb-2">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                  <h4 className="text-sm font-semibold text-dark-100">
-                                    {extension.name || 'Unnamed Extension'}
-                                  </h4>
-                                  <span className="text-xs text-dark-500">
-                                    {extension.version || 'v0.0.0'}
-                                  </span>
-                                  <span className={`px-2 py-0.5 text-[10px] rounded-full ${
-                                    extension.extension_type === 'vscode' 
-                                      ? 'bg-blue-900 text-blue-300' 
-                                      : 'bg-purple-900 text-purple-300'
-                                  }`}>
-                                    {extension.extension_type === 'vscode' ? 'VSCode' : 'MCP'}
-                                  </span>
-                                  <span className="px-2 py-0.5 bg-dark-800 text-dark-400 text-[10px] rounded-full">
-                                    {extension.category || 'Other'}
-                                  </span>
-                                  {extension.extension_type === 'vscode' && extension.is_compatible === false && (
-                                    <span className="px-2 py-0.5 bg-yellow-900 text-yellow-300 text-[10px] rounded-full" title="May have limited compatibility">
-                                      ⚠️ Limited
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-xs text-dark-400 mb-2 line-clamp-2">
-                                  {extension.description || 'No description available'}
-                                </p>
-                                <div className="flex items-center gap-4 text-xs text-dark-500 flex-wrap">
-                                  <span>{extension.publisher || extension.author || 'Unknown'}</span>
-                                  {extension.downloads && (
-                                    <span>{extension.downloads.toLocaleString()} downloads</span>
-                                  )}
-                                  {extension.marketplace_url && (
-                                    <a
-                                      href={extension.marketplace_url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-primary-400 hover:text-primary-300 underline"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      View on Marketplace
-                                    </a>
-                                  )}
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => isInstalled ? handleUninstallExtension(extension.id) : handleInstallExtension(extension.id)}
-                                disabled={isInstalling}
-                                className={`ml-3 px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1 ${
-                                  isInstalled
-                                    ? 'bg-dark-700 text-dark-300 hover:bg-dark-600'
-                                    : 'bg-primary-600 text-white hover:bg-primary-700'
-                                } disabled:opacity-50 disabled:cursor-not-allowed`}
-                              >
-                                {isInstalling ? (
-                                  <>
-                                    <Loader2 className="w-3 h-3 animate-spin" />
-                                    <span>Installing...</span>
-                                  </>
-                                ) : isInstalled ? (
-                                  <>
-                                    <CheckCircle className="w-3 h-3" />
-                                    <span>Installed</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Download className="w-3 h-3" />
-                                    <span>Install</span>
-                                  </>
-                                )}
-                              </button>
-                            </div>
-                            {/* Theme extraction section for installed theme extensions */}
-                            {isInstalled && (extension.category === 'Themes' || extension.category === 'Icon Themes') && (
-                              <div className="mt-3 pt-3 border-t border-dark-700">
-                                <button
-                                  type="button"
-                                  onClick={() => handleExtractThemes(extension.id)}
-                                  className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs bg-primary-600 hover:bg-primary-700 text-white rounded transition-colors"
+                              return (
+                                <div
+                                  key={extension.id}
+                                  className="bg-dark-900 border border-dark-700 rounded-lg p-4 hover:border-dark-600 transition-colors"
                                 >
-                                  <Palette className="w-3 h-3" />
-                                  <span>Extract Themes</span>
-                                </button>
-                                <p className="mt-2 text-xs text-dark-500 text-center">
-                                  Click to extract themes from this extension
-                                </p>
-                              </div>
-                            )}
-                            
-                            {/* Configuration section for installed MCP servers */}
-                            {isInstalled && extension.category === 'MCP Servers' && (
-                              <div className="mt-3 pt-3 border-t border-dark-700">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setExpandedConfigs(prev => ({
-                                      ...prev,
-                                      [extension.id]: !prev[extension.id]
-                                    }));
-                                    if (!expandedConfigs[extension.id] && !extensionConfigs[extension.id]) {
-                                      loadExtensionConfig(extension.id);
-                                    }
-                                  }}
-                                  className="w-full flex items-center justify-between text-xs text-dark-300 hover:text-dark-100 transition-colors"
-                                >
-                                  <div className="flex items-center gap-2">
-                                    <Settings className="w-3 h-3" />
-                                    <span>Configuration Settings</span>
-                                  </div>
-                                  {expandedConfigs[extension.id] ? (
-                                    <ChevronUp className="w-3 h-3" />
-                                  ) : (
-                                    <ChevronDown className="w-3 h-3" />
-                                  )}
-                                </button>
-                                {expandedConfigs[extension.id] && (
-                                  <div className="mt-2 p-3 bg-dark-800 rounded border border-dark-700">
-                                    {loadingConfigs[extension.id] ? (
-                                      <div className="flex items-center gap-2 text-xs text-dark-400">
-                                        <Loader2 className="w-3 h-3 animate-spin" />
-                                        <span>Loading configuration...</span>
-                                      </div>
-                                    ) : extensionConfigs[extension.id]?.error ? (
-                                      <div className="text-xs text-red-400">
-                                        Error: {extensionConfigs[extension.id].error}
-                                      </div>
-                                    ) : extensionConfigs[extension.id] ? (
-                                      <div className="space-y-2 text-xs">
-                                        <div className="text-dark-300 font-medium">
-                                          {extensionConfigs[extension.id].extension_name || extension.name}
-                                        </div>
-                                        {extensionConfigs[extension.id].has_config ? (
-                                          <div className="space-y-1">
-                                            <div className="text-dark-400">
-                                              <span className="text-dark-500">Status:</span>{' '}
-                                              <span className="text-green-400">Configured</span>
-                                            </div>
-                                            <div className="text-dark-400">
-                                              <span className="text-dark-500">Config File:</span>{' '}
-                                              <code className="text-primary-400 text-[10px]">
-                                                {extensionConfigs[extension.id].config_file_path}
-                                              </code>
-                                            </div>
-                                            {extensionConfigs[extension.id].config?.server_name && (
-                                              <div className="text-dark-400">
-                                                <span className="text-dark-500">Server Name:</span>{' '}
-                                                <code className="text-primary-400 text-[10px]">
-                                                  {extensionConfigs[extension.id].config.server_name}
-                                                </code>
-                                              </div>
-                                            )}
-                                            {extensionConfigs[extension.id].config?.config && (
-                                              <div className="mt-2 p-2 bg-dark-900 rounded border border-dark-600">
-                                                <div className="text-dark-500 mb-1">Configuration:</div>
-                                                <pre className="text-[10px] text-dark-300 overflow-x-auto">
-                                                  {JSON.stringify(extensionConfigs[extension.id].config.config, null, 2)}
-                                                </pre>
-                                              </div>
-                                            )}
-                                          </div>
-                                        ) : (
-                                          <div className="space-y-2">
-                                            <div className="text-yellow-400">
-                                              ⚠️ Not configured in MCP config file
-                                            </div>
-                                            <div className="text-dark-400">
-                                              <span className="text-dark-500">Config File:</span>{' '}
-                                              <code className="text-primary-400 text-[10px]">
-                                                {extensionConfigs[extension.id].config_file_path}
-                                              </code>
-                                            </div>
-                                            {extensionConfigs[extension.id].example_config && (
-                                              <div className="mt-2 p-2 bg-dark-900 rounded border border-dark-600">
-                                                <div className="text-dark-500 mb-1">Example Configuration:</div>
-                                                <pre className="text-[10px] text-dark-300 overflow-x-auto">
-                                                  {JSON.stringify(extensionConfigs[extension.id].example_config, null, 2)}
-                                                </pre>
-                                              </div>
-                                            )}
-                                            <div className="text-dark-400 text-[10px] mt-2">
-                                              Add this server to your MCP configuration file to enable it.
-                                            </div>
-                                          </div>
+                                  <div className="flex items-start justify-between mb-2">
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                        <h4 className="text-sm font-semibold text-dark-100">
+                                          {extension.name || 'Unnamed Extension'}
+                                        </h4>
+                                        <span className="text-xs text-dark-500">
+                                          {extension.version || 'v0.0.0'}
+                                        </span>
+                                        <span className={`px-2 py-0.5 text-[10px] rounded-full ${extension.extension_type === 'vscode'
+                                          ? 'bg-blue-900 text-blue-300'
+                                          : 'bg-purple-900 text-purple-300'
+                                          }`}>
+                                          {extension.extension_type === 'vscode' ? 'VSCode' : 'MCP'}
+                                        </span>
+                                        <span className="px-2 py-0.5 bg-dark-800 text-dark-400 text-[10px] rounded-full">
+                                          {extension.category || 'Other'}
+                                        </span>
+                                        {extension.extension_type === 'vscode' && extension.is_compatible === false && (
+                                          <span className="px-2 py-0.5 bg-yellow-900 text-yellow-300 text-[10px] rounded-full" title="May have limited compatibility">
+                                            ⚠️ Limited
+                                          </span>
                                         )}
                                       </div>
-                                    ) : (
-                                      <div className="text-xs text-dark-400">
-                                        Click to load configuration
+                                      <p className="text-xs text-dark-400 mb-2 line-clamp-2">
+                                        {extension.description || 'No description available'}
+                                      </p>
+                                      <div className="flex items-center gap-4 text-xs text-dark-500 flex-wrap">
+                                        <span>{extension.publisher || extension.author || 'Unknown'}</span>
+                                        {extension.downloads && (
+                                          <span>{extension.downloads.toLocaleString()} downloads</span>
+                                        )}
+                                        {extension.marketplace_url && (
+                                          <a
+                                            href={extension.marketplace_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-primary-400 hover:text-primary-300 underline"
+                                            onClick={(e) => e.stopPropagation()}
+                                          >
+                                            View on Marketplace
+                                          </a>
+                                        )}
                                       </div>
-                                    )}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => isInstalled ? handleUninstallExtension(extension.id) : handleInstallExtension(extension.id)}
+                                      disabled={isInstalling}
+                                      className={`ml-3 px-3 py-1.5 text-xs rounded transition-colors flex items-center gap-1 ${isInstalled
+                                        ? 'bg-dark-700 text-dark-300 hover:bg-dark-600'
+                                        : 'bg-primary-600 text-white hover:bg-primary-700'
+                                        } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                    >
+                                      {isInstalling ? (
+                                        <>
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                          <span>Installing...</span>
+                                        </>
+                                      ) : isInstalled ? (
+                                        <>
+                                          <CheckCircle className="w-3 h-3" />
+                                          <span>Installed</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Download className="w-3 h-3" />
+                                          <span>Install</span>
+                                        </>
+                                      )}
+                                    </button>
                                   </div>
-                                )}
+                                  {/* Theme extraction section for installed theme extensions */}
+                                  {isInstalled && (extension.category === 'Themes' || extension.category === 'Icon Themes') && (
+                                    <div className="mt-3 pt-3 border-t border-dark-700">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleExtractThemes(extension.id)}
+                                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs bg-primary-600 hover:bg-primary-700 text-white rounded transition-colors"
+                                      >
+                                        <Palette className="w-3 h-3" />
+                                        <span>Extract Themes</span>
+                                      </button>
+                                      <p className="mt-2 text-xs text-dark-500 text-center">
+                                        Click to extract themes from this extension
+                                      </p>
+                                    </div>
+                                  )}
+
+                                  {/* Configuration section for installed MCP servers */}
+                                  {isInstalled && extension.category === 'MCP Servers' && (
+                                    <div className="mt-3 pt-3 border-t border-dark-700">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setExpandedConfigs(prev => ({
+                                            ...prev,
+                                            [extension.id]: !prev[extension.id]
+                                          }));
+                                          if (!expandedConfigs[extension.id] && !extensionConfigs[extension.id]) {
+                                            loadExtensionConfig(extension.id);
+                                          }
+                                        }}
+                                        className="w-full flex items-center justify-between text-xs text-dark-300 hover:text-dark-100 transition-colors"
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          <Settings className="w-3 h-3" />
+                                          <span>Configuration Settings</span>
+                                        </div>
+                                        {expandedConfigs[extension.id] ? (
+                                          <ChevronUp className="w-3 h-3" />
+                                        ) : (
+                                          <ChevronDown className="w-3 h-3" />
+                                        )}
+                                      </button>
+                                      {expandedConfigs[extension.id] && (
+                                        <div className="mt-2 p-3 bg-dark-800 rounded border border-dark-700">
+                                          {loadingConfigs[extension.id] ? (
+                                            <div className="flex items-center gap-2 text-xs text-dark-400">
+                                              <Loader2 className="w-3 h-3 animate-spin" />
+                                              <span>Loading configuration...</span>
+                                            </div>
+                                          ) : extensionConfigs[extension.id]?.error ? (
+                                            <div className="text-xs text-red-400">
+                                              Error: {extensionConfigs[extension.id].error}
+                                            </div>
+                                          ) : extensionConfigs[extension.id] ? (
+                                            <div className="space-y-2 text-xs">
+                                              <div className="text-dark-300 font-medium">
+                                                {extensionConfigs[extension.id].extension_name || extension.name}
+                                              </div>
+                                              {extensionConfigs[extension.id].has_config ? (
+                                                <div className="space-y-1">
+                                                  <div className="text-dark-400">
+                                                    <span className="text-dark-500">Status:</span>{' '}
+                                                    <span className="text-green-400">Configured</span>
+                                                  </div>
+                                                  <div className="text-dark-400">
+                                                    <span className="text-dark-500">Config File:</span>{' '}
+                                                    <code className="text-primary-400 text-[10px]">
+                                                      {extensionConfigs[extension.id].config_file_path}
+                                                    </code>
+                                                  </div>
+                                                  {extensionConfigs[extension.id].config?.server_name && (
+                                                    <div className="text-dark-400">
+                                                      <span className="text-dark-500">Server Name:</span>{' '}
+                                                      <code className="text-primary-400 text-[10px]">
+                                                        {extensionConfigs[extension.id].config.server_name}
+                                                      </code>
+                                                    </div>
+                                                  )}
+                                                  {extensionConfigs[extension.id].config?.config && (
+                                                    <div className="mt-2 p-2 bg-dark-900 rounded border border-dark-600">
+                                                      <div className="text-dark-500 mb-1">Configuration:</div>
+                                                      <pre className="text-[10px] text-dark-300 overflow-x-auto">
+                                                        {JSON.stringify(extensionConfigs[extension.id].config.config, null, 2)}
+                                                      </pre>
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              ) : (
+                                                <div className="space-y-2">
+                                                  <div className="text-yellow-400">
+                                                    ⚠️ Not configured in MCP config file
+                                                  </div>
+                                                  <div className="text-dark-400">
+                                                    <span className="text-dark-500">Config File:</span>{' '}
+                                                    <code className="text-primary-400 text-[10px]">
+                                                      {extensionConfigs[extension.id].config_file_path}
+                                                    </code>
+                                                  </div>
+                                                  {extensionConfigs[extension.id].example_config && (
+                                                    <div className="mt-2 p-2 bg-dark-900 rounded border border-dark-600">
+                                                      <div className="text-dark-500 mb-1">Example Configuration:</div>
+                                                      <pre className="text-[10px] text-dark-300 overflow-x-auto">
+                                                        {JSON.stringify(extensionConfigs[extension.id].example_config, null, 2)}
+                                                      </pre>
+                                                    </div>
+                                                  )}
+                                                  <div className="text-dark-400 text-[10px] mt-2">
+                                                    Add this server to your MCP configuration file to enable it.
+                                                  </div>
+                                                </div>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <div className="text-xs text-dark-400">
+                                              Click to load configuration
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          {extensions.filter((ext) => {
+                            // Match by ID (case-insensitive) or by name if IDs don't match
+                            const isInstalled = installedExtensions.some(inst => {
+                              const instId = (inst.id || '').toLowerCase().trim();
+                              const extId = (ext.id || '').toLowerCase().trim();
+                              const instName = (inst.name || '').toLowerCase().trim();
+                              const extName = (ext.name || '').toLowerCase().trim();
+                              return instId === extId || (instId && extId && instId.includes(extId)) || (extId && instId.includes(extId)) ||
+                                (instName === extName && instName && extName);
+                            });
+                            if (extensionInstallFilter === 'installed' && !isInstalled) return false;
+                            if (extensionInstallFilter === 'not_installed' && isInstalled) return false;
+                            if (extensionSearchQuery) {
+                              const query = extensionSearchQuery.toLowerCase();
+                              return (
+                                ext.name?.toLowerCase().includes(query) ||
+                                ext.description?.toLowerCase().includes(query) ||
+                                ext.author?.toLowerCase().includes(query)
+                              );
+                            }
+                            return true;
+                          }).length === 0 && (
+                              <div className="text-center py-8 text-dark-400 text-sm">
+                                No extensions found
                               </div>
                             )}
-                          </div>
-                        );
-                      })}
-                    {extensions.filter((ext) => {
-                      // Match by ID (case-insensitive) or by name if IDs don't match
-                      const isInstalled = installedExtensions.some(inst => {
-                        const instId = (inst.id || '').toLowerCase().trim();
-                        const extId = (ext.id || '').toLowerCase().trim();
-                        const instName = (inst.name || '').toLowerCase().trim();
-                        const extName = (ext.name || '').toLowerCase().trim();
-                        return instId === extId || (instId && extId && instId.includes(extId)) || (extId && instId.includes(extId)) || 
-                               (instName === extName && instName && extName);
-                      });
-                      if (extensionInstallFilter === 'installed' && !isInstalled) return false;
-                      if (extensionInstallFilter === 'not_installed' && isInstalled) return false;
-                      if (extensionSearchQuery) {
-                        const query = extensionSearchQuery.toLowerCase();
-                        return (
-                          ext.name?.toLowerCase().includes(query) ||
-                          ext.description?.toLowerCase().includes(query) ||
-                          ext.author?.toLowerCase().includes(query)
-                        );
-                      }
-                      return true;
-                    }).length === 0 && (
-                      <div className="text-center py-8 text-dark-400 text-sm">
-                        No extensions found
-                      </div>
-                    )}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
-              </div>
-            </div>
-            </>
-            )}
+                </>
+              )}
             </div>
             {/* Left Resize Handle */}
             <div
@@ -9864,9 +9955,8 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 .map((file) => (
                   <div
                     key={normalizeEditorPath(file.path)}
-                    className={`flex items-center px-3 py-2 border-r border-dark-700 cursor-pointer text-sm relative z-10 ${
-                      normalizeEditorPath(activeTab || '') === normalizeEditorPath(file.path) ? 'bg-dark-900' : 'bg-dark-800 hover:bg-dark-750'
-                    }`}
+                    className={`flex items-center px-3 py-2 border-r border-dark-700 cursor-pointer text-sm relative z-10 ${normalizeEditorPath(activeTab || '') === normalizeEditorPath(file.path) ? 'bg-dark-900' : 'bg-dark-800 hover:bg-dark-750'
+                      }`}
                     style={{ pointerEvents: 'auto', zIndex: 10 }}
                     onClick={(e) => {
                       // Only handle tab click if not clicking on the close button
@@ -10094,7 +10184,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   setIsEditorReady(true);
                   // Set Monaco instance for theme management (ensure it's set)
                   setMonacoInstance(monacoInstance);
-                  
+
                   // Load and apply active theme on mount
                   try {
                     const savedTheme = localStorage.getItem('activeTheme');
@@ -10123,10 +10213,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   const selectionDisposable = editorInstance.onDidChangeCursorSelection((e) => {
                     const selection = e.selection;
                     const hasSelection = !selection.isEmpty();
-                    
+
                     // Get current activeTab from ref to avoid stale closure
                     const currentActiveTab = activeTabRef.current;
-                    
+
                     if (hasSelection && currentActiveTab) {
                       const startLine = selection.startLineNumber;
                       const endLine = selection.endLineNumber;
@@ -10139,7 +10229,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                       setEditorSelection(null);
                     }
                   });
-                  
+
                   // Store disposable for cleanup
                   editorInstance.onDidDispose(() => {
                     selectionDisposable.dispose();
@@ -10149,7 +10239,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                   const newContent = value || '';
                   setEditorContent(newContent);
                   // Update content in openFiles and mark as modified (user edit, not AI preview)
-                  setOpenFiles(prev => prev.map(f => 
+                  setOpenFiles(prev => prev.map(f =>
                     f.path === activeTab ? { ...f, content: newContent, modified: true, aiPreview: false } : f
                   ));
                 }}
@@ -10238,7 +10328,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               style={{ minWidth: '4px' }}
               title="Drag to resize"
             />
-            <div 
+            <div
               className="bg-dark-800 border-l border-dark-700 flex flex-col h-full"
               style={{
                 width: `var(--right-sidebar-width, ${rightSidebarWidth}px)`,
@@ -10246,644 +10336,990 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                 maxWidth: '50vw', // Allow up to 50% of viewport width for maximum size
               }}
             >
-            {/* Chat Tabs */}
-            <div className="flex items-center border-b border-dark-700 bg-dark-800">
-              {chatTabs.map((tab) => (
-                <div
-                  key={tab.id}
-                  className={`flex items-center gap-2 px-3 py-2 border-r border-dark-700 cursor-pointer text-sm ${
-                    activeChatTab === tab.id
+              {/* Chat Tabs */}
+              <div className="flex items-center border-b border-dark-700 bg-dark-800">
+                {chatTabs.map((tab) => (
+                  <div
+                    key={tab.id}
+                    className={`flex items-center gap-2 px-3 py-2 border-r border-dark-700 cursor-pointer text-sm ${activeChatTab === tab.id
                       ? 'bg-dark-900 text-dark-100'
                       : 'bg-dark-800 text-dark-400 hover:text-dark-200'
-                  }`}
-                  onClick={() => setActiveChatTab(tab.id)}
-                >
-                  <span className="truncate max-w-[120px]">{tab.title}</span>
-                  {chatTabs.length > 1 && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (chatTabs.length > 1) {
-                          const newTabs = chatTabs.filter(t => t.id !== tab.id);
-                          setChatTabs(newTabs);
-                          if (activeChatTab === tab.id && newTabs.length > 0) {
-                            setActiveChatTab(newTabs[0].id);
-                          }
-                        }
-                      }}
-                      className="hover:bg-dark-700 rounded p-0.5"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              ))}
-              <div className="flex-1 flex items-center justify-end gap-1 px-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const newId = Math.max(...chatTabs.map(t => t.id), 0) + 1;
-                    setChatTabs(prev => prev.map(t => ({ ...t, isActive: false })).concat([{ id: newId, title: 'New Chat', isActive: true }]));
-                    setActiveChatTab(newId);
-                    startNewChat();
-                  }}
-                  className="p-1.5 hover:bg-dark-700 rounded transition-colors"
-                  title="New Chat"
-                >
-                  <Plus className="w-4 h-4 text-dark-400" />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleChatHistoryDialogToggle}
-                  className="p-1.5 hover:bg-dark-700 rounded transition-colors"
-                  title="Chat History"
-                >
-                  <History className="w-4 h-4 text-dark-400" />
-                </button>
-                <button
-                  type="button"
-                  className="p-1.5 hover:bg-dark-700 rounded transition-colors"
-                  title="More"
-                >
-                  <MoreVertical className="w-4 h-4 text-dark-400" />
-                </button>
-              </div>
-            </div>
-
-            {/* Top Header - File Count and Stop Button */}
-            <div className="px-3 py-2 border-b border-dark-700 bg-dark-700/50 flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs text-dark-400">
-                <ChevronRightIcon className="w-3 h-3" />
-                <span>{openFiles.length} File{openFiles.length !== 1 ? 's' : ''}</span>
-              </div>
-              {isLoadingChat && (
-                <button
-                  type="button"
-                  className="flex items-center gap-2 px-2 py-1 text-xs text-dark-300 hover:bg-dark-600 rounded transition-colors"
-                  onClick={handleStopChat}
-                >
-                  <span>Stop</span>
-                  <kbd className="px-1 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] font-mono">Ctrl+Shift+X</kbd>
-                  <Square className="w-3 h-3 fill-current" />
-                </button>
-              )}
-            </div>
-            
-            {/* Chat Messages Container - Wrapper for scrollable area and jump button */}
-            <div className="relative flex-1 min-h-0 flex flex-col">
-              {/* Chat Messages - Scrollable Area */}
-              <div
-                ref={chatContainerRef}
-                onScroll={handleChatScroll}
-                className="relative flex-1 overflow-y-auto bg-dark-900 chat-messages-container min-h-0"
-              >
-              {/* Top Pinned Input - Shows the user message based on scroll position (last message when at bottom, visible message when scrolled up) */}
-              {topVisibleUserMessageId && chatMessages.length > 0 && (
-                <div 
-                  className="sticky top-0 z-50 border-b border-dark-700 bg-dark-800 shadow-lg"
-                  style={{ 
-                    position: '-webkit-sticky',
-                    position: 'sticky',
-                    top: 0,
-                    backgroundColor: 'rgb(30, 41, 59)'
-                  }}
-                >
-                  <form onSubmit={handleTopPinnedSubmit} className="flex flex-col flex-1 min-h-0 relative">
-                    {/* Scrollable Textarea Area */}
-                    <div className="flex-1 min-h-0 px-3 py-2 flex flex-col overflow-hidden">
-                      <div className="flex items-start gap-2 flex-1 min-h-0 overflow-hidden">
-                        <textarea
-                          ref={topPinnedInputRef}
-                          value={topPinnedInput}
-                          onChange={(e) => setTopPinnedInput(e.target.value)}
-                          onPaste={handleImagePaste}
-                          placeholder="Edit or continue from this message..."
-                          rows={1}
-                          className="flex-1 w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] overflow-y-auto"
-                          disabled={isLoadingChat}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault();
-                              handleTopPinnedSubmit(e);
-                            } else if (e.key === 'Escape') {
-                              setTopVisibleUserMessageId(null);
-                              setTopPinnedInput('');
-                            }
-                          }}
-                          onInput={(e) => {
-                            const textarea = e.target;
-                            textarea.style.height = 'auto';
-                            const scrollHeight = textarea.scrollHeight;
-                            const maxHeight = 300;
-                            if (scrollHeight > maxHeight) {
-                              textarea.style.height = maxHeight + 'px';
-                              textarea.style.overflowY = 'auto';
-                            } else {
-                              textarea.style.height = scrollHeight + 'px';
-                              textarea.style.overflowY = 'hidden';
-                            }
-                          }}
-                        />
-                        <input
-                          ref={imageInputRef}
-                          type="file"
-                          accept="*/*"
-                          multiple
-                          onChange={handleImageUpload}
-                          className="hidden"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => imageInputRef.current?.click()}
-                          className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0"
-                          title="Attach image"
-                        >
-                          <Image className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={!topPinnedInput.trim() && attachedImages.length === 0}
-                          className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-                          title={isLoadingChat ? 'Queue message for later' : 'Send message now'}
-                        >
-                          <Send className="w-4 h-4" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTopVisibleUserMessageId(null);
-                            setTopPinnedInput('');
-                          }}
-                          className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0"
-                          title="Close"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </form>
-                </div>
-              )}
-              <div>
-                {chatMessages.length === 0 ? (
-                  <div className="flex flex-col h-full">
-                    <div className="flex items-center justify-center flex-1 p-3">
-                      <p className="text-sm text-dark-400">Start a conversation with AI</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-3 space-y-3">
-                    {chatMessages.map((message) => (
-                    <div
-                      key={message.id}
-                      ref={(el) => {
-                        if (message.role === 'user' && el) {
-                          messageRefs.current[message.id] = el;
-                        }
-                      }}
-                      className={`flex space-x-2 ${
-                        message.role === 'user' ? 'justify-end' : 'justify-start'
                       }`}
+                    onClick={() => handleSwitchChatTab(tab.id)}
+                  >
+                    <span className="truncate max-w-[120px]">{tab.title}</span>
+                    {chatTabs.length > 1 && (
+                      <button
+                        onClick={(e) => handleCloseChatTab(e, tab.id)}
+                        className="hover:bg-dark-700 rounded p-0.5"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <div className="flex-1 flex items-center justify-end gap-1 px-2">
+                  <button
+                    type="button"
+                    onClick={handleNewChatTab}
+                    className="p-1.5 hover:bg-dark-700 rounded transition-colors"
+                    title="New Chat"
+                  >
+                    <Plus className="w-4 h-4 text-dark-400" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleChatHistoryDialogToggle}
+                    className="p-1.5 hover:bg-dark-700 rounded transition-colors"
+                    title="Chat History"
+                  >
+                    <History className="w-4 h-4 text-dark-400" />
+                  </button>
+                  <button
+                    type="button"
+                    className="p-1.5 hover:bg-dark-700 rounded transition-colors"
+                    title="More"
+                  >
+                    <MoreVertical className="w-4 h-4 text-dark-400" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Top Header - File Count and Stop Button */}
+              <div className="px-3 py-2 border-b border-dark-700 bg-dark-700/50 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs text-dark-400">
+                  <ChevronRightIcon className="w-3 h-3" />
+                  <span>{openFiles.length} File{openFiles.length !== 1 ? 's' : ''}</span>
+                </div>
+                {isLoadingChat && (
+                  <button
+                    type="button"
+                    className="flex items-center gap-2 px-2 py-1 text-xs text-dark-300 hover:bg-dark-600 rounded transition-colors"
+                    onClick={handleStopChat}
+                  >
+                    <span>Stop</span>
+                    <kbd className="px-1 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] font-mono">Ctrl+Shift+X</kbd>
+                    <Square className="w-3 h-3 fill-current" />
+                  </button>
+                )}
+              </div>
+
+              {/* Chat Messages Container - Wrapper for scrollable area and jump button */}
+              <div className="relative flex-1 min-h-0 flex flex-col">
+                {/* Chat Messages - Scrollable Area */}
+                <div
+                  ref={chatContainerRef}
+                  onScroll={handleChatScroll}
+                  className="relative flex-1 overflow-y-auto bg-dark-900 chat-messages-container min-h-0"
+                >
+                  {/* Top Pinned Input - Shows the user message based on scroll position (last message when at bottom, visible message when scrolled up) */}
+                  {topVisibleUserMessageId && chatMessages.length > 0 && (
+                    <div
+                      className="sticky top-0 z-50 border-b border-dark-700 bg-dark-800 shadow-lg"
+                      style={{
+                        position: '-webkit-sticky',
+                        position: 'sticky',
+                        top: 0,
+                        backgroundColor: 'rgb(30, 41, 59)'
+                      }}
                     >
-                      {message.role === 'assistant' && (
-                        <Bot className="w-5 h-5 text-primary-500 mt-1 flex-shrink-0" />
-                      )}
-                        {(() => {
-                          const normalizedContent = normalizeChatInput(
-                            message.rawContent ?? message.content
-                          );
-                          const webReferences = message.web_references || message.webReferences || null;
-                          const formattedHtml = formatMessageContent(normalizedContent, webReferences);
-                          const currentFeedback =
-                            message.messageId && messageFeedback[message.messageId]
-                              ? messageFeedback[message.messageId]
-                              : null;
-                          const isSubmittingFeedback =
-                            message.messageId && feedbackSubmitting[message.messageId];
-                          const feedbackButtonBase =
-                            'flex items-center gap-1 px-2 py-1 rounded-md border text-xs transition-colors';
-                          
-                          // Helper function to check if HTML has actual text content
-                          const hasActualContent = (html) => {
-                            if (!html || typeof html !== 'string') return false;
-                            // Remove HTML tags and check for actual text
-                            const textOnly = html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&[a-z]+;/gi, '');
-                            const trimmed = textOnly.trim();
-                            // Also check if it's not just empty HTML tags like <p></p>
-                            if (trimmed.length === 0) return false;
-                            // Additional check: create a temporary element to extract text content if available
-                            if (typeof document !== 'undefined' && document.createElement) {
-                              try {
-                                const tempDiv = document.createElement('div');
-                                tempDiv.innerHTML = html;
-                                const textContent = tempDiv.textContent || tempDiv.innerText || '';
-                                return textContent.trim().length > 0;
-                              } catch (e) {
-                                // Fallback to regex-based check
-                                return trimmed.length > 0;
-                              }
-                            }
-                            return trimmed.length > 0;
-                          };
-                          
-                          const hasThinking = message.thinking && message.role === 'assistant';
-                          // Check both normalized content and formatted HTML to ensure we have actual content
-                          const hasContent = (normalizedContent && normalizedContent.trim().length > 0) && 
-                                            hasActualContent(formattedHtml);
-                          const messageKey = message.messageId || message.id;
-                          const isExplicitlyExpanded = collapsedThinking.has(`expanded-${messageKey}`);
-                          const isExplicitlyCollapsed = collapsedThinking.has(`collapsed-${messageKey}`);
-                          // Default to collapsed if there's main content, expanded if no main content
-                          // But respect explicit user preferences
-                          const shouldBeCollapsed = hasContent 
-                            ? (isExplicitlyCollapsed || (!isExplicitlyExpanded && !isExplicitlyCollapsed))
-                            : false; // If no main content, always show thinking (not collapsed)
-                          
-                          const toggleThinking = () => {
-                            setCollapsedThinking(prev => {
-                              const next = new Set(prev);
-                              if (shouldBeCollapsed) {
-                                next.delete(`collapsed-${messageKey}`);
-                                next.add(`expanded-${messageKey}`);
-                              } else {
-                                next.delete(`expanded-${messageKey}`);
-                                next.add(`collapsed-${messageKey}`);
-                              }
-                              return next;
-                            });
-                          };
-                          
-                          // Render user messages as editable textfields
-                          if (message.role === 'user') {
-                            const userMessageContent = normalizeChatInput(message.rawContent ?? message.content);
-                            return (
-                              <div className="w-full flex justify-end">
-                                <div className="max-w-[80%] w-full">
-                                  <textarea
-                                    value={userMessageContent}
-                                    onChange={(e) => {
-                                      setChatMessages(prev => prev.map(msg => 
-                                        msg.id === message.id 
-                                          ? { ...msg, content: e.target.value, rawContent: e.target.value }
-                                          : msg
-                                      ));
-                                    }}
-                                    className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] overflow-y-auto"
-                                    style={{ 
-                                      minHeight: '38px',
-                                      maxHeight: '300px'
-                                    }}
-                                    onInput={(e) => {
-                                      const textarea = e.target;
-                                      textarea.style.height = 'auto';
-                                      const scrollHeight = textarea.scrollHeight;
-                                      const maxHeight = 300;
-                                      if (scrollHeight > maxHeight) {
-                                        textarea.style.height = maxHeight + 'px';
-                                        textarea.style.overflowY = 'auto';
-                                      } else {
-                                        textarea.style.height = scrollHeight + 'px';
-                                        textarea.style.overflowY = 'hidden';
-                                      }
-                                    }}
-                                    placeholder="Your message..."
-                                  />
-                                </div>
-                              </div>
-                            );
-                          }
-                          
-                          return (
-                            <div
-                              className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${
-                                message.role === 'user'
-                                  ? 'bg-primary-600 text-white'
-                                  : 'bg-dark-700 text-dark-200'
-                              }`}
+                      <form onSubmit={handleTopPinnedSubmit} className="flex flex-col flex-1 min-h-0 relative">
+                        {/* Scrollable Textarea Area */}
+                        <div className="flex-1 min-h-0 px-3 py-2 flex flex-col overflow-hidden">
+                          <div className="flex items-start gap-2 flex-1 min-h-0 overflow-hidden">
+                            <textarea
+                              ref={topPinnedInputRef}
+                              value={topPinnedInput}
+                              onChange={(e) => setTopPinnedInput(e.target.value)}
+                              onPaste={handleImagePaste}
+                              placeholder="Edit or continue from this message..."
+                              rows={1}
+                              className="flex-1 w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] overflow-y-auto"
+                              disabled={isLoadingChat}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                  e.preventDefault();
+                                  handleTopPinnedSubmit(e);
+                                } else if (e.key === 'Escape') {
+                                  setTopVisibleUserMessageId(null);
+                                  setTopPinnedInput('');
+                                }
+                              }}
+                              onInput={(e) => {
+                                const textarea = e.target;
+                                textarea.style.height = 'auto';
+                                const scrollHeight = textarea.scrollHeight;
+                                const maxHeight = 300;
+                                if (scrollHeight > maxHeight) {
+                                  textarea.style.height = maxHeight + 'px';
+                                  textarea.style.overflowY = 'auto';
+                                } else {
+                                  textarea.style.height = scrollHeight + 'px';
+                                  textarea.style.overflowY = 'hidden';
+                                }
+                              }}
+                            />
+                            <input
+                              ref={imageInputRef}
+                              type="file"
+                              accept="*/*"
+                              multiple
+                              onChange={handleImageUpload}
+                              className="hidden"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => imageInputRef.current?.click()}
+                              className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0"
+                              title="Attach image"
                             >
-                              {/* Show AI Workflow Plan FIRST - before thinking and content - as a progress tracker */}
-                              {/* AI Plan Display - Always show when available, regardless of mode */}
-                              {message.plan &&
-                                message.role === 'assistant' && (
-                                  <div className="mb-3">
-                                    {renderAiPlan(message.plan)}
-                                  </div>
-                                )}
-                              {!message.plan && message.role === 'assistant' && thinkingAiPlan && (
-                                <div className="mb-3">
-                                  {renderAiPlan(thinkingAiPlan)}
-                                </div>
-                              )}
-                              {hasThinking && (
-                                <div className="mb-3 rounded-lg border border-primary-800/30 bg-primary-900/10 p-3">
-                                  <div className="flex items-center justify-between gap-2 mb-2">
-                                    <div className="flex items-center gap-2">
-                                      <Sparkles className="w-4 h-4 text-primary-400" />
-                                      <span className="text-xs font-semibold text-primary-300 uppercase tracking-wide">
-                                        Thinking
-                                      </span>
+                              <Image className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="submit"
+                              disabled={!topPinnedInput.trim() && attachedImages.length === 0}
+                              className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                              title={isLoadingChat ? 'Queue message for later' : 'Send message now'}
+                            >
+                              <Send className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTopVisibleUserMessageId(null);
+                                setTopPinnedInput('');
+                              }}
+                              className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0"
+                              title="Close"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </form>
+                    </div>
+                  )}
+                  <div>
+                    {chatMessages.length === 0 ? (
+                      <div className="flex flex-col h-full">
+                        <div className="flex items-center justify-center flex-1 p-3">
+                          <p className="text-sm text-dark-400">Start a conversation with AI</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-3 space-y-3">
+                        {chatMessages.map((message) => (
+                          <div
+                            key={message.id}
+                            ref={(el) => {
+                              if (message.role === 'user' && el) {
+                                messageRefs.current[message.id] = el;
+                              }
+                            }}
+                            className={`flex space-x-2 ${message.role === 'user' ? 'justify-end' : 'justify-start'
+                              }`}
+                          >
+                            {message.role === 'assistant' && (
+                              <Bot className="w-5 h-5 text-primary-500 mt-1 flex-shrink-0" />
+                            )}
+                            {(() => {
+                              const normalizedContent = normalizeChatInput(
+                                message.rawContent ?? message.content
+                              );
+                              const webReferences = message.web_references || message.webReferences || null;
+                              const formattedHtml = formatMessageContent(normalizedContent, webReferences);
+                              const currentFeedback =
+                                message.messageId && messageFeedback[message.messageId]
+                                  ? messageFeedback[message.messageId]
+                                  : null;
+                              const isSubmittingFeedback =
+                                message.messageId && feedbackSubmitting[message.messageId];
+                              const feedbackButtonBase =
+                                'flex items-center gap-1 px-2 py-1 rounded-md border text-xs transition-colors';
+
+                              // Helper function to check if HTML has actual text content
+                              const hasActualContent = (html) => {
+                                if (!html || typeof html !== 'string') return false;
+                                // Remove HTML tags and check for actual text
+                                const textOnly = html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&[a-z]+;/gi, '');
+                                const trimmed = textOnly.trim();
+                                // Also check if it's not just empty HTML tags like <p></p>
+                                if (trimmed.length === 0) return false;
+                                // Additional check: create a temporary element to extract text content if available
+                                if (typeof document !== 'undefined' && document.createElement) {
+                                  try {
+                                    const tempDiv = document.createElement('div');
+                                    tempDiv.innerHTML = html;
+                                    const textContent = tempDiv.textContent || tempDiv.innerText || '';
+                                    return textContent.trim().length > 0;
+                                  } catch (e) {
+                                    // Fallback to regex-based check
+                                    return trimmed.length > 0;
+                                  }
+                                }
+                                return trimmed.length > 0;
+                              };
+
+                              const hasThinking = message.thinking && message.role === 'assistant';
+                              // Check both normalized content and formatted HTML to ensure we have actual content
+                              const hasContent = (normalizedContent && normalizedContent.trim().length > 0) &&
+                                hasActualContent(formattedHtml);
+                              const messageKey = message.messageId || message.id;
+                              const isExplicitlyExpanded = collapsedThinking.has(`expanded-${messageKey}`);
+                              const isExplicitlyCollapsed = collapsedThinking.has(`collapsed-${messageKey}`);
+                              // Default to collapsed if there's main content, expanded if no main content
+                              // But respect explicit user preferences
+                              const shouldBeCollapsed = hasContent
+                                ? (isExplicitlyCollapsed || (!isExplicitlyExpanded && !isExplicitlyCollapsed))
+                                : false; // If no main content, always show thinking (not collapsed)
+
+                              const toggleThinking = () => {
+                                setCollapsedThinking(prev => {
+                                  const next = new Set(prev);
+                                  if (shouldBeCollapsed) {
+                                    next.delete(`collapsed-${messageKey}`);
+                                    next.add(`expanded-${messageKey}`);
+                                  } else {
+                                    next.delete(`expanded-${messageKey}`);
+                                    next.add(`collapsed-${messageKey}`);
+                                  }
+                                  return next;
+                                });
+                              };
+
+                              // Render user messages as editable textfields
+                              if (message.role === 'user') {
+                                const userMessageContent = normalizeChatInput(message.rawContent ?? message.content);
+                                return (
+                                  <div className="w-full flex justify-end">
+                                    <div className="max-w-[80%] w-full">
+                                      <textarea
+                                        value={userMessageContent}
+                                        onChange={(e) => {
+                                          setChatMessages(prev => prev.map(msg =>
+                                            msg.id === message.id
+                                              ? { ...msg, content: e.target.value, rawContent: e.target.value }
+                                              : msg
+                                          ));
+                                        }}
+                                        className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] overflow-y-auto"
+                                        style={{
+                                          minHeight: '38px',
+                                          maxHeight: '300px'
+                                        }}
+                                        onInput={(e) => {
+                                          const textarea = e.target;
+                                          textarea.style.height = 'auto';
+                                          const scrollHeight = textarea.scrollHeight;
+                                          const maxHeight = 300;
+                                          if (scrollHeight > maxHeight) {
+                                            textarea.style.height = maxHeight + 'px';
+                                            textarea.style.overflowY = 'auto';
+                                          } else {
+                                            textarea.style.height = scrollHeight + 'px';
+                                            textarea.style.overflowY = 'hidden';
+                                          }
+                                        }}
+                                        placeholder="Your message..."
+                                      />
                                     </div>
-                                    {hasContent && (
-                                      <button
-                                        type="button"
-                                        onClick={toggleThinking}
-                                        className="flex items-center gap-1 px-2 py-1 text-xs text-primary-300 hover:text-primary-200 hover:bg-primary-800/20 rounded transition-colors"
-                                        title={shouldBeCollapsed ? "Expand thinking" : "Collapse thinking"}
-                                      >
-                                        {shouldBeCollapsed ? (
-                                          <>
-                                            <ChevronDown className="w-3 h-3" />
-                                            <span>Show</span>
-                                          </>
-                                        ) : (
-                                          <>
-                                            <ChevronUp className="w-3 h-3" />
-                                            <span>Hide</span>
-                                          </>
-                                        )}
-                                      </button>
-                                    )}
                                   </div>
-                                  {shouldBeCollapsed ? (
-                                    <div className="text-xs text-primary-300/60 italic">
-                                      Thinking process collapsed. Click "Show" to expand.
-                                    </div>
-                                  ) : (
-                                    message.thinking && (
-                                      <div className="text-xs text-primary-200/80 leading-relaxed whitespace-pre-wrap">
-                                        {message.thinking}
+                                );
+                              }
+
+                              return (
+                                <div
+                                  className={`max-w-[80%] px-3 py-2 rounded-lg text-sm ${message.role === 'user'
+                                    ? 'bg-primary-600 text-white'
+                                    : 'bg-dark-700 text-dark-200'
+                                    }`}
+                                >
+                                  {/* Show AI Workflow Plan FIRST - before thinking and content - as a progress tracker */}
+                                  {/* AI Plan Display - Always show when available, regardless of mode */}
+                                  {message.plan &&
+                                    message.role === 'assistant' && (
+                                      <div className="mb-3">
+                                        {renderAiPlan(message.plan)}
                                       </div>
-                                    )
+                                    )}
+                                  {!message.plan && message.role === 'assistant' && thinkingAiPlan && (
+                                    <div className="mb-3">
+                                      {renderAiPlan(thinkingAiPlan)}
+                                    </div>
+                                  )}
+                                  {hasThinking && (
+                                    <div className="mb-3 rounded-lg border border-primary-800/30 bg-primary-900/10 p-3">
+                                      <div className="flex items-center justify-between gap-2 mb-2">
+                                        <div className="flex items-center gap-2">
+                                          <Sparkles className="w-4 h-4 text-primary-400" />
+                                          <span className="text-xs font-semibold text-primary-300 uppercase tracking-wide">
+                                            Thinking
+                                          </span>
+                                        </div>
+                                        {hasContent && (
+                                          <button
+                                            type="button"
+                                            onClick={toggleThinking}
+                                            className="flex items-center gap-1 px-2 py-1 text-xs text-primary-300 hover:text-primary-200 hover:bg-primary-800/20 rounded transition-colors"
+                                            title={shouldBeCollapsed ? "Expand thinking" : "Collapse thinking"}
+                                          >
+                                            {shouldBeCollapsed ? (
+                                              <>
+                                                <ChevronDown className="w-3 h-3" />
+                                                <span>Show</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <ChevronUp className="w-3 h-3" />
+                                                <span>Hide</span>
+                                              </>
+                                            )}
+                                          </button>
+                                        )}
+                                      </div>
+                                      {shouldBeCollapsed ? (
+                                        <div className="text-xs text-primary-300/60 italic">
+                                          Thinking process collapsed. Click "Show" to expand.
+                                        </div>
+                                      ) : (
+                                        message.thinking && (
+                                          <div className="text-xs text-primary-200/80 leading-relaxed whitespace-pre-wrap">
+                                            {message.thinking}
+                                          </div>
+                                        )
+                                      )}
+                                    </div>
+                                  )}
+                                  {/* Display images for user messages */}
+                                  {message.images && Array.isArray(message.images) && message.images.length > 0 && message.role === 'user' && (
+                                    <div className="mb-3 flex flex-wrap gap-2">
+                                      {message.images.map((img) => (
+                                        <div key={img.id || img.dataUrl} className="relative group">
+                                          <img
+                                            src={typeof img === 'string' ? img : img.dataUrl}
+                                            alt="Attached"
+                                            className="max-w-full max-h-64 rounded-lg border border-white/20 object-contain"
+                                          />
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {/* Display image carousel for search results in assistant messages */}
+                                  {message.role === 'assistant' && (() => {
+                                    // Find the previous user message to check if it was an image query
+                                    const messageIndex = chatMessages.findIndex(msg => msg.id === message.id);
+                                    const previousUserMessage = messageIndex > 0
+                                      ? chatMessages.slice(0, messageIndex).reverse().find(msg => msg.role === 'user')
+                                      : null;
+                                    const userQuery = previousUserMessage
+                                      ? (previousUserMessage.content || previousUserMessage.rawContent || '')
+                                      : '';
+
+                                    const searchImages = extractSearchImages(message, userQuery);
+                                    const hasWebRefs = webReferences && webReferences.length > 0;
+                                    const isImageQuery = isImageSearchQuery(userQuery) || isImageSearchQuery(message.content || message.rawContent || '');
+
+                                    // Show carousel if we have images, or if it's an image query with web references
+                                    if (searchImages.length > 0 || (isImageQuery && hasWebRefs)) {
+                                      return (
+                                        <ImageCarousel
+                                          images={searchImages}
+                                          title={hasWebRefs ? 'Search Results' : 'Images'}
+                                          webReferences={hasWebRefs && searchImages.length === 0 ? webReferences : null}
+                                        />
+                                      );
+                                    }
+                                    return null;
+                                  })()}
+                                  {/* Display price chart if price data is available */}
+                                  {message.role === 'assistant' && message.price_data && (
+                                    <PriceChart
+                                      priceData={message.price_data}
+                                      assetName={message.price_data.assetName}
+                                      assetType={message.price_data.assetType || 'crypto'}
+                                    />
+                                  )}
+                                  {hasContent && (
+                                    <div
+                                      className="prose prose-invert max-w-none"
+                                      dangerouslySetInnerHTML={{
+                                        __html: formattedHtml,
+                                      }}
+                                      ref={(el) => {
+                                        if (el) {
+                                          setTimeout(() => {
+                                            highlightCodeBlocks(el);
+                                          }, 0);
+                                        }
+                                      }}
+                                    />
+                                  )}
+                                  {/* Plan is now shown at the top, before content - removed duplicate here */}
+                                  {message.activityLog &&
+                                    Array.isArray(message.activityLog) &&
+                                    message.activityLog.length > 0 &&
+                                    message.role === 'assistant' && (
+                                      <div className={`mt-3 ${message.plan ? '' : ''}`}>
+                                        <div className="rounded-xl border border-primary-800/40 bg-dark-900/70 p-4 space-y-3">
+                                          <div className="flex items-center gap-2 text-xs text-dark-400 uppercase tracking-wide">
+                                            <Activity className="w-4 h-4" />
+                                            <span>Process Steps</span>
+                                          </div>
+                                          <ol className="space-y-2">
+                                            {message.activityLog.map((log, logIdx) => {
+                                              const stepPhase = log.phase || 'unknown';
+                                              const Icon = PHASE_ICON_MAP[stepPhase] || Sparkles;
+                                              const toneClass = toneClasses[log.tone] || toneClasses.primary;
+                                              const durationValue = getDurationFromStep(log);
+                                              const durationLabel =
+                                                durationValue != null
+                                                  ? formatDuration(durationValue)
+                                                  : log.status === 'done'
+                                                    ? '—'
+                                                    : 'in flight';
+                                              // Use only step's own data
+                                              const primaryLabel = log.label || stepPhase;
+                                              const secondaryLabel = log.description && log.description !== log.label
+                                                ? log.description
+                                                : null;
+                                              const detailEntries = buildStepDetailEntries(log);
+                                              const filteredEntries = secondaryLabel
+                                                ? detailEntries.filter((entry) => entry.label !== 'Summary')
+                                                : detailEntries;
+                                              const statusLabel = (log.status || 'active').toString().replace(/_/g, ' ');
+                                              const isCompleted = log.status === 'done' || log.status === 'completed';
+                                              const isPending = !log.status || log.status === 'pending';
+                                              const isActive = log.status === 'active' || (!isCompleted && !isPending);
+
+                                              // Determine styling based on status
+                                              const statusBorderClass = isCompleted
+                                                ? 'border-emerald-700/40 bg-emerald-900/10'
+                                                : isActive
+                                                  ? 'border-primary-600/40 bg-primary-900/20'
+                                                  : 'border-dark-700/50 bg-dark-800/30';
+                                              const statusTextClass = isCompleted
+                                                ? 'text-emerald-200'
+                                                : isActive
+                                                  ? 'text-primary-200'
+                                                  : 'text-dark-300';
+                                              const statusBadgeClass = isCompleted
+                                                ? 'border-emerald-600/40 bg-emerald-600/10 text-emerald-300'
+                                                : isActive
+                                                  ? 'border-primary-500/40 bg-primary-500/10 text-primary-300'
+                                                  : 'border-dark-600 text-dark-400';
+
+                                              return (
+                                                <li
+                                                  key={logIdx}
+                                                  className={`rounded-lg border px-3 py-2.5 text-sm transition-all ${statusBorderClass} ${isActive ? 'shadow-md shadow-primary-500/5' : ''}`}
+                                                >
+                                                  <div className="flex items-center justify-between gap-2">
+                                                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                      <div className="relative">
+                                                        <div
+                                                          className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass} ${isCompleted ? 'opacity-80' : ''}`}
+                                                        >
+                                                          <Icon className="w-3.5 h-3.5" />
+                                                        </div>
+                                                        {isCompleted && (
+                                                          <CheckCircle className="w-3 h-3 text-emerald-400 absolute -top-1 -right-1 bg-dark-900 rounded-full" />
+                                                        )}
+                                                        {isActive && (
+                                                          <Loader2 className="w-3 h-3 text-primary-400 absolute -top-1 -right-1 bg-dark-900 rounded-full animate-spin" />
+                                                        )}
+                                                      </div>
+                                                      <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2 flex-wrap">
+                                                          <div className={`text-sm font-medium ${statusTextClass}`}>
+                                                            {primaryLabel}
+                                                          </div>
+                                                          <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border ${statusBadgeClass}`}>
+                                                            {`Step ${logIdx + 1} • ${statusLabel}`}
+                                                          </span>
+                                                        </div>
+                                                        {secondaryLabel && (
+                                                          <p className="text-xs text-dark-400 mt-0.5">
+                                                            {secondaryLabel}
+                                                          </p>
+                                                        )}
+                                                      </div>
+                                                    </div>
+                                                    <div className={`text-[10px] font-mono uppercase whitespace-nowrap ${isCompleted ? 'text-emerald-400' : isActive ? 'text-primary-400' : 'text-dark-500'}`}>
+                                                      {durationLabel}
+                                                    </div>
+                                                  </div>
+                                                  {filteredEntries.length > 0 && (
+                                                    <StepDetailGrid entries={filteredEntries} />
+                                                  )}
+                                                </li>
+                                              );
+                                            })}
+                                          </ol>
+                                        </div>
+                                      </div>
+                                    )}
+                                  {message.role === 'assistant' && message.messageId && (
+                                    <div className="mt-3 flex items-center gap-3 text-xs text-dark-400">
+                                      <span>Was this helpful?</span>
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleCopyMessage(message)}
+                                          className={`${feedbackButtonBase} border-dark-600 text-dark-300 hover:text-dark-100`}
+                                          title="Copy message to clipboard"
+                                        >
+                                          <Copy className="w-3.5 h-3.5" />
+                                          Copy
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={Boolean(isSubmittingFeedback)}
+                                          onClick={() => handleMessageFeedback(message, 'like')}
+                                          className={`${feedbackButtonBase} ${currentFeedback === 'like'
+                                            ? 'bg-primary-600/20 border-primary-500 text-primary-100'
+                                            : 'border-dark-600 text-dark-300 hover:text-dark-100'
+                                            } ${isSubmittingFeedback ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                          title="Mark response as helpful"
+                                          aria-pressed={currentFeedback === 'like'}
+                                        >
+                                          <ThumbsUp
+                                            className="w-3.5 h-3.5"
+                                            fill={currentFeedback === 'like' ? 'currentColor' : 'none'}
+                                          />
+                                          Like
+                                        </button>
+                                        <button
+                                          type="button"
+                                          disabled={Boolean(isSubmittingFeedback)}
+                                          onClick={() => handleMessageFeedback(message, 'dislike')}
+                                          className={`${feedbackButtonBase} ${currentFeedback === 'dislike'
+                                            ? 'bg-red-600/20 border-red-500 text-red-200'
+                                            : 'border-dark-600 text-dark-300 hover:text-dark-100'
+                                            } ${isSubmittingFeedback ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                          title="Mark response as not helpful"
+                                          aria-pressed={currentFeedback === 'dislike'}
+                                        >
+                                          <ThumbsDown
+                                            className="w-3.5 h-3.5"
+                                            fill={currentFeedback === 'dislike' ? 'currentColor' : 'none'}
+                                          />
+                                          Dislike
+                                        </button>
+                                      </div>
+                                    </div>
                                   )}
                                 </div>
-                              )}
-                              {/* Display images for user messages */}
-                              {message.images && Array.isArray(message.images) && message.images.length > 0 && message.role === 'user' && (
-                                <div className="mb-3 flex flex-wrap gap-2">
-                                  {message.images.map((img) => (
-                                    <div key={img.id || img.dataUrl} className="relative group">
-                                      <img
-                                        src={typeof img === 'string' ? img : img.dataUrl}
-                                        alt="Attached"
-                                        className="max-w-full max-h-64 rounded-lg border border-white/20 object-contain"
-                                      />
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              {/* Display image carousel for search results in assistant messages */}
-                              {message.role === 'assistant' && (() => {
-                                // Find the previous user message to check if it was an image query
-                                const messageIndex = chatMessages.findIndex(msg => msg.id === message.id);
-                                const previousUserMessage = messageIndex > 0 
-                                  ? chatMessages.slice(0, messageIndex).reverse().find(msg => msg.role === 'user')
-                                  : null;
-                                const userQuery = previousUserMessage 
-                                  ? (previousUserMessage.content || previousUserMessage.rawContent || '')
-                                  : '';
-                                
-                                const searchImages = extractSearchImages(message, userQuery);
-                                const hasWebRefs = webReferences && webReferences.length > 0;
-                                const isImageQuery = isImageSearchQuery(userQuery) || isImageSearchQuery(message.content || message.rawContent || '');
-                                
-                                // Show carousel if we have images, or if it's an image query with web references
-                                if (searchImages.length > 0 || (isImageQuery && hasWebRefs)) {
-                                  return (
-                                    <ImageCarousel 
-                                      images={searchImages} 
-                                      title={hasWebRefs ? 'Search Results' : 'Images'}
-                                      webReferences={hasWebRefs && searchImages.length === 0 ? webReferences : null}
-                                    />
-                                  );
-                                }
-                                return null;
-                              })()}
-                              {/* Display price chart if price data is available */}
-                              {message.role === 'assistant' && message.price_data && (
-                                <PriceChart
-                                  priceData={message.price_data}
-                                  assetName={message.price_data.assetName}
-                                  assetType={message.price_data.assetType || 'crypto'}
-                                />
-                              )}
-                              {hasContent && (
-                                <div
-                                  className="prose prose-invert max-w-none"
-                                  dangerouslySetInnerHTML={{
-                                    __html: formattedHtml,
-                                  }}
-                                  ref={(el) => {
-                                    if (el) {
-                                      setTimeout(() => {
-                                        highlightCodeBlocks(el);
-                                      }, 0);
-                                    }
-                                  }}
-                                />
-                              )}
-                              {/* Plan is now shown at the top, before content - removed duplicate here */}
-                              {message.activityLog &&
-                                Array.isArray(message.activityLog) &&
-                                message.activityLog.length > 0 &&
-                                message.role === 'assistant' && (
-                                  <div className={`mt-3 ${message.plan ? '' : ''}`}>
-                                    <div className="rounded-xl border border-primary-800/40 bg-dark-900/70 p-4 space-y-3">
-                                      <div className="flex items-center gap-2 text-xs text-dark-400 uppercase tracking-wide">
-                                        <Activity className="w-4 h-4" />
-                                        <span>Process Steps</span>
-                                      </div>
-                                      <ol className="space-y-2">
-                                        {message.activityLog.map((log, logIdx) => {
-                                          const stepPhase = log.phase || 'unknown';
-                                          const Icon = PHASE_ICON_MAP[stepPhase] || Sparkles;
-                                          const toneClass = toneClasses[log.tone] || toneClasses.primary;
-                                          const durationValue = getDurationFromStep(log);
-                                          const durationLabel =
-                                            durationValue != null
-                                              ? formatDuration(durationValue)
-                                              : log.status === 'done'
-                                                ? '—'
-                                                : 'in flight';
-                                          // Use only step's own data
-                                          const primaryLabel = log.label || stepPhase;
-                                          const secondaryLabel = log.description && log.description !== log.label
-                                            ? log.description
-                                            : null;
-                                          const detailEntries = buildStepDetailEntries(log);
-                                          const filteredEntries = secondaryLabel
-                                            ? detailEntries.filter((entry) => entry.label !== 'Summary')
-                                            : detailEntries;
-                                          const statusLabel = (log.status || 'active').toString().replace(/_/g, ' ');
-                                          const isCompleted = log.status === 'done' || log.status === 'completed';
-                                          const isPending = !log.status || log.status === 'pending';
-                                          const isActive = log.status === 'active' || (!isCompleted && !isPending);
-                                          
-                                          // Determine styling based on status
-                                          const statusBorderClass = isCompleted
-                                            ? 'border-emerald-700/40 bg-emerald-900/10'
-                                            : isActive
-                                              ? 'border-primary-600/40 bg-primary-900/20'
-                                              : 'border-dark-700/50 bg-dark-800/30';
-                                          const statusTextClass = isCompleted
-                                            ? 'text-emerald-200'
-                                            : isActive
-                                              ? 'text-primary-200'
-                                              : 'text-dark-300';
-                                          const statusBadgeClass = isCompleted
-                                            ? 'border-emerald-600/40 bg-emerald-600/10 text-emerald-300'
-                                            : isActive
-                                              ? 'border-primary-500/40 bg-primary-500/10 text-primary-300'
-                                              : 'border-dark-600 text-dark-400';
+                              );
+                            })()}
+                            {message.role === 'user' && (
+                              <User className="w-5 h-5 text-dark-400 mt-1 flex-shrink-0" />
+                            )}
+                          </div>
+                        ))}
+                        {isLoadingChat && (() => {
+                          const lastAssistantMessage = [...chatMessages].reverse().find(msg => msg.role === 'assistant');
+                          const streamingPlan = lastAssistantMessage?.plan || thinkingAiPlan;
+                          const hasThinkingSteps = Array.isArray(agentStatuses) && agentStatuses.length > 0;
 
-                                          return (
-                                            <li
-                                              key={logIdx}
-                                              className={`rounded-lg border px-3 py-2.5 text-sm transition-all ${statusBorderClass} ${isActive ? 'shadow-md shadow-primary-500/5' : ''}`}
-                                            >
-                                              <div className="flex items-center justify-between gap-2">
-                                                <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                  <div className="relative">
-                                                    <div
-                                                      className={`w-6 h-6 rounded-md border flex items-center justify-center ${toneClass} ${isCompleted ? 'opacity-80' : ''}`}
-                                                    >
-                                                      <Icon className="w-3.5 h-3.5" />
-                                                    </div>
-                                                    {isCompleted && (
-                                                      <CheckCircle className="w-3 h-3 text-emerald-400 absolute -top-1 -right-1 bg-dark-900 rounded-full" />
-                                                    )}
-                                                    {isActive && (
-                                                      <Loader2 className="w-3 h-3 text-primary-400 absolute -top-1 -right-1 bg-dark-900 rounded-full animate-spin" />
-                                                    )}
-                                                  </div>
-                                                  <div className="flex-1 min-w-0">
-                                                    <div className="flex items-center gap-2 flex-wrap">
-                                                      <div className={`text-sm font-medium ${statusTextClass}`}>
-                                                        {primaryLabel}
-                                                      </div>
-                                                      <span className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border ${statusBadgeClass}`}>
-                                                        {`Step ${logIdx + 1} • ${statusLabel}`}
-                                                      </span>
-                                                    </div>
-                                                    {secondaryLabel && (
-                                                      <p className="text-xs text-dark-400 mt-0.5">
-                                                        {secondaryLabel}
-                                                      </p>
-                                                    )}
-                                                  </div>
-                                                </div>
-                                                <div className={`text-[10px] font-mono uppercase whitespace-nowrap ${isCompleted ? 'text-emerald-400' : isActive ? 'text-primary-400' : 'text-dark-500'}`}>
-                                                  {durationLabel}
-                                                </div>
-                                              </div>
-                                              {filteredEntries.length > 0 && (
-                                                <StepDetailGrid entries={filteredEntries} />
-                                              )}
-                                            </li>
-                                          );
-                                        })}
-                                      </ol>
+                          return (
+                            <div className="flex space-x-2">
+                              <Bot className="w-5 h-5 text-primary-500 mt-1" />
+                              <div className="bg-dark-700 px-3 py-3 rounded-lg space-y-3 flex-1">
+                                {hasThinkingSteps ? (
+                                  <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
+                                ) : (
+                                  <>
+                                    <div className="flex items-center gap-2 text-sm text-dark-300">
+                                      <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
+                                      <span>
+                                        AI is thinking… {Math.max(1, Math.round(Math.max(thinkingElapsed, 1000) / 1000))}s elapsed
+                                      </span>
                                     </div>
-                                  </div>
+                                    {streamingPlan && (
+                                      <div className="mt-3">
+                                        {renderAiPlan(streamingPlan)}
+                                      </div>
+                                    )}
+                                  </>
                                 )}
-                              {message.role === 'assistant' && message.messageId && (
-                                <div className="mt-3 flex items-center gap-3 text-xs text-dark-400">
-                                  <span>Was this helpful?</span>
-                                  <div className="flex items-center gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleCopyMessage(message)}
-                                      className={`${feedbackButtonBase} border-dark-600 text-dark-300 hover:text-dark-100`}
-                                      title="Copy message to clipboard"
-                                    >
-                                      <Copy className="w-3.5 h-3.5" />
-                                      Copy
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={Boolean(isSubmittingFeedback)}
-                                      onClick={() => handleMessageFeedback(message, 'like')}
-                                      className={`${feedbackButtonBase} ${
-                                        currentFeedback === 'like'
-                                          ? 'bg-primary-600/20 border-primary-500 text-primary-100'
-                                          : 'border-dark-600 text-dark-300 hover:text-dark-100'
-                                      } ${isSubmittingFeedback ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                      title="Mark response as helpful"
-                                      aria-pressed={currentFeedback === 'like'}
-                                    >
-                                      <ThumbsUp
-                                        className="w-3.5 h-3.5"
-                                        fill={currentFeedback === 'like' ? 'currentColor' : 'none'}
-                                      />
-                                      Like
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={Boolean(isSubmittingFeedback)}
-                                      onClick={() => handleMessageFeedback(message, 'dislike')}
-                                      className={`${feedbackButtonBase} ${
-                                        currentFeedback === 'dislike'
-                                          ? 'bg-red-600/20 border-red-500 text-red-200'
-                                          : 'border-dark-600 text-dark-300 hover:text-dark-100'
-                                      } ${isSubmittingFeedback ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                      title="Mark response as not helpful"
-                                      aria-pressed={currentFeedback === 'dislike'}
-                                    >
-                                      <ThumbsDown
-                                        className="w-3.5 h-3.5"
-                                        fill={currentFeedback === 'dislike' ? 'currentColor' : 'none'}
-                                      />
-                                      Dislike
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
+                              </div>
                             </div>
                           );
                         })()}
-                        {message.role === 'user' && (
-                          <User className="w-5 h-5 text-dark-400 mt-1 flex-shrink-0" />
-                        )}
                       </div>
-                    ))}
-                    {isLoadingChat && (() => {
-                      const lastAssistantMessage = [...chatMessages].reverse().find(msg => msg.role === 'assistant');
-                      const streamingPlan = lastAssistantMessage?.plan || thinkingAiPlan;
-                      const hasThinkingSteps = Array.isArray(agentStatuses) && agentStatuses.length > 0;
-                      
-                      return (
-                        <div className="flex space-x-2">
-                          <Bot className="w-5 h-5 text-primary-500 mt-1" />
-                          <div className="bg-dark-700 px-3 py-3 rounded-lg space-y-3 flex-1">
-                            {hasThinkingSteps ? (
-                              <ThinkingStatusPanel steps={agentStatuses} elapsedMs={thinkingElapsed} />
-                            ) : (
-                              <>
-                                <div className="flex items-center gap-2 text-sm text-dark-300">
-                                  <Loader2 className="w-4 h-4 animate-spin text-primary-500" />
-                                  <span>
-                                    AI is thinking… {Math.max(1, Math.round(Math.max(thinkingElapsed, 1000) / 1000))}s elapsed
-                                  </span>
-                                </div>
-                                {streamingPlan && (
-                                  <div className="mt-3">
-                                    {renderAiPlan(streamingPlan)}
+                    )}
+                  </div>
+
+                  {/* Composer Input Area - Show when no messages */}
+                  {chatMessages.length === 0 && (
+                    <div className="border-t border-dark-700 bg-dark-800 flex flex-col flex-shrink-0">
+                      <form onSubmit={handleComposerSubmit} className="flex flex-col flex-1 min-h-0 relative">
+                        {/* Attached Images, Files, and Code Selections Preview for Composer */}
+                        {(attachedImages.length > 0 || attachedFiles.length > 0 || attachedCodeSelections.length > 0) && (
+                          <div className="p-3 pb-2 space-y-2 flex-shrink-0">
+                            {attachedImages.length > 0 && (
+                              <div className="flex flex-wrap gap-2">
+                                {attachedImages.map((img) => (
+                                  <div key={img.id} className="relative group">
+                                    <img
+                                      src={img.dataUrl}
+                                      alt="Attached"
+                                      className="w-16 h-16 object-cover rounded-lg border border-dark-600"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => removeImage(img.id)}
+                                      className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                      title="Remove image"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
                                   </div>
-                                )}
-                              </>
+                                ))}
+                              </div>
+                            )}
+                            {attachedFiles.length > 0 && (
+                              <div className="flex flex-wrap gap-2">
+                                {attachedFiles.map((file) => (
+                                  <div key={file.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
+                                    <File className="w-4 h-4 text-dark-400" />
+                                    <span className="text-xs text-dark-200 truncate max-w-[120px]" title={file.name || file.file?.name}>
+                                      {file.name || file.file?.name || 'file'}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => removeFile(file.id)}
+                                      className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                      title="Remove file"
+                                    >
+                                      <X className="w-2.5 h-2.5" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {attachedCodeSelections.length > 0 && (
+                              <div className="flex flex-wrap gap-2">
+                                {attachedCodeSelections.map((selection) => {
+                                  const lineRange = selection.startLine === selection.endLine
+                                    ? `${selection.startLine}`
+                                    : `${selection.startLine}-${selection.endLine}`;
+                                  return (
+                                    <div key={selection.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
+                                      <File className="w-4 h-4 text-dark-400" />
+                                      <span className="text-xs text-dark-200 truncate max-w-[200px]" title={`${selection.fileName} (${lineRange})`}>
+                                        {selection.fileName} ({lineRange})
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => removeCodeSelection(selection.id)}
+                                        className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                        title="Remove code selection"
+                                      >
+                                        <X className="w-2.5 h-2.5" />
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             )}
                           </div>
+                        )}
+
+                        {/* Scrollable Textarea Area */}
+                        <div className="flex-1 min-h-0 px-3 py-2 flex flex-col overflow-hidden">
+                          <div className="flex items-start gap-2 flex-1 min-h-0 overflow-hidden">
+                            <textarea
+                              ref={composerInputRef}
+                              value={composerInput}
+                              onChange={handleComposerInputChange}
+                              onPaste={handleImagePaste}
+                              placeholder="Plan, @ for context, / for commands"
+                              rows={1}
+                              className="flex-1 w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] overflow-y-auto"
+                              disabled={isLoadingChat}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !e.shiftKey) {
+                                  e.preventDefault();
+                                  handleComposerSubmit(e);
+                                } else if (e.key === 'Escape') {
+                                  setShowFileSuggestions(false);
+                                } else if (e.key === 'ArrowDown' && showFileSuggestions && fileSuggestions.length > 0) {
+                                  e.preventDefault();
+                                }
+                              }}
+                              onInput={(e) => {
+                                // Auto-resize textarea based on content - allow scrolling for long content
+                                const textarea = e.target;
+                                textarea.style.height = 'auto';
+                                const scrollHeight = textarea.scrollHeight;
+                                // Set a reasonable max height (e.g., 300px) and allow scrolling beyond that
+                                const maxHeight = 300;
+                                if (scrollHeight > maxHeight) {
+                                  textarea.style.height = maxHeight + 'px';
+                                  textarea.style.overflowY = 'auto';
+                                } else {
+                                  textarea.style.height = scrollHeight + 'px';
+                                  textarea.style.overflowY = 'hidden';
+                                }
+                              }}
+                            />
+                            <input
+                              ref={imageInputRef}
+                              type="file"
+                              accept="*/*"
+                              multiple
+                              onChange={handleImageUpload}
+                              className="hidden"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => imageInputRef.current?.click()}
+                              className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0"
+                              title="Attach image"
+                            >
+                              <Image className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="submit"
+                              disabled={!composerInput.trim() && attachedImages.length === 0}
+                              className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                              title={isLoadingChat ? 'Queue message for later' : 'Send message now'}
+                            >
+                              <Send className="w-4 h-4" />
+                            </button>
+                          </div>
+                          {showFileSuggestions && fileSuggestions.length > 0 && suggestionInputType === 'composer' && (
+                            <div className="file-suggestions-container absolute top-full left-0 right-0 mt-2 mx-3 bg-dark-800 border border-dark-600 rounded-lg shadow-lg z-50 max-h-60 overflow-y-auto">
+                              {fileSuggestions.map((file, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={() => insertFileMention(file)}
+                                  className="w-full text-left px-3 py-2 text-sm text-dark-300 hover:bg-dark-700 flex items-center space-x-2"
+                                >
+                                  <File className="w-4 h-4 text-dark-400" />
+                                  <div className="flex-1">
+                                    <div className="font-medium">{file.name}</div>
+                                    <div className="text-xs text-dark-500 truncate">{file.displayPath}</div>
+                                  </div>
+                                  {file.isOpen && (
+                                    <span className="text-xs text-primary-500">Open</span>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      );
-                    })()}
-                  </div>
+
+                        {/* Dropdown Menus - Always at Bottom */}
+                        <div className="flex flex-wrap items-center gap-2 p-3 pt-2 flex-shrink-0 border-t border-dark-700/50">
+                          <div className="relative" ref={agentModeMenuRef}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowAgentModeMenu(prev => !prev);
+                                setShowAutoDropdown(false);
+                                setShowWebSearchMenu(false);
+                              }}
+                              className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
+                            >
+                              <Infinity className="w-3 h-3" />
+                              <span>{selectedChatMode.label}</span>
+                              <ChevronDown className={`w-3 h-3 transition-transform ${showAgentModeMenu ? 'rotate-180' : ''}`} />
+                            </button>
+                            {showAgentModeMenu && (
+                              <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[180px]">
+                                {chatModeOptions.map(mode => (
+                                  <button
+                                    key={mode.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setAgentMode(mode.id);
+                                      try {
+                                        window.localStorage.setItem('aiAgentMode', mode.id);
+                                      } catch (error) {
+                                        console.warn('Failed to save agent mode to localStorage:', error);
+                                      }
+                                      setShowAgentModeMenu(false);
+                                    }}
+                                    className={`w-full text-left px-3 py-2 text-xs transition-colors ${agentMode === mode.id
+                                      ? 'bg-primary-600 text-white'
+                                      : 'text-dark-300 hover:bg-dark-700'
+                                      }`}
+                                  >
+                                    <div className="flex items-center justify-between">
+                                      <span>{mode.label}</span>
+                                      {agentMode === mode.id && <CheckCircle className="w-3 h-3" />}
+                                    </div>
+                                    <p className="text-[10px] text-dark-500 mt-1">{mode.description}</p>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 rounded-lg border border-dark-600 bg-dark-700/40 px-2 py-1 text-dark-400">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setComposerInput(prev => prev + '@');
+                                if (composerInputRef.current) {
+                                  composerInputRef.current.focus();
+                                }
+                                setShowWebSearchMenu(false);
+                              }}
+                              className="hover:text-dark-200 transition-colors"
+                              title="Mention"
+                            >
+                              <AtSign className="w-4 h-4" />
+                            </button>
+                            <div className="relative" ref={webSearchMenuRef}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowWebSearchMenu(prev => !prev);
+                                  setShowAgentModeMenu(false);
+                                  setShowAutoDropdown(false);
+                                }}
+                                className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors ${showWebSearchMenu ? 'bg-dark-600 text-dark-100' : 'hover:text-dark-200'
+                                  }`}
+                                title={`Web Search (${selectedWebSearchMode.label})`}
+                              >
+                                <Globe className="w-4 h-4" />
+                                <span className="text-[10px] uppercase tracking-wide">{selectedWebSearchMode.label}</span>
+                                <ChevronDown className="w-3 h-3" />
+                              </button>
+                              {showWebSearchMenu && (
+                                <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[200px]">
+                                  {webSearchOptions.map((option) => (
+                                    <button
+                                      key={option.id}
+                                      type="button"
+                                      onClick={() => {
+                                        setWebSearchMode(option.id);
+                                        try {
+                                          window.localStorage.setItem('aiWebSearchMode', option.id);
+                                        } catch (error) {
+                                          console.warn('Failed to save web search mode to localStorage:', error);
+                                        }
+                                        setShowWebSearchMenu(false);
+                                      }}
+                                      className={`w-full text-left px-3 py-2 text-xs transition-colors ${webSearchMode === option.id
+                                        ? 'bg-primary-600 text-white'
+                                        : 'text-dark-300 hover:bg-dark-700'
+                                        }`}
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <span>{option.label}</span>
+                                        {webSearchMode === option.id && <CheckCircle className="w-3 h-3" />}
+                                      </div>
+                                      <p className="text-[10px] text-dark-500 mt-1">{option.description}</p>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => imageInputRef.current?.click()}
+                              className="hover:text-dark-200 transition-colors"
+                              title="Upload Image"
+                            >
+                              <Image className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              className="hover:text-dark-200 transition-colors"
+                              title="Voice Input"
+                            >
+                              <Mic className="w-4 h-4" />
+                            </button>
+                          </div>
+                          <div className="relative group" data-auto-dropdown>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowAutoDropdown(!showAutoDropdown);
+                                if (!showAutoDropdown && ollamaModels.length === 0) {
+                                  loadAvailableModels();
+                                }
+                                setShowAgentModeMenu(false);
+                                setShowWebSearchMenu(false);
+                              }}
+                              className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
+                            >
+                              <span>{currentModel || 'Auto'}</span>
+                              <ChevronDown className={`w-3 h-3 transition-transform ${showAutoDropdown ? 'rotate-180' : ''}`} />
+                            </button>
+                            {showAutoDropdown && (
+                              <div className="absolute top-full left-0 mt-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-[100] min-w-[200px] max-h-[300px] overflow-y-auto" style={{ maxHeight: 'min(300px, calc(100vh - 200px))' }} data-auto-dropdown>
+                                {isLoadingModels ? (
+                                  <div className="px-3 py-2 text-xs text-dark-400 flex items-center gap-2">
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                    Loading models...
+                                  </div>
+                                ) : ollamaModels.length === 0 ? (
+                                  <div className="px-3 py-2 text-xs text-dark-400">
+                                    No models available
+                                  </div>
+                                ) : (
+                                  ollamaModels.map((model) => (
+                                    <button
+                                      key={model}
+                                      type="button"
+                                      onClick={() => handleSelectModel(model)}
+                                      className={`w-full text-left px-3 py-2 text-xs transition-colors ${currentModel === model
+                                        ? 'bg-primary-600 text-white'
+                                        : 'text-dark-300 hover:bg-dark-700'
+                                        }`}
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <span>{model}</span>
+                                        {currentModel === model && (
+                                          <CheckCircle className="w-3 h-3" />
+                                        )}
+                                      </div>
+                                    </button>
+                                  ))
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <div className="relative group">
+                            <button
+                              type="button"
+                              className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
+                            >
+                              <Folder className="w-3 h-3" />
+                              <span>Local</span>
+                              <ChevronDown className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      </form>
+                    </div>
+                  )}
+                </div>
+
+                {/* Jump to Latest Button - Positioned relative to parent container, not scrollable content */}
+                {!isChatPinnedToBottom && (
+                  <button
+                    type="button"
+                    onClick={() => scrollChatToBottom('smooth')}
+                    className="absolute bottom-4 right-4 flex items-center gap-1 rounded-full border border-dark-600 bg-dark-800/90 px-3 py-1.5 text-xs text-dark-100 shadow-lg hover:bg-dark-700 transition-colors z-10"
+                    title="Jump to the latest reply"
+                  >
+                    <ArrowDownCircle className="w-4 h-4" />
+                    <span>Jump to latest</span>
+                  </button>
                 )}
               </div>
-              
-              {/* Composer Input Area - Show when no messages */}
-              {chatMessages.length === 0 && (
+
+              {/* Follow-up Input - Always at Bottom */}
+              {chatMessages.length > 0 && (
                 <div className="border-t border-dark-700 bg-dark-800 flex flex-col flex-shrink-0">
-                  <form onSubmit={handleComposerSubmit} className="flex flex-col flex-1 min-h-0 relative">
-                    {/* Attached Images, Files, and Code Selections Preview for Composer */}
+                  <form onSubmit={handleFollowUpSubmit} className="flex flex-col flex-1 min-h-0 relative">
+                    {/* Attached Images Preview for Follow-up */}
                     {(attachedImages.length > 0 || attachedFiles.length > 0 || attachedCodeSelections.length > 0) && (
                       <div className="p-3 pb-2 space-y-2 flex-shrink-0">
                         {attachedImages.length > 0 && (
@@ -10930,8 +11366,8 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         {attachedCodeSelections.length > 0 && (
                           <div className="flex flex-wrap gap-2">
                             {attachedCodeSelections.map((selection) => {
-                              const lineRange = selection.startLine === selection.endLine 
-                                ? `${selection.startLine}` 
+                              const lineRange = selection.startLine === selection.endLine
+                                ? `${selection.startLine}`
                                 : `${selection.startLine}-${selection.endLine}`;
                               return (
                                 <div key={selection.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
@@ -10954,27 +11390,24 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         )}
                       </div>
                     )}
-                    
+
                     {/* Scrollable Textarea Area */}
                     <div className="flex-1 min-h-0 px-3 py-2 flex flex-col overflow-hidden">
                       <div className="flex items-start gap-2 flex-1 min-h-0 overflow-hidden">
                         <textarea
-                          ref={composerInputRef}
-                          value={composerInput}
-                          onChange={handleComposerInputChange}
+                          value={followUpInput}
+                          onChange={(e) => setFollowUpInput(e.target.value)}
                           onPaste={handleImagePaste}
-                          placeholder="Plan, @ for context, / for commands"
+                          placeholder="Add a follow-up (or paste an image)"
                           rows={1}
                           className="flex-1 w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] overflow-y-auto"
                           disabled={isLoadingChat}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && !e.shiftKey) {
                               e.preventDefault();
-                              handleComposerSubmit(e);
+                              handleFollowUpSubmit(e);
                             } else if (e.key === 'Escape') {
                               setShowFileSuggestions(false);
-                            } else if (e.key === 'ArrowDown' && showFileSuggestions && fileSuggestions.length > 0) {
-                              e.preventDefault();
                             }
                           }}
                           onInput={(e) => {
@@ -10982,7 +11415,6 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                             const textarea = e.target;
                             textarea.style.height = 'auto';
                             const scrollHeight = textarea.scrollHeight;
-                            // Set a reasonable max height (e.g., 300px) and allow scrolling beyond that
                             const maxHeight = 300;
                             if (scrollHeight > maxHeight) {
                               textarea.style.height = maxHeight + 'px';
@@ -11011,36 +11443,15 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         </button>
                         <button
                           type="submit"
-                          disabled={!composerInput.trim() && attachedImages.length === 0}
+                          disabled={!followUpInput.trim() && attachedImages.length === 0}
                           className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-                          title={isLoadingChat ? 'Queue message for later' : 'Send message now'}
+                          title={isLoadingChat ? 'Queue follow-up for later' : 'Send follow-up now'}
                         >
                           <Send className="w-4 h-4" />
                         </button>
                       </div>
-                      {showFileSuggestions && fileSuggestions.length > 0 && suggestionInputType === 'composer' && (
-                        <div className="file-suggestions-container absolute top-full left-0 right-0 mt-2 mx-3 bg-dark-800 border border-dark-600 rounded-lg shadow-lg z-50 max-h-60 overflow-y-auto">
-                          {fileSuggestions.map((file, idx) => (
-                            <button
-                              key={idx}
-                              type="button"
-                              onClick={() => insertFileMention(file)}
-                              className="w-full text-left px-3 py-2 text-sm text-dark-300 hover:bg-dark-700 flex items-center space-x-2"
-                            >
-                              <File className="w-4 h-4 text-dark-400" />
-                              <div className="flex-1">
-                                <div className="font-medium">{file.name}</div>
-                                <div className="text-xs text-dark-500 truncate">{file.displayPath}</div>
-                              </div>
-                              {file.isOpen && (
-                                <span className="text-xs text-primary-500">Open</span>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
                     </div>
-                    
+
                     {/* Dropdown Menus - Always at Bottom */}
                     <div className="flex flex-wrap items-center gap-2 p-3 pt-2 flex-shrink-0 border-t border-dark-700/50">
                       <div className="relative" ref={agentModeMenuRef}>
@@ -11072,11 +11483,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                   }
                                   setShowAgentModeMenu(false);
                                 }}
-                                className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                                  agentMode === mode.id
-                                    ? 'bg-primary-600 text-white'
-                                    : 'text-dark-300 hover:bg-dark-700'
-                                }`}
+                                className={`w-full text-left px-3 py-2 text-xs transition-colors ${agentMode === mode.id
+                                  ? 'bg-primary-600 text-white'
+                                  : 'text-dark-300 hover:bg-dark-700'
+                                  }`}
                               >
                                 <div className="flex items-center justify-between">
                                   <span>{mode.label}</span>
@@ -11089,14 +11499,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         )}
                       </div>
                       <div className="flex items-center gap-1 rounded-lg border border-dark-600 bg-dark-700/40 px-2 py-1 text-dark-400">
-                        <button 
+                        <button
                           type="button"
                           onClick={() => {
-                            setComposerInput(prev => prev + '@');
-                            if (composerInputRef.current) {
-                              composerInputRef.current.focus();
-                            }
-                            setShowWebSearchMenu(false);
+                            setFollowUpInput(prev => prev + '@');
                           }}
                           className="hover:text-dark-200 transition-colors"
                           title="Mention"
@@ -11111,9 +11517,8 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                               setShowAgentModeMenu(false);
                               setShowAutoDropdown(false);
                             }}
-                            className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors ${
-                              showWebSearchMenu ? 'bg-dark-600 text-dark-100' : 'hover:text-dark-200'
-                            }`}
+                            className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors ${showWebSearchMenu ? 'bg-dark-600 text-dark-100' : 'hover:text-dark-200'
+                              }`}
                             title={`Web Search (${selectedWebSearchMode.label})`}
                           >
                             <Globe className="w-4 h-4" />
@@ -11135,11 +11540,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                     }
                                     setShowWebSearchMenu(false);
                                   }}
-                                  className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                                    webSearchMode === option.id
-                                      ? 'bg-primary-600 text-white'
-                                      : 'text-dark-300 hover:bg-dark-700'
-                                  }`}
+                                  className={`w-full text-left px-3 py-2 text-xs transition-colors ${webSearchMode === option.id
+                                    ? 'bg-primary-600 text-white'
+                                    : 'text-dark-300 hover:bg-dark-700'
+                                    }`}
                                 >
                                   <div className="flex items-center justify-between">
                                     <span>{option.label}</span>
@@ -11200,11 +11604,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                   key={model}
                                   type="button"
                                   onClick={() => handleSelectModel(model)}
-                                  className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                                    currentModel === model
-                                      ? 'bg-primary-600 text-white'
-                                      : 'text-dark-300 hover:bg-dark-700'
-                                  }`}
+                                  className={`w-full text-left px-3 py-2 text-xs transition-colors ${currentModel === model
+                                    ? 'bg-primary-600 text-white'
+                                    : 'text-dark-300 hover:bg-dark-700'
+                                    }`}
                                 >
                                   <div className="flex items-center justify-between">
                                     <span>{model}</span>
@@ -11230,448 +11633,107 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                       </div>
                     </div>
                   </form>
-                </div>
-              )}
-              </div>
-              
-              {/* Jump to Latest Button - Positioned relative to parent container, not scrollable content */}
-              {!isChatPinnedToBottom && (
-                <button
-                  type="button"
-                  onClick={() => scrollChatToBottom('smooth')}
-                  className="absolute bottom-4 right-4 flex items-center gap-1 rounded-full border border-dark-600 bg-dark-800/90 px-3 py-1.5 text-xs text-dark-100 shadow-lg hover:bg-dark-700 transition-colors z-10"
-                  title="Jump to the latest reply"
-                >
-                  <ArrowDownCircle className="w-4 h-4" />
-                  <span>Jump to latest</span>
-                </button>
-              )}
-            </div>
-
-            {/* Follow-up Input - Always at Bottom */}
-            {chatMessages.length > 0 && (
-              <div className="border-t border-dark-700 bg-dark-800 flex flex-col flex-shrink-0">
-                <form onSubmit={handleFollowUpSubmit} className="flex flex-col flex-1 min-h-0 relative">
-                  {/* Attached Images Preview for Follow-up */}
-                  {(attachedImages.length > 0 || attachedFiles.length > 0 || attachedCodeSelections.length > 0) && (
-                    <div className="p-3 pb-2 space-y-2 flex-shrink-0">
-                      {attachedImages.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {attachedImages.map((img) => (
-                            <div key={img.id} className="relative group">
-                              <img
-                                src={img.dataUrl}
-                                alt="Attached"
-                                className="w-16 h-16 object-cover rounded-lg border border-dark-600"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => removeImage(img.id)}
-                                className="absolute -top-2 -right-2 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                                title="Remove image"
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {attachedFiles.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {attachedFiles.map((file) => (
-                            <div key={file.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
-                              <File className="w-4 h-4 text-dark-400" />
-                              <span className="text-xs text-dark-200 truncate max-w-[120px]" title={file.name || file.file?.name}>
-                                {file.name || file.file?.name || 'file'}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => removeFile(file.id)}
-                                className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                                title="Remove file"
-                              >
-                                <X className="w-2.5 h-2.5" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {attachedCodeSelections.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {attachedCodeSelections.map((selection) => {
-                            const lineRange = selection.startLine === selection.endLine 
-                              ? `${selection.startLine}` 
-                              : `${selection.startLine}-${selection.endLine}`;
-                            return (
-                              <div key={selection.id} className="relative group flex items-center gap-2 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg">
-                                <File className="w-4 h-4 text-dark-400" />
-                                <span className="text-xs text-dark-200 truncate max-w-[200px]" title={`${selection.fileName} (${lineRange})`}>
-                                  {selection.fileName} ({lineRange})
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => removeCodeSelection(selection.id)}
-                                  className="w-4 h-4 bg-red-600 hover:bg-red-700 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                                  title="Remove code selection"
-                                >
-                                  <X className="w-2.5 h-2.5" />
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                  {queuedFollowUps.length > 0 && (
+                    <div className="mt-2 space-y-1 text-[11px] text-dark-400">
+                      <div className="flex items-center gap-2 text-dark-300">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>
+                          {queuedFollowUps.length} follow-up{queuedFollowUps.length > 1 ? 's' : ''} queued
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {queuedFollowUps.map((item) => (
+                          <div
+                            key={item.id}
+                            className="flex items-center gap-1 px-2 py-1 rounded-full bg-dark-700/80 border border-dark-600 text-dark-100 max-w-full"
+                          >
+                            <span className="truncate max-w-[180px]">{item.content}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeQueuedFollowUp(item.id)}
+                              className="text-dark-300 hover:text-dark-100 transition-colors"
+                              title="Remove from queue"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
-                  
-                  {/* Scrollable Textarea Area */}
-                  <div className="flex-1 min-h-0 px-3 py-2 flex flex-col overflow-hidden">
-                    <div className="flex items-start gap-2 flex-1 min-h-0 overflow-hidden">
-                      <textarea
-                        value={followUpInput}
-                        onChange={(e) => setFollowUpInput(e.target.value)}
-                        onPaste={handleImagePaste}
-                        placeholder="Add a follow-up (or paste an image)"
-                        rows={1}
-                        className="flex-1 w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-dark-100 placeholder-dark-400 focus:outline-none focus:ring-1 focus:ring-primary-500 text-sm resize-none min-h-[38px] overflow-y-auto"
-                        disabled={isLoadingChat}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            handleFollowUpSubmit(e);
-                          } else if (e.key === 'Escape') {
-                            setShowFileSuggestions(false);
-                          }
-                        }}
-                        onInput={(e) => {
-                          // Auto-resize textarea based on content - allow scrolling for long content
-                          const textarea = e.target;
-                          textarea.style.height = 'auto';
-                          const scrollHeight = textarea.scrollHeight;
-                          const maxHeight = 300;
-                          if (scrollHeight > maxHeight) {
-                            textarea.style.height = maxHeight + 'px';
-                            textarea.style.overflowY = 'auto';
-                          } else {
-                            textarea.style.height = scrollHeight + 'px';
-                            textarea.style.overflowY = 'hidden';
-                          }
-                        }}
-                      />
-                      <input
-                        ref={imageInputRef}
-                        type="file"
-                        accept="*/*"
-                        multiple
-                        onChange={handleImageUpload}
-                        className="hidden"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => imageInputRef.current?.click()}
-                        className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0"
-                        title="Attach image"
-                      >
-                        <Image className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={!followUpInput.trim() && attachedImages.length === 0}
-                        className="p-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
-                        title={isLoadingChat ? 'Queue follow-up for later' : 'Send follow-up now'}
-                      >
-                        <Send className="w-4 h-4" />
-                      </button>
-                    </div>
+                </div>
+              )}
+
+              {/* Past Chats */}
+              <div className="border-t border-dark-700 bg-dark-800 flex-shrink-0">
+                <div
+                  className="flex items-center justify-between p-3 cursor-pointer hover:bg-dark-700 transition-colors"
+                  onClick={() => setShowPastChats(!showPastChats)}
+                >
+                  <div className="flex items-center gap-2">
+                    <ChevronDown
+                      className={`w-4 h-4 text-dark-400 transition-transform ${showPastChats ? '' : '-rotate-90'}`}
+                    />
+                    <History className="w-4 h-4 text-dark-400" />
+                    <h4 className="text-xs font-semibold text-dark-400">Past Chats</h4>
                   </div>
-                  
-                  {/* Dropdown Menus - Always at Bottom */}
-                  <div className="flex flex-wrap items-center gap-2 p-3 pt-2 flex-shrink-0 border-t border-dark-700/50">
-                    <div className="relative" ref={agentModeMenuRef}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowAgentModeMenu(prev => !prev);
-                          setShowAutoDropdown(false);
-                          setShowWebSearchMenu(false);
-                        }}
-                        className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
-                      >
-                        <Infinity className="w-3 h-3" />
-                        <span>{selectedChatMode.label}</span>
-                        <ChevronDown className={`w-3 h-3 transition-transform ${showAgentModeMenu ? 'rotate-180' : ''}`} />
-                      </button>
-                      {showAgentModeMenu && (
-                        <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[180px]">
-                          {chatModeOptions.map(mode => (
-                            <button
-                              key={mode.id}
-                              type="button"
-                              onClick={() => {
-                                setAgentMode(mode.id);
-                                try {
-                                  window.localStorage.setItem('aiAgentMode', mode.id);
-                                } catch (error) {
-                                  console.warn('Failed to save agent mode to localStorage:', error);
-                                }
-                                setShowAgentModeMenu(false);
-                              }}
-                              className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                                agentMode === mode.id
-                                  ? 'bg-primary-600 text-white'
-                                  : 'text-dark-300 hover:bg-dark-700'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between">
-                                <span>{mode.label}</span>
-                                {agentMode === mode.id && <CheckCircle className="w-3 h-3" />}
-                              </div>
-                              <p className="text-[10px] text-dark-500 mt-1">{mode.description}</p>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1 rounded-lg border border-dark-600 bg-dark-700/40 px-2 py-1 text-dark-400">
-                      <button 
-                        type="button"
-                        onClick={() => {
-                          setFollowUpInput(prev => prev + '@');
-                        }}
-                        className="hover:text-dark-200 transition-colors"
-                        title="Mention"
-                      >
-                        <AtSign className="w-4 h-4" />
-                      </button>
-                      <div className="relative" ref={webSearchMenuRef}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowWebSearchMenu(prev => !prev);
-                            setShowAgentModeMenu(false);
-                            setShowAutoDropdown(false);
-                          }}
-                          className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors ${
-                            showWebSearchMenu ? 'bg-dark-600 text-dark-100' : 'hover:text-dark-200'
-                          }`}
-                          title={`Web Search (${selectedWebSearchMode.label})`}
-                        >
-                          <Globe className="w-4 h-4" />
-                          <span className="text-[10px] uppercase tracking-wide">{selectedWebSearchMode.label}</span>
-                          <ChevronDown className="w-3 h-3" />
-                        </button>
-                        {showWebSearchMenu && (
-                          <div className="absolute bottom-full left-0 mb-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-50 min-w-[200px]">
-                            {webSearchOptions.map((option) => (
-                              <button
-                                key={option.id}
-                                type="button"
-                                onClick={() => {
-                                  setWebSearchMode(option.id);
-                                  try {
-                                    window.localStorage.setItem('aiWebSearchMode', option.id);
-                                  } catch (error) {
-                                    console.warn('Failed to save web search mode to localStorage:', error);
-                                  }
-                                  setShowWebSearchMenu(false);
-                                }}
-                                className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                                  webSearchMode === option.id
-                                    ? 'bg-primary-600 text-white'
-                                    : 'text-dark-300 hover:bg-dark-700'
-                                }`}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <span>{option.label}</span>
-                                  {webSearchMode === option.id && <CheckCircle className="w-3 h-3" />}
-                                </div>
-                                <p className="text-[10px] text-dark-500 mt-1">{option.description}</p>
-                              </button>
-                            ))}
-                          </div>
-                        )}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleChatHistoryDialogToggle();
+                      }}
+                      className="flex items-center gap-1 px-2 py-1 rounded border text-xs border-dark-600 text-dark-300 hover:text-dark-100 transition-colors"
+                      title="View chat history with plans and processes"
+                    >
+                      <History className="w-3 h-3" />
+                      History
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleNewChatTab();
+                      }}
+                      className="text-xs text-dark-500 hover:text-dark-300 transition-colors"
+                      title="Start new chat"
+                    >
+                      New Chat
+                    </button>
+                  </div>
+                </div>
+                {showPastChats && (
+                  <div className="px-3 pb-3 space-y-1 max-h-64 overflow-y-auto">
+                    {isLoadingPastChats ? (
+                      <div className="text-xs text-dark-500 py-2 text-center">
+                        <Loader2 className="w-4 h-4 animate-spin inline-block mr-2" />
+                        Loading past chats...
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => imageInputRef.current?.click()}
-                        className="hover:text-dark-200 transition-colors"
-                        title="Upload Image"
-                      >
-                        <Image className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        className="hover:text-dark-200 transition-colors"
-                        title="Voice Input"
-                      >
-                        <Mic className="w-4 h-4" />
-                      </button>
-                    </div>
-                    <div className="relative group" data-auto-dropdown>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowAutoDropdown(!showAutoDropdown);
-                          if (!showAutoDropdown && ollamaModels.length === 0) {
-                            loadAvailableModels();
-                          }
-                          setShowAgentModeMenu(false);
-                          setShowWebSearchMenu(false);
-                        }}
-                        className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
-                      >
-                        <span>{currentModel || 'Auto'}</span>
-                        <ChevronDown className={`w-3 h-3 transition-transform ${showAutoDropdown ? 'rotate-180' : ''}`} />
-                      </button>
-                      {showAutoDropdown && (
-                        <div className="absolute top-full left-0 mt-1 bg-dark-800 border border-dark-700 rounded shadow-lg z-[100] min-w-[200px] max-h-[300px] overflow-y-auto" style={{ maxHeight: 'min(300px, calc(100vh - 200px))' }} data-auto-dropdown>
-                          {isLoadingModels ? (
-                            <div className="px-3 py-2 text-xs text-dark-400 flex items-center gap-2">
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                              Loading models...
-                            </div>
-                          ) : ollamaModels.length === 0 ? (
-                            <div className="px-3 py-2 text-xs text-dark-400">
-                              No models available
-                            </div>
-                          ) : (
-                            ollamaModels.map((model) => (
-                              <button
-                                key={model}
-                                type="button"
-                                onClick={() => handleSelectModel(model)}
-                                className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                                  currentModel === model
-                                    ? 'bg-primary-600 text-white'
-                                    : 'text-dark-300 hover:bg-dark-700'
-                                }`}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <span>{model}</span>
-                                  {currentModel === model && (
-                                    <CheckCircle className="w-3 h-3" />
-                                  )}
-                                </div>
-                              </button>
-                            ))
-                          )}
-                        </div>
-                      )}
-                    </div>
-                    <div className="relative group">
-                      <button
-                        type="button"
-                        className="flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:bg-dark-700 rounded transition-colors"
-                      >
-                        <Folder className="w-3 h-3" />
-                        <span>Local</span>
-                        <ChevronDown className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                </form>
-                {queuedFollowUps.length > 0 && (
-                  <div className="mt-2 space-y-1 text-[11px] text-dark-400">
-                    <div className="flex items-center gap-2 text-dark-300">
-                      <Clock className="w-3.5 h-3.5" />
-                      <span>
-                        {queuedFollowUps.length} follow-up{queuedFollowUps.length > 1 ? 's' : ''} queued
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {queuedFollowUps.map((item) => (
+                    ) : pastChats.length === 0 ? (
+                      <div className="text-xs text-dark-500 py-2 text-center">
+                        No past chats yet
+                      </div>
+                    ) : (
+                      pastChats.map((chat) => (
                         <div
-                          key={item.id}
-                          className="flex items-center gap-1 px-2 py-1 rounded-full bg-dark-700/80 border border-dark-600 text-dark-100 max-w-full"
+                          key={chat.id}
+                          onClick={() => restoreChatSession(chat.id)}
+                          className={`text-xs cursor-pointer py-1.5 px-2 rounded transition-colors ${currentChatSessionId === chat.id
+                            ? 'bg-primary-600/20 text-primary-200 border border-primary-700/40'
+                            : 'text-dark-400 hover:text-dark-200 hover:bg-dark-700'
+                            }`}
                         >
-                          <span className="truncate max-w-[180px]">{item.content}</span>
-                          <button
-                            type="button"
-                            onClick={() => removeQueuedFollowUp(item.id)}
-                            className="text-dark-300 hover:text-dark-100 transition-colors"
-                            title="Remove from queue"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
+                          <div className="flex items-center justify-between">
+                            <span className="truncate flex-1">{chat.title}</span>
+                            <span className="ml-2 text-dark-500 text-[10px] whitespace-nowrap">{chat.time}</span>
+                          </div>
                         </div>
-                      ))}
-                    </div>
+                      ))
+                    )}
                   </div>
                 )}
               </div>
-            )}
-
-            {/* Past Chats */}
-            <div className="border-t border-dark-700 bg-dark-800 flex-shrink-0">
-              <div 
-                className="flex items-center justify-between p-3 cursor-pointer hover:bg-dark-700 transition-colors"
-                onClick={() => setShowPastChats(!showPastChats)}
-              >
-                <div className="flex items-center gap-2">
-                  <ChevronDown 
-                    className={`w-4 h-4 text-dark-400 transition-transform ${showPastChats ? '' : '-rotate-90'}`}
-                  />
-                  <History className="w-4 h-4 text-dark-400" />
-                  <h4 className="text-xs font-semibold text-dark-400">Past Chats</h4>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleChatHistoryDialogToggle();
-                    }}
-                    className="flex items-center gap-1 px-2 py-1 rounded border text-xs border-dark-600 text-dark-300 hover:text-dark-100 transition-colors"
-                    title="View chat history with plans and processes"
-                  >
-                    <History className="w-3 h-3" />
-                    History
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      startNewChat();
-                    }}
-                    className="text-xs text-dark-500 hover:text-dark-300 transition-colors"
-                    title="Start new chat"
-                  >
-                    New Chat
-                  </button>
-                </div>
-              </div>
-              {showPastChats && (
-                <div className="px-3 pb-3 space-y-1 max-h-64 overflow-y-auto">
-                  {isLoadingPastChats ? (
-                    <div className="text-xs text-dark-500 py-2 text-center">
-                      <Loader2 className="w-4 h-4 animate-spin inline-block mr-2" />
-                      Loading past chats...
-                    </div>
-                  ) : pastChats.length === 0 ? (
-                    <div className="text-xs text-dark-500 py-2 text-center">
-                      No past chats yet
-                    </div>
-                  ) : (
-                    pastChats.map((chat) => (
-                      <div
-                        key={chat.id}
-                        onClick={() => restoreChatSession(chat.id)}
-                        className={`text-xs cursor-pointer py-1.5 px-2 rounded transition-colors ${
-                          currentChatSessionId === chat.id
-                            ? 'bg-primary-600/20 text-primary-200 border border-primary-700/40'
-                            : 'text-dark-400 hover:text-dark-200 hover:bg-dark-700'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="truncate flex-1">{chat.title}</span>
-                          <span className="ml-2 text-dark-500 text-[10px] whitespace-nowrap">{chat.time}</span>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
             </div>
           </>
         )}
@@ -11687,7 +11749,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             style={{ minHeight: '4px' }}
             title="Drag to resize terminal panel"
           />
-          <div 
+          <div
             className="bg-dark-800 border-t border-dark-700 flex flex-col"
             style={{
               height: `var(--bottom-panel-height, ${bottomPanelHeight}px)`,
@@ -11695,136 +11757,134 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
               maxHeight: '600px',
             }}
           >
-          <div className="flex items-center border-b border-dark-700">
-            {['problems', 'output', 'debug console', 'terminal', 'ports'].map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setBottomPanelTab(tab)}
-                className={`px-4 py-2 text-sm border-r border-dark-700 ${
-                  bottomPanelTab === tab
+            <div className="flex items-center border-b border-dark-700">
+              {['problems', 'output', 'debug console', 'terminal', 'ports'].map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setBottomPanelTab(tab)}
+                  className={`px-4 py-2 text-sm border-r border-dark-700 ${bottomPanelTab === tab
                     ? 'bg-dark-900 text-dark-100'
                     : 'bg-dark-800 text-dark-400 hover:text-dark-200'
-                }`}
+                    }`}
+                >
+                  {tab}
+                </button>
+              ))}
+              <div className="flex-1"></div>
+              <button
+                onClick={() => setBottomPanelVisible(false)}
+                className="px-2 py-1 hover:bg-dark-700 transition-colors"
+                title="Hide panel (Ctrl+J)"
               >
-                {tab}
+                <X className="w-4 h-4 text-dark-400" />
               </button>
-            ))}
-            <div className="flex-1"></div>
-            <button
-              onClick={() => setBottomPanelVisible(false)}
-              className="px-2 py-1 hover:bg-dark-700 transition-colors"
-              title="Hide panel (Ctrl+J)"
-            >
-              <X className="w-4 h-4 text-dark-400" />
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-3 font-mono text-sm bg-dark-900">
-            {bottomPanelTab === 'terminal' && (
-              <div className="space-y-2">
-                <div className="text-dark-400 mb-2 flex items-center justify-between">
-                  <span>{terminalCwd}&gt;</span>
-                  {terminalSessionId && (
-                    <span className="text-xs text-dark-500">Session: {terminalSessionId.slice(0, 8)}</span>
-                  )}
-                </div>
-                <div className="text-dark-300 text-xs flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span>Shortcuts:</span>
-                    <span className="flex items-center gap-1">
-                      <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">Ctrl+K</kbd>
-                      <span>ask AI</span>
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">Tab</kbd>
-                      <span>complete</span>
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">↑</kbd>
-                      <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">↓</kbd>
-                      <span>history</span>
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">Ctrl+L</kbd>
-                      <span>clear</span>
-                    </span>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 font-mono text-sm bg-dark-900">
+              {bottomPanelTab === 'terminal' && (
+                <div className="space-y-2">
+                  <div className="text-dark-400 mb-2 flex items-center justify-between">
+                    <span>{terminalCwd}&gt;</span>
+                    {terminalSessionId && (
+                      <span className="text-xs text-dark-500">Session: {terminalSessionId.slice(0, 8)}</span>
+                    )}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleHistoryDialogToggle}
-                      className="flex items-center gap-1 px-2 py-1 rounded border text-xs border-dark-600 text-dark-300 hover:text-dark-100 transition-colors"
-                    >
-                      <History className="w-3 h-3" />
-                      History
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleClearTerminalOutput}
-                      className="flex items-center gap-1 px-2 py-1 rounded border text-xs border-dark-600 text-dark-300 hover:text-dark-100 transition-colors"
-                      title="Clear output (Ctrl+L)"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                      Clear
-                    </button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 text-xs text-dark-400">
-                  <span>Quick:</span>
-                  {QUICK_TERMINAL_COMMANDS.map((cmd) => (
-                    <button
-                      key={cmd}
-                      type="button"
-                      onClick={() => handleQuickCommand(cmd)}
-                      className="px-2 py-1 rounded border border-dark-600 text-dark-300 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      disabled={isTerminalBusy}
-                    >
-                      {cmd}
-                    </button>
-                  ))}
-                </div>
-                {showHistoryPanel && (
-                  <div className="bg-dark-800 border border-dark-700 rounded-md p-3 text-xs space-y-2">
+                  <div className="text-dark-300 text-xs flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>Shortcuts:</span>
+                      <span className="flex items-center gap-1">
+                        <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">Ctrl+K</kbd>
+                        <span>ask AI</span>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">Tab</kbd>
+                        <span>complete</span>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">↑</kbd>
+                        <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">↓</kbd>
+                        <span>history</span>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <kbd className="px-2 py-1 bg-dark-700 border border-dark-600 rounded">Ctrl+L</kbd>
+                        <span>clear</span>
+                      </span>
+                    </div>
                     <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={historyFilter}
-                        onChange={handleHistoryFilterChange}
-                        placeholder="Filter history..."
-                        className="flex-1 bg-dark-900 border border-dark-600 rounded px-2 py-1 focus:border-primary-500 outline-none"
-                      />
                       <button
                         type="button"
-                        onClick={handleClearTerminalHistory}
-                        className="flex items-center gap-1 px-2 py-1 rounded border border-dark-600 text-dark-300 hover:text-dark-100 transition-colors"
+                        onClick={handleHistoryDialogToggle}
+                        className="flex items-center gap-1 px-2 py-1 rounded border text-xs border-dark-600 text-dark-300 hover:text-dark-100 transition-colors"
+                      >
+                        <History className="w-3 h-3" />
+                        History
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleClearTerminalOutput}
+                        className="flex items-center gap-1 px-2 py-1 rounded border text-xs border-dark-600 text-dark-300 hover:text-dark-100 transition-colors"
+                        title="Clear output (Ctrl+L)"
                       >
                         <Trash2 className="w-3 h-3" />
-                        Clear history
+                        Clear
                       </button>
                     </div>
-                    <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
-                      {recentHistoryEntries.length > 0 ? (
-                        recentHistoryEntries.map((command, index) => (
-                          <button
-                            type="button"
-                            key={`${command}-${index}`}
-                            onClick={() => handleHistoryEntrySelect(command)}
-                            className="w-full text-left px-2 py-1 rounded hover:bg-dark-700 text-dark-200 transition-colors truncate"
-                          >
-                            {command}
-                          </button>
-                        ))
-                      ) : (
-                        <div className="text-dark-500">No history yet</div>
-                      )}
-                    </div>
                   </div>
-                )}
-                <div ref={terminalOutputRef} className="terminal-output-container space-y-1">
-                  {terminalOutput.map((line) => (
-                    <div
-                      key={line.id}
-                      className={`whitespace-pre-wrap ${
-                        line.type === 'stderr'
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-dark-400">
+                    <span>Quick:</span>
+                    {QUICK_TERMINAL_COMMANDS.map((cmd) => (
+                      <button
+                        key={cmd}
+                        type="button"
+                        onClick={() => handleQuickCommand(cmd)}
+                        className="px-2 py-1 rounded border border-dark-600 text-dark-300 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        disabled={isTerminalBusy}
+                      >
+                        {cmd}
+                      </button>
+                    ))}
+                  </div>
+                  {showHistoryPanel && (
+                    <div className="bg-dark-800 border border-dark-700 rounded-md p-3 text-xs space-y-2">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={historyFilter}
+                          onChange={handleHistoryFilterChange}
+                          placeholder="Filter history..."
+                          className="flex-1 bg-dark-900 border border-dark-600 rounded px-2 py-1 focus:border-primary-500 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleClearTerminalHistory}
+                          className="flex items-center gap-1 px-2 py-1 rounded border border-dark-600 text-dark-300 hover:text-dark-100 transition-colors"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          Clear history
+                        </button>
+                      </div>
+                      <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
+                        {recentHistoryEntries.length > 0 ? (
+                          recentHistoryEntries.map((command, index) => (
+                            <button
+                              type="button"
+                              key={`${command}-${index}`}
+                              onClick={() => handleHistoryEntrySelect(command)}
+                              className="w-full text-left px-2 py-1 rounded hover:bg-dark-700 text-dark-200 transition-colors truncate"
+                            >
+                              {command}
+                            </button>
+                          ))
+                        ) : (
+                          <div className="text-dark-500">No history yet</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  <div ref={terminalOutputRef} className="terminal-output-container space-y-1">
+                    {terminalOutput.map((line) => (
+                      <div
+                        key={line.id}
+                        className={`whitespace-pre-wrap ${line.type === 'stderr'
                           ? 'text-red-400'
                           : line.type === 'command'
                             ? 'text-primary-400'
@@ -11833,77 +11893,76 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                               : line.type === 'info'
                                 ? 'text-dark-100'
                                 : 'text-dark-300'
-                      }`}
-                    >
-                      {line.text}
-                    </div>
-                  ))}
-                  {isTerminalBusy && (
-                    <div className="flex items-center text-dark-500 space-x-3">
-                      <div className="flex items-center">
-                        <Loader2 className="w-3 h-3 mr-2 animate-spin" />
-                        <span>{isStoppingTerminal ? 'Stopping...' : 'Running...'}</span>
+                          }`}
+                      >
+                        {line.text}
                       </div>
-                      <button
-                        type="button"
-                        onClick={handleStopTerminalCommand}
-                        disabled={isStoppingTerminal}
-                        className={`text-xs px-2 py-1 rounded border border-dark-600 transition-colors ${
-                          isStoppingTerminal
+                    ))}
+                    {isTerminalBusy && (
+                      <div className="flex items-center text-dark-500 space-x-3">
+                        <div className="flex items-center">
+                          <Loader2 className="w-3 h-3 mr-2 animate-spin" />
+                          <span>{isStoppingTerminal ? 'Stopping...' : 'Running...'}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleStopTerminalCommand}
+                          disabled={isStoppingTerminal}
+                          className={`text-xs px-2 py-1 rounded border border-dark-600 transition-colors ${isStoppingTerminal
                             ? 'text-dark-600 cursor-not-allowed'
                             : 'text-red-400 hover:text-red-300 border-red-500/50'
-                        }`}
-                      >
-                        Stop
-                      </button>
+                            }`}
+                        >
+                          Stop
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center space-x-2 mt-4">
+                    <span className="text-dark-400">$</span>
+                    <input
+                      ref={terminalInputRef}
+                      type="text"
+                      value={terminalInput}
+                      onChange={handleTerminalInputChange}
+                      onKeyDown={handleTerminalInputKeyDown}
+                      className="flex-1 bg-transparent border-none outline-none text-dark-200 disabled:opacity-50"
+                      placeholder="Type command..."
+                      disabled={isTerminalBusy}
+                    />
+                  </div>
+                  {!isTerminalBusy && isCompletingTerminal && (
+                    <div className="flex items-center text-dark-500 text-xs mt-2">
+                      <Loader2 className="w-3 h-3 mr-2 animate-spin" />
+                      <span>Auto-completing...</span>
                     </div>
                   )}
                 </div>
-                <div className="flex items-center space-x-2 mt-4">
-                  <span className="text-dark-400">$</span>
-                  <input
-                    ref={terminalInputRef}
-                    type="text"
-                    value={terminalInput}
-                    onChange={handleTerminalInputChange}
-                    onKeyDown={handleTerminalInputKeyDown}
-                    className="flex-1 bg-transparent border-none outline-none text-dark-200 disabled:opacity-50"
-                    placeholder="Type command..."
-                    disabled={isTerminalBusy}
-                  />
-                </div>
-                {!isTerminalBusy && isCompletingTerminal && (
-                  <div className="flex items-center text-dark-500 text-xs mt-2">
-                    <Loader2 className="w-3 h-3 mr-2 animate-spin" />
-                    <span>Auto-completing...</span>
+              )}
+              {bottomPanelTab === 'problems' && (
+                <div className="flex items-center justify-center h-full text-dark-400">
+                  <div className="text-center">
+                    <CheckCircle className="w-8 h-8 mx-auto mb-2 text-green-500" />
+                    <div>No problems detected</div>
                   </div>
-                )}
-              </div>
-            )}
-            {bottomPanelTab === 'problems' && (
-              <div className="flex items-center justify-center h-full text-dark-400">
-                <div className="text-center">
-                  <CheckCircle className="w-8 h-8 mx-auto mb-2 text-green-500" />
-                  <div>No problems detected</div>
                 </div>
-              </div>
-            )}
-            {bottomPanelTab === 'output' && (
-              <div className="text-dark-400">
-                <div className="text-xs text-dark-500 mb-2">Output will appear here...</div>
-              </div>
-            )}
-            {bottomPanelTab === 'debug console' && (
-              <div className="text-dark-400">
-                <div className="text-xs text-dark-500 mb-2">Debug console - Ready</div>
-              </div>
-            )}
-            {bottomPanelTab === 'ports' && (
-              <div className="text-dark-400">
-                <div className="text-xs text-dark-500 mb-2">No active ports</div>
-              </div>
-            )}
-          </div>
+              )}
+              {bottomPanelTab === 'output' && (
+                <div className="text-dark-400">
+                  <div className="text-xs text-dark-500 mb-2">Output will appear here...</div>
+                </div>
+              )}
+              {bottomPanelTab === 'debug console' && (
+                <div className="text-dark-400">
+                  <div className="text-xs text-dark-500 mb-2">Debug console - Ready</div>
+                </div>
+              )}
+              {bottomPanelTab === 'ports' && (
+                <div className="text-dark-400">
+                  <div className="text-xs text-dark-500 mb-2">No active ports</div>
+                </div>
+              )}
+            </div>
           </div>
         </>
       )}
@@ -12568,7 +12627,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
             {/* Content Area */}
             <div className="flex-1 overflow-hidden flex">
               {/* Left Pane - File Tree */}
-              <div 
+              <div
                 className="w-64 border-r border-dark-700 overflow-y-auto bg-dark-800"
                 onContextMenu={(e) => {
                   // Right-click on empty space
@@ -12597,11 +12656,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                           onContextMenu={(e) => {
                             handlePickerContextMenu(e, item);
                           }}
-                          className={`picker-tree-item flex items-center px-2 py-1.5 rounded cursor-pointer text-sm ${
-                            pickerSelectedPath === item.path
-                              ? 'bg-primary-600 text-white'
-                              : 'text-dark-300 hover:bg-dark-700'
-                          }`}
+                          className={`picker-tree-item flex items-center px-2 py-1.5 rounded cursor-pointer text-sm ${pickerSelectedPath === item.path
+                            ? 'bg-primary-600 text-white'
+                            : 'text-dark-300 hover:bg-dark-700'
+                            }`}
                         >
                           {item.is_directory ? (
                             <Folder className="w-4 h-4 mr-2 flex-shrink-0" />
@@ -12612,7 +12670,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                         </div>
                       ))}
                       {pickerTree.length === 0 && (
-                        <div 
+                        <div
                           className="text-xs text-dark-400 py-4 text-center"
                           onContextMenu={(e) => handlePickerContextMenu(e, null)}
                         >
@@ -12782,11 +12840,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                       item.action?.();
                     }
                   }}
-                  className={`w-full flex items-center px-3 py-2 text-left gap-2 ${
-                    item.disabled
-                      ? 'text-dark-500 cursor-not-allowed'
-                      : 'text-dark-100 hover:bg-dark-700'
-                  }`}
+                  className={`w-full flex items-center px-3 py-2 text-left gap-2 ${item.disabled
+                    ? 'text-dark-500 cursor-not-allowed'
+                    : 'text-dark-100 hover:bg-dark-700'
+                    }`}
                 >
                   <span className="flex-1">{item.label}</span>
                   {item.shortcut && (
@@ -12851,11 +12908,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                       item.action?.();
                     }
                   }}
-                  className={`w-full flex items-center px-3 py-2 text-left gap-2 ${
-                    item.disabled
-                      ? 'text-dark-500 cursor-not-allowed'
-                      : 'text-dark-100 hover:bg-dark-700'
-                  }`}
+                  className={`w-full flex items-center px-3 py-2 text-left gap-2 ${item.disabled
+                    ? 'text-dark-500 cursor-not-allowed'
+                    : 'text-dark-100 hover:bg-dark-700'
+                    }`}
                 >
                   <span className="flex-1">{item.label}</span>
                   {item.shortcut && (
@@ -12923,13 +12979,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
 
       {/* Terminal History Dialog */}
       {showHistoryDialog && (
-        <div 
-          className="fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center px-4" 
+        <div
+          className="fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center px-4"
           onClick={handleHistoryDialogToggle}
           style={{ zIndex: 9999 }}
         >
-          <div 
-            className="bg-dark-900 border border-dark-700 rounded-lg w-full max-w-2xl shadow-2xl flex flex-col" 
+          <div
+            className="bg-dark-900 border border-dark-700 rounded-lg w-full max-w-2xl shadow-2xl flex flex-col"
             style={{ maxHeight: '80vh' }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -13005,13 +13061,13 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
 
       {/* Chat History Dialog */}
       {showChatHistoryDialog && (
-        <div 
-          className="fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center px-4" 
+        <div
+          className="fixed inset-0 z-[9999] bg-black/60 flex items-center justify-center px-4"
           onClick={handleChatHistoryDialogToggle}
           style={{ zIndex: 9999 }}
         >
-          <div 
-            className="bg-dark-900 border border-dark-700 rounded-lg w-full max-w-4xl shadow-2xl flex flex-col" 
+          <div
+            className="bg-dark-900 border border-dark-700 rounded-lg w-full max-w-4xl shadow-2xl flex flex-col"
             style={{ maxHeight: '85vh' }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -13061,18 +13117,17 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                     const assistantMessages = fullChat.messages?.filter(msg => msg.role === 'assistant') || [];
                     const hasPlan = assistantMessages.some(msg => msg.plan);
                     const hasActivityLog = assistantMessages.some(msg => msg.activityLog);
-                    
+
                     return (
                       <div
                         key={chat.id}
-                        className={`border rounded-lg overflow-hidden transition-all ${
-                          currentChatSessionId === chat.id
-                            ? 'border-primary-600/60 bg-primary-900/10'
-                            : 'border-dark-700 bg-dark-800/50 hover:border-dark-600 hover:bg-dark-800'
-                        }`}
+                        className={`border rounded-lg overflow-hidden transition-all ${currentChatSessionId === chat.id
+                          ? 'border-primary-600/60 bg-primary-900/10'
+                          : 'border-dark-700 bg-dark-800/50 hover:border-dark-600 hover:bg-dark-800'
+                          }`}
                       >
                         {/* Chat Header */}
-                        <div 
+                        <div
                           className="p-3 cursor-pointer"
                           onClick={() => {
                             restoreChatSession(chat.id);
@@ -13093,15 +13148,15 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                 )}
                               </div>
                               <div className="flex items-center gap-3 text-xs text-dark-400 mb-2">
-                              <span className="flex items-center gap-1">
-                                <Clock className="w-3 h-3" />
-                                {chat.time || 'Unknown time'}
-                              </span>
-                              {fullChat.messages && (
-                                <span>{fullChat.messages.length} message{fullChat.messages.length !== 1 ? 's' : ''}</span>
-                              )}
+                                <span className="flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {chat.time || 'Unknown time'}
+                                </span>
+                                {fullChat.messages && (
+                                  <span>{fullChat.messages.length} message{fullChat.messages.length !== 1 ? 's' : ''}</span>
+                                )}
                               </div>
-                              
+
                               {/* First user message preview */}
                               {fullChat.messages && fullChat.messages.length > 0 && (
                                 <p className="text-xs text-dark-300 line-clamp-2">
@@ -13128,7 +13183,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                           <div className="border-t border-dark-700 bg-dark-900/50 p-3 space-y-2">
                             {assistantMessages.map((msg, msgIdx) => {
                               if (!msg.plan && !msg.activityLog) return null;
-                              
+
                               return (
                                 <div key={msgIdx} className="space-y-2">
                                   {msg.plan && (
@@ -13150,11 +13205,10 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                                 key={taskIdx}
                                                 className="flex items-center gap-2 px-2 py-1 rounded bg-dark-900/60 text-xs"
                                               >
-                                                <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded-full border ${
-                                                  statusKey === 'completed' ? 'border-green-600/60 text-green-400'
+                                                <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded-full border ${statusKey === 'completed' ? 'border-green-600/60 text-green-400'
                                                   : statusKey === 'in_progress' ? 'border-primary-600/60 text-primary-400'
-                                                  : 'border-dark-600 text-dark-400'
-                                                }`}>
+                                                    : 'border-dark-600 text-dark-400'
+                                                  }`}>
                                                   {statusKey.replace('_', ' ')}
                                                 </span>
                                                 <span className="text-dark-300 flex-1 truncate">{title}</span>
@@ -13170,7 +13224,7 @@ const StepDetailGrid = ({ entries = [], variant = 'dark' }) => {
                                       )}
                                     </div>
                                   )}
-                                  
+
                                   {msg.activityLog && Array.isArray(msg.activityLog) && msg.activityLog.length > 0 && (
                                     <div className="bg-dark-800/80 border border-dark-600 rounded-lg p-2.5">
                                       <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-dark-400 mb-2">
